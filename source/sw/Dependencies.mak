@@ -1,0 +1,90 @@
+build_h=$(ENGINE_INC)/build.h $(ENGINE_INC)/compat.h
+panel_h=$(SW_SRC)/panel.h $(SW_SRC)/mytypes.h $(SW_SRC)/game.h $(SW_SRC)/conpic.h
+names2_h=$(SW_SRC)/names2.h $(SW_SRC)/names.h
+game_h=$(SW_SRC)/game.h $(SW_SRC)/mytypes.h $(MACT_INC)/keyboard.h $(SW_SRC)/sounds.h $(SW_SRC)/settings.h $(SW_SRC)/digi.h $(SW_SRC)/damage.h $(SW_SRC)/inv.h $(SW_SRC)/stag.h
+tags_h=$(SW_SRC)/tags.h $(SW_SRC)/jtags.h
+
+$(SW_OBJ)/actor.$o: $(SW_SRC)/actor.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/weapon.h $(SW_SRC)/sprite.h $(SW_SRC)/actor.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/ai.$o: $(SW_SRC)/ai.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ninja.h $(SW_SRC)/ai.h $(SW_SRC)/sector.h $(SW_SRC)/sprite.h $(SW_SRC)/net.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/anim.$o: $(SW_SRC)/anim.cpp $(build_h) $(SW_SRC)/keys.h $(SW_SRC)/mytypes.h $(AUDIOLIB_INC)/fx_man.h $(AUDIOLIB_INC)/music.h $(MACT_INC)/scriplib.h $(MACT_INC)/file_lib.h $(SW_SRC)/gamedefs.h $(MACT_INC)/keyboard.h $(MACT_INC)/control.h $(SW_SRC)/config.h $(SW_SRC)/sounds.h $(SW_SRC)/function.h $(MACT_INC)/animlib.h $(SW_SRC)/anim.h $(game_h) $(SW_SRC)/colormap.h $(SW_SRC)/net.h
+$(SW_OBJ)/border.$o: $(SW_SRC)/border.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(SW_SRC)/lists.h $(game_h) $(SW_SRC)/net.h $(SW_SRC)/text.h
+$(SW_OBJ)/break.$o: $(SW_SRC)/break.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/break.h $(SW_SRC)/sprite.h $(SW_SRC)/sector.h $(SW_SRC)/light.h $(SW_SRC)/weapon.h
+$(SW_OBJ)/bunny.$o: $(SW_SRC)/bunny.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/pal.h $(SW_SRC)/sprite.h $(SW_SRC)/actor.h $(SW_SRC)/weapon.h $(SW_SRC)/track.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/cache.$o: $(SW_SRC)/cache.cpp $(build_h) $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/break.h $(SW_SRC)/quake.h $(SW_SRC)/pal.h $(SW_SRC)/cache.h $(SW_SRC)/sounds.h $(SW_SRC)/net.h
+$(SW_OBJ)/cd.$o: $(SW_SRC)/cd.cpp $(SW_SRC)/mytypes.h $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/player.h $(SW_SRC)/lists.h $(SW_SRC)/warp.h $(SW_SRC)/quake.h $(SW_SRC)/function.h $(MACT_INC)/control.h $(SW_SRC)/trigger.h $(SW_SRC)/savedef.h $(SW_SRC)/menus.h $(SW_SRC)/net.h $(SW_SRC)/pal.h
+$(SW_OBJ)/cheats.$o: $(SW_SRC)/cheats.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/mytypes.h $(MACT_INC)/control.h $(SW_SRC)/function.h $(SW_SRC)/text.h
+$(SW_OBJ)/colormap.$o: $(SW_SRC)/colormap.cpp $(build_h) $(SW_SRC)/keys.h $(SW_SRC)/pal.h $(game_h)
+$(SW_OBJ)/config.$o: $(SW_SRC)/config.cpp $(build_h) $(SW_SRC)/settings.h $(SW_SRC)/mytypes.h $(MACT_INC)/scriplib.h $(MACT_INC)/file_lib.h $(SW_SRC)/gamedefs.h $(MACT_INC)/keyboard.h $(SW_SRC)/function.h $(MACT_INC)/control.h $(AUDIOLIB_INC)/fx_man.h $(SW_SRC)/sounds.h $(SW_SRC)/config.h $(SW_SRC)/common_game.h $(SW_SRC)/_functio.h $(SW_SRC)/_config.h
+$(SW_OBJ)/console.$o: $(SW_SRC)/console.cpp $(build_h) $(SW_SRC)/mytypes.h $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/player.h $(SW_SRC)/lists.h $(SW_SRC)/warp.h $(SW_SRC)/quake.h $(SW_SRC)/function.h $(MACT_INC)/control.h $(SW_SRC)/trigger.h $(SW_SRC)/savedef.h $(SW_SRC)/menus.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/weapon.h $(SW_SRC)/text.h $(SW_SRC)/jsector.h
+$(SW_OBJ)/coolg.$o: $(SW_SRC)/coolg.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/sprite.h $(SW_SRC)/actor.h $(SW_SRC)/weapon.h $(SW_SRC)/track.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/coolie.$o: $(SW_SRC)/coolie.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/sprite.h $(SW_SRC)/actor.h $(SW_SRC)/track.h $(SW_SRC)/weapon.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/copysect.$o: $(SW_SRC)/copysect.cpp $(build_h) $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/weapon.h $(SW_SRC)/sprite.h $(SW_SRC)/track.h
+$(SW_OBJ)/demo.$o: $(SW_SRC)/demo.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/net.h $(SW_SRC)/mytypes.h $(MACT_INC)/control.h $(SW_SRC)/function.h $(SW_SRC)/demo.h $(SW_SRC)/player.h $(SW_SRC)/menus.h
+$(SW_OBJ)/draw.$o: $(SW_SRC)/draw.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/quake.h $(SW_SRC)/vis.h $(SW_SRC)/jsector.h $(SW_SRC)/reserve.h $(SW_SRC)/mytypes.h $(MACT_INC)/control.h $(SW_SRC)/function.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/player.h $(SW_SRC)/jtags.h $(SW_SRC)/parent.h $(SW_SRC)/cache.h $(SW_SRC)/text.h $(SW_SRC)/menus.h $(SW_SRC)/interp.h $(SW_SRC)/sector.h
+$(SW_OBJ)/eel.$o: $(SW_SRC)/eel.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/actor.h $(SW_SRC)/weapon.h $(SW_SRC)/track.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/game.$o: $(SW_SRC)/game.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/sprite.h $(SW_SRC)/weapon.h $(SW_SRC)/player.h $(SW_SRC)/lists.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(AUDIOLIB_INC)/fx_man.h $(SW_SRC)/mytypes.h $(SW_SRC)/menus.h $(MACT_INC)/control.h $(SW_SRC)/function.h $(SW_SRC)/demo.h $(SW_SRC)/cache.h $(SW_SRC)/anim.h $(SW_SRC)/colormap.h $(SW_SRC)/break.h $(SW_SRC)/ninja.h $(SW_SRC)/light.h $(SW_SRC)/track.h $(SW_SRC)/jsector.h $(MACT_INC)/keyboard.h $(SW_SRC)/text.h $(AUDIOLIB_INC)/music.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/girlninj.$o: $(SW_SRC)/girlninj.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/pal.h $(SW_SRC)/player.h $(SW_SRC)/net.h $(SW_SRC)/actor.h $(SW_SRC)/track.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/goro.$o: $(SW_SRC)/goro.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/actor.h $(SW_SRC)/track.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/hornet.$o: $(SW_SRC)/hornet.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/actor.h $(SW_SRC)/weapon.h $(SW_SRC)/track.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/interp.$o: $(SW_SRC)/interp.cpp $(SW_SRC)/interp.h
+$(SW_OBJ)/interpsh.$o: $(SW_SRC)/interpsh.cpp $(SW_SRC)/interp.h
+$(SW_OBJ)/inv.$o: $(SW_SRC)/inv.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/pal.h $(SW_SRC)/text.h $(SW_SRC)/colormap.h $(SW_SRC)/player.h
+$(SW_OBJ)/jplayer.$o: $(SW_SRC)/jplayer.cpp $(build_h) $(SW_SRC)/mytypes.h $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/player.h $(SW_SRC)/lists.h $(SW_SRC)/warp.h $(SW_SRC)/quake.h $(SW_SRC)/function.h $(MACT_INC)/control.h $(SW_SRC)/trigger.h $(SW_SRC)/savedef.h $(SW_SRC)/menus.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/bots.h
+$(SW_OBJ)/jsector.$o: $(SW_SRC)/jsector.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(SW_SRC)/jnames.h $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/player.h $(SW_SRC)/sprite.h $(SW_SRC)/reserve.h $(SW_SRC)/jsector.h $(SW_SRC)/jtags.h $(SW_SRC)/lists.h $(SW_SRC)/pal.h $(SW_SRC)/parent.h
+$(SW_OBJ)/jweapon.$o: $(SW_SRC)/jweapon.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/break.h $(SW_SRC)/quake.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/ai.h $(SW_SRC)/weapon.h $(SW_SRC)/sprite.h $(SW_SRC)/sector.h $(SW_SRC)/actor.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/lava.$o: $(SW_SRC)/lava.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/actor.h $(SW_SRC)/track.h
+$(SW_OBJ)/light.$o: $(SW_SRC)/light.cpp $(build_h) $(names2_h) $(game_h) $(SW_SRC)/light.h
+$(SW_OBJ)/mclip.$o: $(SW_SRC)/mclip.cpp $(build_h) $(SW_SRC)/mytypes.h $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/player.h $(SW_SRC)/mclip.h
+$(SW_OBJ)/mdastr.$o: $(SW_SRC)/mdastr.cpp $(build_h) $(SW_SRC)/mytypes.h $(SW_SRC)/keys.h $(names2_h) $(game_h)
+$(SW_OBJ)/menus.$o: $(SW_SRC)/menus.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/sprite.h $(SW_SRC)/weapon.h $(SW_SRC)/player.h $(SW_SRC)/jsector.h $(SW_SRC)/reserve.h $(MACT_INC)/control.h $(SW_SRC)/menus.h $(SW_SRC)/sw_strs.h $(SW_SRC)/pal.h $(SW_SRC)/function.h $(SW_SRC)/net.h $(AUDIOLIB_INC)/fx_man.h $(AUDIOLIB_INC)/music.h $(SW_SRC)/text.h $(SW_SRC)/colormap.h
+$(SW_OBJ)/miscactr.$o: $(SW_SRC)/miscactr.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/quake.h $(AUDIOLIB_INC)/fx_man.h $(SW_SRC)/actor.h $(SW_SRC)/sector.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/morph.$o: $(SW_SRC)/morph.cpp $(build_h) $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/ai.h $(SW_SRC)/player.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/net.$o: $(SW_SRC)/net.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(tags_h) $(game_h) $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/weapon.h $(SW_SRC)/text.h $(SW_SRC)/menus.h
+$(SW_OBJ)/ninja.$o: $(SW_SRC)/ninja.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/pal.h $(SW_SRC)/player.h $(SW_SRC)/net.h $(SW_SRC)/weapon.h $(SW_SRC)/track.h $(SW_SRC)/actor.h $(SW_SRC)/ninja.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/panel.$o: $(SW_SRC)/panel.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(SW_SRC)/lists.h $(game_h) $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/vis.h $(SW_SRC)/weapon.h $(AUDIOLIB_INC)/fx_man.h $(SW_SRC)/text.h $(SW_SRC)/player.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/player.$o: $(SW_SRC)/player.cpp $(build_h) $(SW_SRC)/mytypes.h $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/player.h $(SW_SRC)/lists.h $(SW_SRC)/warp.h $(SW_SRC)/quake.h $(SW_SRC)/text.h $(SW_SRC)/function.h $(MACT_INC)/control.h $(SW_SRC)/trigger.h $(SW_SRC)/savedef.h $(SW_SRC)/menus.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/demo.h $(SW_SRC)/mclip.h $(AUDIOLIB_INC)/fx_man.h $(SW_SRC)/sprite.h $(SW_SRC)/weapon.h $(SW_SRC)/ninja.h $(SW_SRC)/break.h $(SW_SRC)/jsector.h $(SW_SRC)/sector.h $(SW_SRC)/actor.h $(SW_SRC)/colormap.h $(AUDIOLIB_INC)/music.h $(SW_SRC)/vis.h $(SW_SRC)/track.h $(SW_SRC)/interp.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/predict.$o: $(SW_SRC)/predict.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/net.h
+$(SW_OBJ)/quake.$o: $(SW_SRC)/quake.cpp $(build_h) $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/break.h $(SW_SRC)/quake.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/ripper.$o: $(SW_SRC)/ripper.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/pal.h $(SW_SRC)/actor.h $(SW_SRC)/sprite.h $(SW_SRC)/track.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/ripper2.$o: $(SW_SRC)/ripper2.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/pal.h $(SW_SRC)/actor.h $(SW_SRC)/sprite.h $(SW_SRC)/track.h $(AUDIOLIB_INC)/fx_man.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/rooms.$o: $(SW_SRC)/rooms.cpp $(build_h) $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/warp.h
+$(SW_OBJ)/rotator.$o: $(SW_SRC)/rotator.cpp $(build_h) $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/net.h $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/text.h $(SW_SRC)/interp.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/rts.$o: $(SW_SRC)/rts.cpp $(SW_SRC)/mytypes.h $(MACT_INC)/file_lib.h $(SW_SRC)/_rts.h $(SW_SRC)/rts.h $(SW_SRC)/cache.h
+$(SW_OBJ)/save.$o: $(SW_SRC)/save.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/lists.h $(SW_SRC)/interp.h $(SW_SRC)/net.h $(SW_SRC)/savedef.h $(SW_SRC)/jsector.h $(SW_SRC)/parent.h $(SW_SRC)/reserve.h $(SW_SRC)/mfile.h $(SW_SRC)/weapon.h $(SW_SRC)/cache.h $(SW_SRC)/colormap.h $(SW_SRC)/player.h $(AUDIOLIB_INC)/fx_man.h $(AUDIOLIB_INC)/music.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/scrip2.$o: $(SW_SRC)/scrip2.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/parse.h $(SW_SRC)/jsector.h $(SW_SRC)/parent.h
+$(SW_OBJ)/sector.$o: $(SW_SRC)/sector.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/player.h $(SW_SRC)/quake.h $(SW_SRC)/weapon.h $(SW_SRC)/jtags.h $(SW_SRC)/net.h $(SW_SRC)/break.h $(SW_SRC)/track.h $(SW_SRC)/sprite.h $(SW_SRC)/light.h $(SW_SRC)/text.h
+$(SW_OBJ)/serp.$o: $(SW_SRC)/serp.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/actor.h $(SW_SRC)/track.h $(SW_SRC)/sector.h
+$(SW_OBJ)/setup.$o: $(SW_SRC)/setup.cpp $(build_h) $(SW_SRC)/keys.h $(game_h) $(SW_SRC)/mytypes.h $(AUDIOLIB_INC)/fx_man.h $(AUDIOLIB_INC)/music.h $(MACT_INC)/scriplib.h $(MACT_INC)/file_lib.h $(SW_SRC)/gamedefs.h $(MACT_INC)/keyboard.h $(MACT_INC)/control.h $(SW_SRC)/config.h $(SW_SRC)/sounds.h $(SW_SRC)/function.h $(SW_SRC)/rts.h
+$(SW_OBJ)/skel.$o: $(SW_SRC)/skel.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/actor.h $(SW_SRC)/track.h
+$(SW_OBJ)/skull.$o: $(SW_SRC)/skull.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/weapon.h $(SW_SRC)/actor.h
+$(SW_OBJ)/slidor.$o: $(SW_SRC)/slidor.cpp $(build_h) $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/net.h $(tags_h) $(SW_SRC)/slidor.h $(SW_SRC)/slidor.h $(SW_SRC)/sector.h $(SW_SRC)/interp.h $(SW_SRC)/text.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/sounds.$o: $(SW_SRC)/sounds.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(SW_SRC)/mytypes.h $(AUDIOLIB_INC)/fx_man.h $(AUDIOLIB_INC)/music.h $(SW_SRC)/gamedefs.h $(SW_SRC)/config.h $(panel_h) $(game_h) $(SW_SRC)/sounds.h $(SW_SRC)/ai.h $(SW_SRC)/net.h $(SW_SRC)/cache.h $(SW_SRC)/text.h $(SW_SRC)/rts.h $(SW_SRC)/menus.h
+$(SW_OBJ)/spike.$o: $(SW_SRC)/spike.cpp $(build_h) $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/sprite.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/sprite.$o: $(SW_SRC)/sprite.cpp $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/warp.h $(SW_SRC)/light.h $(SW_SRC)/break.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/sounds.h $(SW_SRC)/interp.h $(SW_SRC)/sprite.h $(SW_SRC)/weapon.h $(SW_SRC)/jsector.h $(SW_SRC)/text.h $(SW_SRC)/slidor.h $(SW_SRC)/player.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/sumo.$o: $(SW_SRC)/sumo.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/quake.h $(SW_SRC)/actor.h $(SW_SRC)/track.h $(SW_SRC)/weapon.h $(SW_SRC)/sector.h
+$(SW_OBJ)/swconfig.$o: $(SW_SRC)/swconfig.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/mytypes.h $(MACT_INC)/scriplib.h $(AUDIOLIB_INC)/fx_man.h $(SW_SRC)/gamedefs.h $(SW_SRC)/common_game.h $(SW_SRC)/config.h $(SW_SRC)/function.h $(SW_SRC)/rts.h
+$(SW_OBJ)/sync.$o: $(SW_SRC)/sync.cpp $(SW_SRC)/keys.h $(game_h) $(tags_h) $(names2_h) $(SW_SRC)/net.h $(SW_SRC)/menus.h
+$(SW_OBJ)/text.$o: $(SW_SRC)/text.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(SW_SRC)/lists.h $(game_h) $(SW_SRC)/pal.h $(SW_SRC)/text.h $(SW_SRC)/net.h
+$(SW_OBJ)/timer.$o: $(SW_SRC)/timer.cpp $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/sprite.h $(SW_SRC)/weapon.h $(AUDIOLIB_INC)/fx_man.h $(AUDIOLIB_INC)/music.h $(SW_SRC)/audiofx.h
+$(SW_OBJ)/track.$o: $(SW_SRC)/track.cpp $(build_h) $(names2_h) $(panel_h) $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/ai.h $(SW_SRC)/player.h $(game_h) $(SW_SRC)/net.h $(SW_SRC)/sprite.h $(SW_SRC)/track.h $(SW_SRC)/weapon.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/vator.$o: $(SW_SRC)/vator.cpp $(build_h) $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/net.h $(tags_h) $(SW_SRC)/sector.h $(SW_SRC)/interp.h $(SW_SRC)/text.h $(SW_SRC)/sprite.h $(SW_SRC)/weapon.h $(SW_SRC)/saveable.h
+$(SW_OBJ)/vis.$o: $(SW_SRC)/vis.cpp $(build_h) $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/break.h $(SW_SRC)/quake.h $(SW_SRC)/pal.h $(SW_SRC)/sprite.h
+$(SW_OBJ)/wallmove.$o: $(SW_SRC)/wallmove.cpp $(build_h) $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/weapon.h $(SW_SRC)/sprite.h
+$(SW_OBJ)/warp.$o: $(SW_SRC)/warp.cpp $(build_h) $(names2_h) $(panel_h) $(game_h) $(SW_SRC)/warp.h
+$(SW_OBJ)/weapon.$o: $(SW_SRC)/weapon.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/break.h $(SW_SRC)/quake.h $(SW_SRC)/net.h $(SW_SRC)/pal.h $(SW_SRC)/vis.h $(SW_SRC)/ai.h $(SW_SRC)/weapon.h $(SW_SRC)/anim.h $(SW_SRC)/damage.h $(SW_SRC)/sector.h $(SW_SRC)/sprite.h $(SW_SRC)/actor.h $(SW_SRC)/track.h $(SW_SRC)/player.h
+$(SW_OBJ)/zilla.$o: $(SW_SRC)/zilla.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/quake.h $(SW_SRC)/actor.h $(SW_SRC)/track.h $(AUDIOLIB_INC)/fx_man.h
+$(SW_OBJ)/zombie.$o: $(SW_SRC)/zombie.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(panel_h) $(game_h) $(tags_h) $(SW_SRC)/ai.h $(SW_SRC)/pal.h $(SW_SRC)/player.h $(SW_SRC)/net.h $(SW_SRC)/sprite.h $(SW_SRC)/weapon.h $(SW_SRC)/actor.h $(SW_SRC)/track.h
+$(SW_OBJ)/saveable.$o: $(SW_SRC)/saveable.cpp $(ENGINE_INC)/compat.h $(SW_SRC)/saveable.h
+
+$(SW_OBJ)/jnstub.$o: $(SW_SRC)/jnstub.cpp $(build_h) $(SW_SRC)/stag.h $(SW_SRC)/keys.h $(names2_h) $(game_h) $(tags_h) $(SW_SRC)/pal.h $(ENGINE_INC)/pragmas.h $(ENGINE_INC)/editor.h $(ENGINE_INC)/cache1d.h
+$(SW_OBJ)/brooms.$o: $(SW_SRC)/brooms.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(ENGINE_INC)/editor.h
+$(SW_OBJ)/bldscript.$o: $(SW_SRC)/bldscript.cpp $(build_h) $(names2_h) $(game_h) $(SW_SRC)/parse.h $(ENGINE_INC)/editor.h $(ENGINE_INC)/cache1d.h
+$(SW_OBJ)/jbhlp.$o: $(SW_SRC)/jbhlp.cpp $(build_h) $(SW_SRC)/keys.h $(names2_h) $(game_h) $(ENGINE_INC)/editor.h $(ENGINE_INC)/cache1d.h
+
+$(SW_OBJ)/game_icon.$o: $(SW_RSRC)/game_icon.c
+
+$(SW_OBJ)/grpscan.$o: $(SW_SRC)/grpscan.cpp $(ENGINE_INC)/compat.h $(ENGINE_INC)/baselayer.h $(ENGINE_INC)/scriptfile.h $(ENGINE_INC)/cache1d.h $(ENGINE_INC)/crc32.h $(SW_SRC)/grpscan.h
+$(SW_OBJ)/gameres.$o: $(SW_RSRC)/gameres.rc $(SW_SRC)/startwin.game.h $(SW_RSRC)/game.bmp $(SW_RSRC)/game_icon.ico
+$(SW_OBJ)/buildres.$o: $(SW_RSRC)/buildres.rc $(SW_RSRC)/build.bmp $(SW_RSRC)/game_icon.ico
+$(SW_OBJ)/startwin.game.$o: $(SW_SRC)/startwin.game.cpp $(build_h) $(ENGINE_INC)/winlayer.h $(SW_SRC)/grpscan.h
+$(SW_OBJ)/startgtk.game.$o: $(SW_SRC)/startgtk.game.cpp $(build_h) $(ENGINE_INC)/dynamicgtk.h $(ENGINE_INC)/baselayer.h $(SW_SRC)/grpscan.h
