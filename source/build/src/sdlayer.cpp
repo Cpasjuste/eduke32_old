@@ -39,6 +39,10 @@
 # define SDL_DISABLE_8BIT_BUFFER
 #endif
 
+#if defined __SWITCH__
+#include <switch.h>
+#endif
+
 #if SDL_MAJOR_VERSION != 1
 static SDL_version linked;
 #endif
@@ -310,7 +314,7 @@ void wm_setapptitle(const char *name)
 //
 
 /* XXX: libexecinfo could be used on systems without gnu libc. */
-#if !defined _WIN32 && defined __GNUC__ && !defined __OpenBSD__ && !(defined __APPLE__ && defined __BIG_ENDIAN__) && !defined GEKKO && !defined EDUKE32_TOUCH_DEVICES && !defined __OPENDINGUX__
+#if !defined _WIN32 && defined __GNUC__ && !defined __OpenBSD__ && !(defined __APPLE__ && defined __BIG_ENDIAN__) && !defined GEKKO && !defined EDUKE32_TOUCH_DEVICES && !defined __OPENDINGUX__ && !defined __SWITCH__
 # define PRINTSTACKONSEGV 1
 # include <execinfo.h>
 #endif
@@ -422,6 +426,11 @@ int main(int argc, char *argv[])
     {
         return eduke32_return_value;
     }
+#endif
+
+#if defined __SWITCH__
+	consoleDebugInit(debugDevice_SVC);
+    stdout = stderr;
 #endif
 
 #if defined _WIN32 && defined SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING

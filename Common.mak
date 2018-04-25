@@ -406,9 +406,10 @@ else ifeq ($(PLATFORM),SWITCH)
     override HAVE_GTK2 := 0
     override NOASM := 1
     override USE_LIBVPX := 0
-    override HAVE_XMP := 0
-    #override HAVE_FLAC := 0
+    #override HAVE_XMP := 0
+    override HAVE_FLAC := 0
     #SDL_TARGET := 1
+    PKG_CONFIG := $(DEVKITPRO)/portlibs/switch/bin/aarch64-none-elf-pkg-config
 else ifeq ($(PLATFORM),$(filter $(PLATFORM),DINGOO GCW QNX SUNOS SYLLABLE))
     override USE_OPENGL := 0
     override NOASM := 1
@@ -913,6 +914,8 @@ ifeq ($(RENDERTYPE),SDL)
 
     ifeq ($(PLATFORM),WII)
         SDLCONFIG :=
+	else ifeq ($(PLATFORM),SWITCH)
+        SDLCONFIG := $(DEVKITPRO)/portlibs/switch/bin/sdl2-config
     else ifeq ($(PLATFORM),SKYOS)
         COMPILERFLAGS += -I/boot/programs/sdk/include/sdl
         SDLCONFIG :=
@@ -993,7 +996,7 @@ else ifeq ($(SUBPLATFORM),LINUX)
     LIBS += -lrt
 endif
 
-ifeq (,$(filter $(PLATFORM),WINDOWS WII))
+ifeq (,$(filter $(PLATFORM),WINDOWS WII SWITCH))
     ifneq ($(PLATFORM),BSD)
         LIBS += -ldl
     endif
