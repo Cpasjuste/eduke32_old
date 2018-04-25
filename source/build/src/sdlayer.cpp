@@ -2129,7 +2129,55 @@ int32_t handleevents_sdlcommon(SDL_Event *ev)
                     joystick.bits |= 1 << ev->jbutton.button;
                 else
                     joystick.bits &= ~(1 << ev->jbutton.button);
+#ifdef __SWITCH__
+/*
+				SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
+				switch(ev->jbutton.button) 
+				{
+					// https://github.com/devkitPro/SDL/blob/switch-sdl2/src/joystick/switch/SDL_sysjoystick.c#L52
+					case 0: // KEY_A
+						sc = SDL_SCANCODE_RETURN;
+						break;
+					case 1: // KEY_B
+						sc = SDL_SCANCODE_ESCAPE;
+						break;
+					case 12: // KEY_DLEFT
+						sc = SDL_SCANCODE_LEFT;
+						break;
+					case 13: // KEY_DUP
+						sc = SDL_SCANCODE_UP;
+						break;
+					case 14: // KEY_DRIGHT
+						sc = SDL_SCANCODE_RIGHT;
+						break;
+					case 15: // KEY_DDOWN
+						sc = SDL_SCANCODE_DOWN;
+						break;
+					default:
+						break;
+				}
 
+				if(sc != SDL_SCANCODE_UNKNOWN) 
+				{
+					int code = keytranslation[sc];
+					if (ev->jbutton.state == SDL_PRESSED)
+					{
+						if (!keyGetState(code))
+						{
+							keySetState(code, 1);
+							if (keypresscallback)
+								keypresscallback(code, 1);
+						}
+					}
+					else
+					{
+						keySetState(code, 0);
+						if (keypresscallback)
+							keypresscallback(code, 0);
+					}
+				}
+*/
+#endif
 #ifdef GEKKO
                 if (ev->jbutton.button == 0) // WII_A
                     handleevents_updatemousestate(ev->jbutton.state);
