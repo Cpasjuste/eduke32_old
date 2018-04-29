@@ -406,9 +406,7 @@ else ifeq ($(PLATFORM),SWITCH)
     override HAVE_GTK2 := 0
     override NOASM := 1
     override USE_LIBVPX := 0
-    #override HAVE_XMP := 0
     override HAVE_FLAC := 0
-    #SDL_TARGET := 1
     PKG_CONFIG := $(DEVKITPRO)/portlibs/switch/bin/aarch64-none-elf-pkg-config
 else ifeq ($(PLATFORM),$(filter $(PLATFORM),DINGOO GCW QNX SUNOS SYLLABLE))
     override USE_OPENGL := 0

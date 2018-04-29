@@ -260,7 +260,6 @@ ifeq ($(PLATFORM),WII)
     LINKERFLAGS += -Wl,-wrap,c_default_exceptionhandler
 endif
 ifeq ($(PLATFORM),SWITCH)
-	#engine_objs += switchbits.cpp
     LIBS += -lvorbisfile -lvorbis -logg -lmpg123 -lmodplug -lm -lz
     #-lFLAC
 endif
@@ -882,7 +881,8 @@ ifeq ($$(PLATFORM),DARWIN)
 	cp -f "$$($1_$2)$$(EXESUFFIX)" "$$($1_$2_proper).app/Contents/MacOS/"
 endif
 ifeq ($$(PLATFORM),SWITCH)
-	elf2nro $$@ $$($1_$2).nro
+	nacptool --create "Duke Nukem 3D" "Cpasjuste" "1.0" $$($1_$2).nacp
+	elf2nro $$@ $$($1_$2).nro --icon=platform/Switch/icon.jpg --nacp=$$($1_$2).nacp
 endif
 
 endef

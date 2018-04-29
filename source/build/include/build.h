@@ -51,8 +51,13 @@ enum rendmode_t {
 # define MAXWALLS MAXWALLSV8
 # define MAXSPRITES MAXSPRITESV8
 
+#ifdef __SWITCH__
+# define MAXXDIM 1280
+# define MAXYDIM 720
+#else
 # define MAXXDIM 7680
 # define MAXYDIM 3200
+#endif
 # define MINXDIM 640
 # define MINYDIM 480
 
