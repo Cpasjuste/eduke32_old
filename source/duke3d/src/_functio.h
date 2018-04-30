@@ -324,6 +324,58 @@ static const char * joystickanalogdefaults[MAXJOYAXES] =
 static const char * joystickdigitaldefaults[MAXJOYDIGITAL] =
    {
    };
+#elif __SWITCH__
+static const char * joystickdefaults[MAXJOYBUTTONSANDHATS] =
+   {
+   "Open",				// KEY_A
+   "Jump",				// KEY_B
+   "Inventory_Left", 	// KEY_X
+   "Inventory_Right", 	// KEY_Y
+   "Run",				// KEY_LSTICK
+   "Crouch",			// KEY_RSTICK
+   "Previous_Weapon", 	// KEY_L
+   "Next_Weapon", 		// KEY_R
+   "Quick_Kick",		// KEY_ZL
+   "Fire", 				// KEY_ZR
+   "",
+   "Map", 				// KEY_MINUS
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   };
+
+static const char * joystickclickeddefaults[MAXJOYBUTTONSANDHATS] =
+   {
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   "",
+   };
+
+static const char * joystickanalogdefaults[MAXJOYAXES] =
+   {
+   "analog_strafing",
+   "analog_moving",
+   "analog_turning",
+   "analog_lookingupanddown",
+   };
+
+static const char * joystickdigitaldefaults[MAXJOYDIGITAL] =
+   {
+   };
 #else
 static const char * joystickdefaults[MAXJOYBUTTONSANDHATS] =
    {

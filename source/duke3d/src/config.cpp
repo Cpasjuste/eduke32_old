@@ -260,7 +260,7 @@ void CONFIG_SetDefaults(void)
     ud.weaponsway = 1;
     ud.weaponswitch = 3;	// new+empty
     ud.angleinterpolation = 0;
-#ifdef GEKKO
+#if defined GEKKO || defined __SWITCH__
     ud.config.UseJoystick = 1;
 #else
     ud.config.UseJoystick = 0;

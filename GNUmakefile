@@ -259,6 +259,10 @@ ifeq ($(PLATFORM),WII)
     engine_objs += wiibits.cpp
     LINKERFLAGS += -Wl,-wrap,c_default_exceptionhandler
 endif
+ifeq ($(PLATFORM),SWITCH)
+    LIBS += -lvorbisfile -lvorbis -logg -lmpg123 -lmodplug -lm -lz
+    #-lFLAC
+endif
 ifeq ($(RENDERTYPE),SDL)
     engine_objs += sdlayer.cpp
 
@@ -875,6 +879,10 @@ ifeq ($$(PLATFORM),DARWIN)
 	cp -RPf "platform/Apple/bundles/$$($1_$2_proper).app" "./"
 	$(call MKDIR,"$$($1_$2_proper).app/Contents/MacOS")
 	cp -f "$$($1_$2)$$(EXESUFFIX)" "$$($1_$2_proper).app/Contents/MacOS/"
+endif
+ifeq ($$(PLATFORM),SWITCH)
+	nacptool --create "Duke Nukem 3D" "Cpasjuste" "1.0" $$($1_$2).nacp
+	elf2nro $$@ $$($1_$2).nro --icon=platform/Switch/icon.jpg --nacp=$$($1_$2).nacp
 endif
 
 endef

@@ -63,6 +63,8 @@ int32_t I_AdvanceTrigger(void)
 #endif
 #if defined(GEKKO)
             MOUSEINACTIVECONDITIONAL(JOYSTICK_GetButtons()&WII_A)
+#elif __SWITCH__
+			JOYSTICK_GetButtons()&0x00000001 // KEY_A
 #else
             BUTTON(gamefunc_Open) ||
 # if !defined EDUKE32_TOUCH_DEVICES
@@ -82,6 +84,8 @@ void I_AdvanceTriggerClear(void)
     MOUSE_ClearButton(LEFT_MOUSE);
 #if defined(GEKKO)
     JOYSTICK_ClearButton(WII_A);
+#elif __SWITCH__
+	JOYSTICK_ClearButton(0x00000001); // KEY_A
 #else
     CONTROL_ClearButton(gamefunc_Open);
     CONTROL_ClearButton(gamefunc_Fire);
@@ -97,6 +101,9 @@ int32_t I_ReturnTrigger(void)
 #if defined(GEKKO)
             || (JOYSTICK_GetButtons()&(WII_B|WII_HOME))
 #endif
+#if defined(__SWITCH__)
+			|| (JOYSTICK_GetButtons()&0x00000002) // KEY_B
+#endif
             );
 }
 
@@ -110,6 +117,9 @@ void I_ReturnTriggerClear(void)
     JOYSTICK_ClearButton(WII_B);
     JOYSTICK_ClearButton(WII_HOME);
 #endif
+#if defined(__SWITCH__)
+	JOYSTICK_ClearButton(0x00000002); // KEY_B
+#endif
 }
 
 
@@ -120,6 +130,9 @@ int32_t I_EscapeTrigger(void)
 #if defined(GEKKO)
             || (JOYSTICK_GetButtons()&WII_HOME)
 #endif
+#if defined(__SWITCH__)
+			|| (JOYSTICK_GetButtons()&0x00000400) // KEY_PLUS
+#endif
             );
 }
 
@@ -129,6 +142,9 @@ void I_EscapeTriggerClear(void)
     KB_ClearKeyDown(sc_Escape);
 #if defined(GEKKO)
     JOYSTICK_ClearButton(WII_HOME);
+#endif
+#if defined(__SWITCH__)
+	JOYSTICK_ClearButton(0x00000400); // KEY_PLUS
 #endif
 }
 
@@ -141,6 +157,9 @@ int32_t I_MenuUp(void)
             (MOUSE_GetButtons()&WHEELUP_MOUSE) ||
             BUTTON(gamefunc_Move_Forward) ||
             (JOYSTICK_GetHat(0)&HAT_UP)
+#if defined(__SWITCH__)
+			|| (JOYSTICK_GetButtons()&0x00002000) // KEY_DUP
+#endif
             );
 }
 
@@ -151,6 +170,9 @@ void I_MenuUpClear(void)
     MOUSE_ClearButton(WHEELUP_MOUSE);
     CONTROL_ClearButton(gamefunc_Move_Forward);
     JOYSTICK_ClearHat(0);
+#if defined(__SWITCH__)
+	JOYSTICK_ClearButton(0x00002000); // KEY_DUP
+#endif    
 }
 
 
@@ -162,6 +184,9 @@ int32_t I_MenuDown(void)
             (MOUSE_GetButtons()&WHEELDOWN_MOUSE) ||
             BUTTON(gamefunc_Move_Backward) ||
             (JOYSTICK_GetHat(0)&HAT_DOWN)
+#if defined(__SWITCH__)
+			|| (JOYSTICK_GetButtons()&0x00008000) // KEY_DDOWN
+#endif
             );
 }
 
@@ -173,6 +198,9 @@ void I_MenuDownClear(void)
     MOUSE_ClearButton(WHEELDOWN_MOUSE);
     CONTROL_ClearButton(gamefunc_Move_Backward);
     JOYSTICK_ClearHat(0);
+#if defined(__SWITCH__)
+	JOYSTICK_ClearButton(0x00008000); // KEY_DDOWN
+#endif 
 }
 
 
@@ -185,6 +213,9 @@ int32_t I_MenuLeft(void)
             BUTTON(gamefunc_Turn_Left) ||
             BUTTON(gamefunc_Strafe_Left) ||
             (JOYSTICK_GetHat(0)&HAT_LEFT)
+#if defined(__SWITCH__)
+			|| (JOYSTICK_GetButtons()&0x00001000) // KEY_DLEFT
+#endif
             );
 }
 
@@ -196,6 +227,9 @@ void I_MenuLeftClear(void)
     CONTROL_ClearButton(gamefunc_Turn_Left);
     CONTROL_ClearButton(gamefunc_Strafe_Left);
     JOYSTICK_ClearHat(0);
+#if defined(__SWITCH__)
+	JOYSTICK_ClearButton(0x00001000); // KEY_DLEFT
+#endif 
 }
 
 
@@ -209,6 +243,9 @@ int32_t I_MenuRight(void)
             BUTTON(gamefunc_Strafe_Right) ||
             (MOUSE_GetButtons()&MIDDLE_MOUSE) ||
             (JOYSTICK_GetHat(0)&HAT_RIGHT)
+#if defined(__SWITCH__)
+			|| (JOYSTICK_GetButtons()&0x00004000) // KEY_DRIGHT
+#endif
             );
 }
 
@@ -221,6 +258,9 @@ void I_MenuRightClear(void)
     CONTROL_ClearButton(gamefunc_Strafe_Right);
     MOUSE_ClearButton(MIDDLE_MOUSE);
     JOYSTICK_ClearHat(0);
+#if defined(__SWITCH__)
+	JOYSTICK_ClearButton(0x00004000); // KEY_DRIGHT
+#endif 
 }
 
 
