@@ -60,6 +60,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 # include "lunatic_editor.h"
 #endif
 
+#ifdef __SWITCH__
+extern int32_t globalpal;
+#endif
+
 extern const char *s_buildRev;
 extern const char *s_buildTimestamp;
 

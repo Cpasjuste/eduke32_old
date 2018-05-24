@@ -3371,6 +3371,9 @@ static int32_t Menu_EntryRangeDoubleModify(void /*MenuEntry_t *entry, double new
 #endif
 
 static uint32_t save_xxh = 0;
+#ifdef __SWITCH__
+static int32_t Menu_EntryStringSubmit(char *input);
+#endif
 
 static void Menu_EntryStringActivate(/*MenuEntry_t *entry*/)
 {
@@ -3389,6 +3392,9 @@ static void Menu_EntryStringActivate(/*MenuEntry_t *entry*/)
         {
             ME_SAVE_NEW.name = nullptr;
             save_xxh = 0;
+#ifdef __SWITCH__
+			Menu_EntryStringSubmit(g_mapInfo[ud.volume_number * MAXLEVELS + ud.level_number].name);
+#endif
         }
         break;
 
