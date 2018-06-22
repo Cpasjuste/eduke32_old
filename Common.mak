@@ -582,7 +582,7 @@ else ifeq ($(PLATFORM),SWITCH)
     COMMONFLAGS += -march=armv8-a -mtune=cortex-a57 -mtp=soft -fPIE -ffast-math -ffunction-sections -fdata-sections
     # LINKERFLAGS += -Wl,--gc-sections
     COMPILERFLAGS += -D__SWITCH__ -I$(DEVKITPRO)/libnx/include -I$(DEVKITPRO)/portlibs/switch/include
-    LIBDIRS += -L$(DEVKITPRO)/libnx/lib -L$(DEVKITPRO)/portlibs/switch/lib
+    LIBDIRS += -L$(DEVKITPRO)/libnx/lib -L$(DEVKITPRO)/portlibs/switch/lib -specs=$(DEVKITPRO)/libnx/switch.specs
 else ifeq ($(PLATFORM),$(filter $(PLATFORM),DINGOO GCW))
     COMPILERFLAGS += -D__OPENDINGUX__
 else ifeq ($(PLATFORM),SKYOS)
