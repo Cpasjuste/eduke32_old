@@ -429,8 +429,8 @@ int main(int argc, char *argv[])
 #endif
 
 #if defined __SWITCH__
-	consoleDebugInit(debugDevice_SVC);
-    stdout = stderr;
+	//consoleDebugInit(debugDevice_SVC);
+    //stdout = stderr;
 #endif
 
 #if defined _WIN32 && defined SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING
