@@ -37,6 +37,9 @@
 # include <ogc/lwp_watchdog.h>
 #elif defined _WIN32
 # include "winbits.h"
+#elif defined __SWITCH__
+# include <switch.h>
+static int nxlink_sock = -1;
 #endif
 
 #include "vfs.h"
@@ -306,7 +309,7 @@ void wm_setapptitle(const char *name)
 //
 
 /* XXX: libexecinfo could be used on systems without gnu libc. */
-#if !defined _WIN32 && defined __GNUC__ && !defined __OpenBSD__ && !(defined __APPLE__ && defined __BIG_ENDIAN__) && !defined GEKKO && !defined EDUKE32_TOUCH_DEVICES && !defined __OPENDINGUX__
+#if !defined _WIN32 && defined __GNUC__ && !defined __OpenBSD__ && !(defined __APPLE__ && defined __BIG_ENDIAN__) && !defined GEKKO && !defined EDUKE32_TOUCH_DEVICES && !defined __OPENDINGUX__ && !defined __SWITCH__
 # define PRINTSTACKONSEGV 1
 # include <execinfo.h>
 #endif
@@ -447,6 +450,11 @@ int main(int argc, char *argv[])
     {
         return eduke32_return_value;
     }
+#endif
+
+#ifdef __SWITCH__
+    socketInitializeDefault();
+    nxlink_sock = nxlinkStdio();
 #endif
 
     sdlayer_sethints();
@@ -735,6 +743,12 @@ void uninitsystem(void)
 # ifdef POLYMER
     unloadglulibrary();
 # endif
+#endif
+
+#ifdef __SWITCH__
+    if (nxlink_sock != -1)
+        close(nxlink_sock);
+    socketExit();
 #endif
 }
 
@@ -1600,6 +1614,11 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
 #ifdef EDUKE32_GLES
               { SDL_GL_CONTEXT_MAJOR_VERSION, 1 },
               { SDL_GL_CONTEXT_MINOR_VERSION, 1 },
+#endif
+#ifdef __SWITCH__
+              { SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE },
+              { SDL_GL_CONTEXT_MAJOR_VERSION, 2 },
+              { SDL_GL_CONTEXT_MINOR_VERSION, 0 },
 #endif
               { SDL_GL_DOUBLEBUFFER, 1 },
 

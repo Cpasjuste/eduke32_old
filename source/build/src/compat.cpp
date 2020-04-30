@@ -580,6 +580,9 @@ char *Bstrupr(char *s)
 
 int Bgetpagesize(void)
 {
+#ifdef __SWITCH__
+    return BMAXPAGESIZE;
+#else
     static int pageSize = -1;
 
     if (pageSize == -1)
@@ -594,6 +597,7 @@ int Bgetpagesize(void)
     }
 
     return (unsigned)pageSize < BMAXPAGESIZE ? pageSize : BMAXPAGESIZE;
+#endif
 }
 
 //
@@ -633,7 +637,7 @@ size_t Bgetsysmemsize(void)
         FreeLibrary(lib);
     }
     else initprintf("Bgetsysmemsize(): unable to load KERNEL32.DLL!\n");
-#elif (defined(_SC_PAGE_SIZE) || defined(_SC_PAGESIZE)) && defined(_SC_PHYS_PAGES) && !defined(GEKKO)
+#elif (defined(_SC_PAGE_SIZE) || defined(_SC_PAGESIZE)) && defined(_SC_PHYS_PAGES) && !defined(GEKKO) && !defined(__SWITCH__)
 #ifdef _SC_PAGE_SIZE
     int64_t const scpagesiz = sysconf(_SC_PAGE_SIZE);
 #else
@@ -663,5 +667,17 @@ int access(const char *pathname, int mode)
     UNREFERENCED_PARAMETER(mode);
 
     return 0;
+}
+#endif
+
+#ifdef __SWITCH__
+double nexttoward (double x, long double y)
+{
+    return __builtin_nexttoward(x, y);
+}
+
+float nexttowardf (float x, long double y)
+{
+    return __builtin_nexttowardf(x, y);
 }
 #endif

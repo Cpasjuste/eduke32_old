@@ -8117,7 +8117,7 @@ psky_t * tileSetupSky(int32_t const tilenum)
 // Exported Engine Functions
 //
 
-#if !defined _WIN32 && defined DEBUGGINGAIDS && !defined GEKKO
+#if !defined _WIN32 && defined DEBUGGINGAIDS && !defined GEKKO && !defined __SWITCH__
 #ifdef GEKKO
 #define __rtems__
 #define _POSIX_REALTIME_SIGNALS
@@ -8233,7 +8233,7 @@ int32_t engineInit(void)
 {
     int32_t i;
 
-#if !defined _WIN32 && defined DEBUGGINGAIDS && !defined GEKKO
+#if !defined _WIN32 && defined DEBUGGINGAIDS && !defined GEKKO && !defined __SWITCH__
     struct sigaction sigact, oldact;
     memset(&sigact, 0, sizeof(sigact));
     sigact.sa_sigaction = &sighandler;

@@ -67,3 +67,7 @@ project.xcworkspace/
 /source/voidwrap/sdk/
 
 .svn/
+eduke32.nro
+eduke32.nacp
+mapster32.nro
+mapster32.nacp

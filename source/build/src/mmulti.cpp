@@ -13,6 +13,7 @@
 int myconnectindex, numplayers;
 int connectpoint2[MAXPLAYERS];
 
+#ifndef __SWITCH__
 #ifndef EDUKE32_STANDALONE
 
 #ifdef _WIN32
@@ -1255,3 +1256,4 @@ void savesnatchhost(int other)
 }
 
 #endif // EDUKE32_STANDALONE
+#endif // __SWITCH__

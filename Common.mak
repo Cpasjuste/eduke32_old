@@ -84,6 +84,9 @@ endif
 ifeq ($(PLATFORM),WII)
     EXESUFFIX := .elf
 endif
+ifeq ($(PLATFORM),SWITCH)
+    EXESUFFIX := .elf
+endif
 ifeq ($(PLATFORM),SKYOS)
     EXESUFFIX := .app
 endif
@@ -186,6 +189,22 @@ ifeq ($(PLATFORM),WII)
     CROSS := powerpc-eabi-
 
     CCFULLPATH = $(DEVKITPPC)/bin/$(CC)
+endif
+
+ifeq ($(PLATFORM),SWITCH)
+    ifeq ($(strip $(DEVKITPRO)),)
+        $(error "Please set DEVKITPRO in your environment. export DEVKITPRO := <path to>devkitpro")
+    endif
+
+    ifeq ($(HOSTPLATFORM),WINDOWS)
+        override DEVKITPRO := $(subst /c/,C:/,$(DEVKITPRO))
+    endif
+
+    export PATH := $(DEVKITPRO)/devkitA64/bin:$(PATH)
+
+    CROSS := aarch64-none-elf-
+
+    CCFULLPATH = $(DEVKITPRO)/devkitA64/bin/$(CC)
 endif
 
 CC := $(CROSS)gcc$(CROSS_SUFFIX)
@@ -299,6 +318,8 @@ ifeq ($(PLATFORM),WINDOWS)
     endif
 else ifeq ($(PLATFORM),WII)
     IMPLICIT_ARCH := ppc
+else ifeq ($(PLATFORM),SWITCH)
+    IMPLICIT_ARCH := aarch64
 else
     ifneq ($(ARCH),)
         override ARCH := $(subst i486,i386,$(subst i586,i386,$(subst i686,i386,$(strip $(ARCH)))))
@@ -393,6 +414,10 @@ else ifeq ($(PLATFORM),WII)
     override HAVE_GTK2 := 0
     override HAVE_FLAC := 0
     SDL_TARGET := 1
+else ifeq ($(PLATFORM),SWITCH)
+    override HAVE_GTK2 := 0
+    override NOASM := 1
+    PKG_CONFIG := $(DEVKITPRO)/portlibs/switch/bin/aarch64-none-elf-pkg-config
 else ifeq ($(PLATFORM),$(filter $(PLATFORM),DINGOO GCW QNX SUNOS SYLLABLE))
     override USE_OPENGL := 0
     override NOASM := 1
@@ -571,6 +596,10 @@ else ifeq ($(PLATFORM),WII)
     # -msdata=eabiexport
     COMPILERFLAGS += -DGEKKO -D__POWERPC__ -I$(LIBOGC_INC)
     LIBDIRS += -L$(LIBOGC_LIB)
+else ifeq ($(PLATFORM),SWITCH)
+    COMMONFLAGS += -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE -ffast-math -ffunction-sections -fdata-sections
+    COMPILERFLAGS += -D__SWITCH__ -I$(DEVKITPRO)/libnx/include -I$(DEVKITPRO)/portlibs/switch/include
+    LIBDIRS += -L$(DEVKITPRO)/libnx/lib -L$(DEVKITPRO)/portlibs/switch/lib -specs=$(DEVKITPRO)/libnx/switch.specs
 else ifeq ($(PLATFORM),$(filter $(PLATFORM),DINGOO GCW))
     COMPILERFLAGS += -D__OPENDINGUX__
 else ifeq ($(PLATFORM),SKYOS)
@@ -941,6 +970,8 @@ ifeq ($(RENDERTYPE),SDL)
 
     ifeq ($(PLATFORM),WII)
         SDLCONFIG :=
+    else ifeq ($(PLATFORM),SWITCH)
+        SDLCONFIG := $(DEVKITPRO)/portlibs/switch/bin/sdl2-config
     else ifeq ($(PLATFORM),SKYOS)
         COMPILERFLAGS += -I/boot/programs/sdk/include/sdl
         SDLCONFIG :=
@@ -1016,7 +1047,7 @@ else ifeq ($(SUBPLATFORM),LINUX)
     LIBS += -lrt
 endif
 
-ifeq (,$(filter $(PLATFORM),WINDOWS WII))
+ifeq (,$(filter $(PLATFORM),WINDOWS WII SWITCH))
     ifneq ($(PLATFORM),BSD)
         LIBS += -ldl
     endif
