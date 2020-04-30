@@ -333,7 +333,6 @@ SetupHornet(short SpriteNum)
 int NullHornet(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (TEST(u->Flags,SPR_SLIDING))
         DoActorSlide(SpriteNum);
@@ -404,8 +403,8 @@ int DoHornetMatchPlayerZ(short SpriteNum)
         u->sz = bound;
     }
 
-    u->sz = min(u->sz, loz - u->floor_dist);
-    u->sz = max(u->sz, hiz + u->ceiling_dist);
+    u->sz = min(long(u->sz), long(loz - u->floor_dist));
+    u->sz = max(long(u->sz), long(hiz + u->ceiling_dist));
 
     u->Counter = (u->Counter + (ACTORMOVETICS << 3) + (ACTORMOVETICS << 1)) & 2047;
     sp->z = u->sz + ((HORNET_BOB_AMT * (long)sintable[u->Counter]) >> 14);
@@ -456,7 +455,6 @@ int DoHornetCircle(short SpriteNum)
 {
     SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
-    SPRITEp tsp = User[SpriteNum]->tgt_sp;
     long nx,ny,bound;
 
     sp->ang = NORM_ANGLE(sp->ang + u->Counter2);

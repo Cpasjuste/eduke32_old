@@ -31,7 +31,6 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "fx_man.h"
 #include "music.h"
 #include "scriplib.h"
-#include "file_lib.h"
 #include "gamedefs.h"
 #include "keyboard.h"
 
@@ -42,10 +41,12 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 #include "game.h"
 #include "colormap.h"
-#include "net.h"
+#include "network.h"
 
 #include "animlib.h"
 #include "anim.h"
+
+#include "common_game.h"
 
 #define MAX_ANMS 10
 anim_t *anm_ptr[MAX_ANMS];
@@ -55,7 +56,7 @@ unsigned char ANIMpal[3*256];
 unsigned char ANIMnum = 0;
 short SoundState;
 
-char *ANIMname[] =
+const char *ANIMname[] =
 {
     "sw.anm",
     "swend.anm",
@@ -224,8 +225,7 @@ unsigned char *LoadAnm(short anim_num)
 {
     int handle;
     int length;
-    unsigned char *animbuf, *palptr;
-    int i,j,k;
+    unsigned char *animbuf;
 
     DSPRINTF(ds,"LoadAnm");
     MONO_PRINT(ds);
@@ -244,7 +244,7 @@ unsigned char *LoadAnm(short anim_num)
             return NULL;
         length = kfilelength(handle);
 
-        allocache((intptr_t *) &anm_ptr[anim_num], length + sizeof(anim_t), &walock[ANIM_TILE(ANIMnum)]);
+        g_cache.allocateBlock((intptr_t *) &anm_ptr[anim_num], length + sizeof(anim_t), &walock[ANIM_TILE(ANIMnum)]);
         animbuf = (unsigned char *)((intptr_t)anm_ptr[anim_num] + sizeof(anim_t));
 
         kread(handle, animbuf, length);
@@ -261,12 +261,9 @@ unsigned char *LoadAnm(short anim_num)
 void
 playanm(short anim_num)
 {
-    unsigned char *animbuf, *palptr;
-    int i, j, k, length = 0, numframes = 0;
+    unsigned char *animbuf;
+    int i, length = 0, numframes = 0;
     int32_t handle = -1;
-    unsigned char ANIMvesapal[4*256];
-    char tempbuf[256];
-    char *palook_bak = palookup[0];
     UserInput uinfo = { FALSE, FALSE, dir_None };
 
     ANIMnum = anim_num;
@@ -284,36 +281,37 @@ playanm(short anim_num)
     if (!animbuf)
         return;
 
+    // [JM] Temporary, needed to get the file's length for ANIM_LoadAnim. !CHECKME!
+    handle = kopen4load(ANIMname[ANIMnum], 0);
+    if (handle == -1) return;
+    length = kfilelength(handle);
+    kclose(handle);
+
     DSPRINTF(ds,"PlayAnm - Palette Stuff");
     MONO_PRINT(ds);
 
-    for (i = 0; i < 256; i++)
-        tempbuf[i] = i;
-    palookup[0] = tempbuf;
-
-    ANIM_LoadAnim(animbuf);
+    ANIM_LoadAnim(animbuf, length);
     ANIMnumframes = ANIM_NumFrames();
     numframes = ANIMnumframes;
-
-    palptr = ANIM_GetPalette();
 
     tilesiz[ANIM_TILE(ANIMnum)].x = 200;
     tilesiz[ANIM_TILE(ANIMnum)].y = 320;
 
-    clearview(0);
+    videoClearViewableArea(0L);
 
-    setbrightness(gs.Brightness,ANIMvesapal,2);
+    paletteSetColorTable(ANIMPAL, ANIM_GetPalette());
+    videoSetPalette(gs.Brightness, ANIMPAL, 2);
     if (ANIMnum == 1)
     {
         // draw the first frame
         waloff[ANIM_TILE(ANIMnum)] = (intptr_t)ANIM_DrawFrame(1);
-        invalidatetile(ANIM_TILE(ANIMnum), 0, 1<<4);
+        tileInvalidate(ANIM_TILE(ANIMnum), 0, 1<<4);
         rotatesprite(0 << 16, 0 << 16, 65536L, 512, ANIM_TILE(ANIMnum), 0, 0, 2 + 4 + 8 + 16 + 64, 0, 0, xdim - 1, ydim - 1);
     }
 
     SoundState = 0;
     //ototalclock = totalclock + 120*2;
-    ototalclock = totalclock;
+    ototalclock = (int32_t) totalclock;
 
     for (i = 1; i < numframes; i++)
     {
@@ -354,10 +352,10 @@ playanm(short anim_num)
         }
 
         waloff[ANIM_TILE(ANIMnum)] = (intptr_t)ANIM_DrawFrame(i);
-        invalidatetile(ANIM_TILE(ANIMnum), 0, 1<<4);
+        tileInvalidate(ANIM_TILE(ANIMnum), 0, 1<<4);
 
         rotatesprite(0 << 16, 0 << 16, 65536L, 512, ANIM_TILE(ANIMnum), 0, 0, 2 + 4 + 8 + 16 + 64, 0, 0, xdim - 1, ydim - 1);
-        nextpage();
+        videoNextPage();
     }
 
     // pause on final frame
@@ -369,10 +367,10 @@ playanm(short anim_num)
 
 ENDOFANIMLOOP:
 
-    clearview(0);
-    nextpage();
-    palookup[0] = palook_bak;
-    setbrightness(gs.Brightness, (unsigned char *)palette_data, 2);
+    videoClearViewableArea(0L);
+    videoNextPage();
+
+    videoSetPalette(gs.Brightness, BASEPAL, 2);
 
     KB_FlushKeyboardQueue();
     KB_ClearKeysDown();

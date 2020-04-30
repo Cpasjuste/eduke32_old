@@ -5,6 +5,10 @@
 // "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
 // Ken Silverman's official web site: "http://www.advsys.net/ken"
 // See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
 
 #include "a.h"
 #include "pragmas.h"
@@ -103,8 +107,6 @@ void hlineasm4(bssize_t cnt, int32_t skiploadincs, int32_t paloffs, uint32_t by,
 
 
 ///// Sloped ceiling/floor vertical line functions /////
-extern int32_t sloptable[16384];
-
 void slopevlin(intptr_t p, int32_t i, intptr_t slopaloffs, bssize_t cnt, int32_t bx, int32_t by)
 {
     intptr_t * A_C_RESTRICT slopalptr;
@@ -115,7 +117,7 @@ void slopevlin(intptr_t p, int32_t i, intptr_t slopaloffs, bssize_t cnt, int32_t
     slopalptr = (intptr_t *)slopaloffs;
     for (; cnt>0; cnt--)
     {
-        i = (sloptable[(bz>>6)+8192]); bz += bzinc;
+        i = (sloptable[(bz>>6)+HALFSLOPTABLESIZ]); bz += bzinc;
         u = bx+(inthi_t)globalx3*i;
         v = by+(inthi_t)globaly3*i;
         (*(char *)p) = *(char *)(((intptr_t)slopalptr[0])+gbuf[((u>>(32-glogx))<<glogy)+(v>>(32-glogy))]);
@@ -340,7 +342,7 @@ void vlineasm4(bssize_t cnt, char *p)
 
 #ifdef USE_SATURATE_VPLC
 static int32_t g_saturate;  // -1 if saturating vplc is requested, 0 else
-# define set_saturate(dosaturate) g_saturate = -!!dosaturate
+# define set_saturate(dosaturate) g_saturate = -(int)!!dosaturate
 #else
 # define set_saturate(dosaturate) UNREFERENCED_PARAMETER(dosaturate)
 #endif
@@ -688,21 +690,22 @@ void tspritevline(int32_t bx, int32_t by, bssize_t cnt, intptr_t bufplc, intptr_
 }
 
 void setupdrawslab(int32_t dabpl, intptr_t pal)
-{ bpl = dabpl; gpal = (char *)pal; }
+{
+    bpl  = dabpl;
+    gpal = (char *)pal;
+}
 
 void drawslab(int32_t dx, int32_t v, int32_t dy, int32_t vi, intptr_t vptr, intptr_t p)
 {
-    int32_t x;
-
-    while (dy > 0)
+    do
     {
-        char c = gpal[(int32_t)(*(char *)((v>>16)+vptr))];
-        for (x=0; x < dx; x++)
+        char const c = gpal[(int32_t)(*(char *)((v>>16)+vptr))];
+        for (int x=0; x < dx; x++)
             ((char*)p)[x] = c;
         p += bpl;
         v += vi;
-        dy--;
     }
+    while (--dy);
 }
 
 #if 0

@@ -1,3 +1,11 @@
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
+
 #include "build.h"
 #include "editor.h"
 
@@ -48,15 +56,16 @@ static void drawpixel_safe(void *s, char a)
 //
 void plotpixel(int32_t x, int32_t y, char col)
 {
-    // XXX: if we ever want the editor to work under GL ES, find a replacement for the raster functions
 #if defined USE_OPENGL && !defined EDUKE32_GLES
     if (videoGetRenderMode() >= REND_POLYMOST && in3dmode())
     {
         palette_t p = paletteGetColor(col);
-
-        glRasterPos4i(x, y, 0, 1);
-        glDrawPixels(1, 1, GL_RGB, GL_UNSIGNED_BYTE, &p);
-        glRasterPos4i(0, 0, 0, 1);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(x,ydim-y+1,1,1);
+        glClearColor((float)p.r*(1.0f/255.0f),(float)p.g*(1.0f/255.0f),(float)p.b*(1.0f)/255.0f,1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glClearColor(0.0f,0.0f,0.0f,1.0f); // XXX: there must be a better way
+        glDisable(GL_SCISSOR_TEST);
         return;
     }
 #endif
@@ -110,19 +119,45 @@ static void drawlinegl(int32_t x1, int32_t y1, int32_t x2, int32_t y2, palette_t
 {
     //        setpolymost2dview();	// JBF 20040205: more efficient setup
 
-    glViewport(0, 0, xres, yres);
+    int const dx = x2-x1;
+    int const dy = y2-y1;
+
+    if (dx >= 0)
+    {
+        if ((x1 >= wx2) || (x2 < wx1)) return;
+        if (x1 < wx1) y1 += scale(wx1-x1, dy, dx), x1 = wx1;
+        if (x2 > wx2) y2 += scale(wx2-x2, dy, dx), x2 = wx2;
+    }
+    else
+    {
+        if ((x2 >= wx2) || (x1 < wx1)) return;
+        if (x2 < wx1) y2 += scale(wx1-x2, dy, dx), x2 = wx1;
+        if (x1 > wx2) y1 += scale(wx2-x1, dy, dx), x1 = wx2;
+    }
+    if (dy >= 0)
+    {
+        if ((y1 >= wy2) || (y2 < wy1)) return;
+        if (y1 < wy1) x1 += scale(wy1-y1, dx, dy), y1 = wy1;
+        if (y2 > wy2) x2 += scale(wy2-y2, dx, dy), y2 = wy2;
+    }
+    else
+    {
+        if ((y2 >= wy2) || (y1 < wy1)) return;
+        if (y2 < wy1) x2 += scale(wy1-y2, dx, dy), y2 = wy1;
+        if (y1 > wy2) x1 += scale(wy2-y1, dx, dy), y1 = wy2;
+    }
+
+    glViewport(0, 0, xdim, ydim);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0, xres, yres, 0, -1, 1);
+    glOrtho(0, xdim, ydim, 0, -1, 1);
     if (videoGetRenderMode() == REND_POLYMER)
     {
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
-
-        glDisable(GL_TEXTURE_2D);
     }
 
-    gloy1 = -1;
+    polymost2d = 1;
     glDisable(GL_ALPHA_TEST);
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);	// When using line antialiasing, this is needed
@@ -130,6 +165,7 @@ static void drawlinegl(int32_t x1, int32_t y1, int32_t x2, int32_t y2, palette_t
     polymost_useColorOnly(true);
     glBegin(GL_LINES);
     glColor4ub(p.r, p.g, p.b, 255);
+
     glVertex2f((float) x1 * (1.f/4096.f), (float) y1 * (1.f/4096.f));
     glVertex2f((float) x2 * (1.f/4096.f), (float) y2 * (1.f/4096.f));
 
@@ -274,7 +310,7 @@ int32_t editorDraw2dLine(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int col
         swaplong(&y1, &y2);
     }
 
-    if (x1 >= xres || x2 < 0)
+    if (x1 >= xdim || x2 < 0)
         return 0;
 
     if (x1 < 0)
@@ -283,10 +319,10 @@ int32_t editorDraw2dLine(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int col
         x1 = 0;
     }
 
-    if (x2 >= xres)
+    if (x2 >= xdim)
     {
-        if (d.y) y2 += scale(xres-1-x2, d.y, d.x);
-        x2 = xres-1;
+        if (d.y) y2 += scale(xdim-1-x2, d.y, d.x);
+        x2 = xdim-1;
     }
 
     if ((d.x < 0 && d.y >= 0) || (d.y < 0 && d.x >= 0))
@@ -301,14 +337,14 @@ int32_t editorDraw2dLine(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int col
     if (y1 < 0)
     {
         if (d.x)
-            x1 = clamp(x1 + scale(0 - y1, d.x, d.y), 0, xres - 1);
+            x1 = clamp(x1 + scale(0 - y1, d.x, d.y), 0, xdim - 1);
         y1 = 0;
     }
 
     if (y2 >= ydim16)
     {
         if (d.x)
-            x2 = clamp(x2 + scale(ydim16-1-y2, d.x, d.y), 0, xres-1);
+            x2 = clamp(x2 + scale(ydim16-1-y2, d.x, d.y), 0, xdim-1);
         y2 = ydim16-1;
     }
 
@@ -319,7 +355,7 @@ int32_t editorDraw2dLine(int32_t x1, int32_t y1, int32_t x2, int32_t y2, int col
     }
 
     //if (ox1||ox2||oy1||oy2)
-    //    if (x1<0||x1>=xres || y2<0||y2>=yres)
+    //    if (x1<0||x1>=xdim || y2<0||y2>=ydim)
     //        attach_here();
 
     d.x = klabs(x2-x1)+1;
@@ -450,9 +486,9 @@ void editorDraw2dCircle(int32_t x1, int32_t y1, int32_t r, int32_t eccen, char c
     }
 
     if (r < 0) r = -r;
-    if (x1+r < 0 || y1+r < 0 || x1-r >= xres || y1-r >= ydim16) return;
+    if (x1+r < 0 || y1+r < 0 || x1-r >= xdim || y1-r >= ydim16) return;
 
-    uint32_t const uxres = xres, uydim16 = ydim16;
+    uint32_t const uxdim = xdim, uydim16 = ydim16;
 
     /*
     *      d
@@ -473,13 +509,13 @@ void editorDraw2dCircle(int32_t x1, int32_t y1, int32_t r, int32_t eccen, char c
 
     if (drawlinepat == 0xffffffff || drawlinepat & pow2long[(++patc)&31])
     {
-        if ((uint32_t) y1 < uydim16 && (uint32_t) (x1+r) < uxres)
+        if ((uint32_t) y1 < uydim16 && (uint32_t) (x1+r) < uxdim)
             drawpixel((char *) (p+r), col);    // a
-        if ((uint32_t) x1 < uxres   && (uint32_t) (y1+r) < uydim16)
+        if ((uint32_t) x1 < uxdim   && (uint32_t) (y1+r) < uydim16)
             drawpixel((char *) (p+(r*bytesperline)), col);    // b
-        if ((uint32_t) y1 < uydim16 && (uint32_t) (x1-r) < uxres)
+        if ((uint32_t) y1 < uydim16 && (uint32_t) (x1-r) < uxdim)
             drawpixel((char *) (p-r), col);    // c
-        if ((uint32_t) x1 < uxres   && (uint32_t) (y1-r) < uydim16)
+        if ((uint32_t) x1 < uxdim   && (uint32_t) (y1-r) < uydim16)
             drawpixel((char *) (p-(r*bytesperline)), col);    // d
     }
 
@@ -510,21 +546,21 @@ void editorDraw2dCircle(int32_t x1, int32_t y1, int32_t r, int32_t eccen, char c
 
             if (drawlinepat & pow2long[(++patc) & 31])
             {
-                if ((uint32_t) (x1 + yp) < uxres && (uint32_t) (y1 + xp) < uydim16)
+                if ((uint32_t) (x1 + yp) < uxdim && (uint32_t) (y1 + xp) < uydim16)
                     drawpixel_safe((char *) (p + yp + xpbpl), col);  // 1
-                if ((uint32_t) (x1 + xp) < uxres && (uint32_t) (y1 + yp) < uydim16)
+                if ((uint32_t) (x1 + xp) < uxdim && (uint32_t) (y1 + yp) < uydim16)
                     drawpixel_safe((char *) (p + xp + ypbpl), col);  // 2
-                if ((uint32_t) (x1 - xp) < uxres && (uint32_t) (y1 + yp) < uydim16)
+                if ((uint32_t) (x1 - xp) < uxdim && (uint32_t) (y1 + yp) < uydim16)
                     drawpixel_safe((char *) (p - xp + ypbpl), col);  // 3
-                if ((uint32_t) (x1 - yp) < uxres && (uint32_t) (y1 + xp) < uydim16)
+                if ((uint32_t) (x1 - yp) < uxdim && (uint32_t) (y1 + xp) < uydim16)
                     drawpixel_safe((char *) (p - yp + xpbpl), col);  // 4
-                if ((uint32_t) (x1 - yp) < uxres && (uint32_t) (y1 - xp) < uydim16)
+                if ((uint32_t) (x1 - yp) < uxdim && (uint32_t) (y1 - xp) < uydim16)
                     drawpixel_safe((char *) (p - yp - xpbpl), col);  // 5
-                if ((uint32_t) (x1 - xp) < uxres && (uint32_t) (y1 - yp) < uydim16)
+                if ((uint32_t) (x1 - xp) < uxdim && (uint32_t) (y1 - yp) < uydim16)
                     drawpixel_safe((char *) (p - xp - ypbpl), col);  // 6
-                if ((uint32_t) (x1 + xp) < uxres && (uint32_t) (y1 - yp) < uydim16)
+                if ((uint32_t) (x1 + xp) < uxdim && (uint32_t) (y1 - yp) < uydim16)
                     drawpixel_safe((char *) (p + xp - ypbpl), col);  // 7
-                if ((uint32_t) (x1 + yp) < uxres && (uint32_t) (y1 - xp) < uydim16)
+                if ((uint32_t) (x1 + yp) < uxdim && (uint32_t) (y1 - xp) < uydim16)
                     drawpixel_safe((char *) (p + yp - xpbpl), col);  // 8
             }
         } while (yp > xp);
@@ -553,21 +589,21 @@ void editorDraw2dCircle(int32_t x1, int32_t y1, int32_t r, int32_t eccen, char c
         int32_t const ypbpl = yp*bytesperline;
         int32_t const xpbpl = xp*bytesperline;
 
-        if ((uint32_t) (x1 + yp) < uxres && (uint32_t) (y1 + xp) < uydim16)
+        if ((uint32_t) (x1 + yp) < uxdim && (uint32_t) (y1 + xp) < uydim16)
             drawpixel_safe((char *) (p + yp + xpbpl), col);  // 1
-        if ((uint32_t) (x1 + xp) < uxres && (uint32_t) (y1 + yp) < uydim16)
+        if ((uint32_t) (x1 + xp) < uxdim && (uint32_t) (y1 + yp) < uydim16)
             drawpixel_safe((char *) (p + xp + ypbpl), col);  // 2
-        if ((uint32_t) (x1 - xp) < uxres && (uint32_t) (y1 + yp) < uydim16)
+        if ((uint32_t) (x1 - xp) < uxdim && (uint32_t) (y1 + yp) < uydim16)
             drawpixel_safe((char *) (p - xp + ypbpl), col);  // 3
-        if ((uint32_t) (x1 - yp) < uxres && (uint32_t) (y1 + xp) < uydim16)
+        if ((uint32_t) (x1 - yp) < uxdim && (uint32_t) (y1 + xp) < uydim16)
             drawpixel_safe((char *) (p - yp + xpbpl), col);  // 4
-        if ((uint32_t) (x1 - yp) < uxres && (uint32_t) (y1 - xp) < uydim16)
+        if ((uint32_t) (x1 - yp) < uxdim && (uint32_t) (y1 - xp) < uydim16)
             drawpixel_safe((char *) (p - yp - xpbpl), col);  // 5
-        if ((uint32_t) (x1 - xp) < uxres && (uint32_t) (y1 - yp) < uydim16)
+        if ((uint32_t) (x1 - xp) < uxdim && (uint32_t) (y1 - yp) < uydim16)
             drawpixel_safe((char *) (p - xp - ypbpl), col);  // 6
-        if ((uint32_t) (x1 + xp) < uxres && (uint32_t) (y1 - yp) < uydim16)
+        if ((uint32_t) (x1 + xp) < uxdim && (uint32_t) (y1 - yp) < uydim16)
             drawpixel_safe((char *) (p + xp - ypbpl), col);  // 7
-        if ((uint32_t) (x1 + yp) < uxres && (uint32_t) (y1 - xp) < uydim16)
+        if ((uint32_t) (x1 + yp) < uxdim && (uint32_t) (y1 - xp) < uydim16)
             drawpixel_safe((char *) (p + yp - xpbpl), col);  // 8
     } while (yp > xp);
 
@@ -579,7 +615,7 @@ void editorDraw2dCircle(int32_t x1, int32_t y1, int32_t r, int32_t eccen, char c
 //
 void clear2dscreen(void)
 {
-    int32_t const clearsz = (ydim16 <= yres - STATUS2DSIZ2) ? yres - STATUS2DSIZ2 : yres;
+    int32_t const clearsz = (ydim16 <= ydim - STATUS2DSIZ2) ? ydim - STATUS2DSIZ2 : ydim;
     videoBeginDrawing();  //{{{
     Bmemset((char *) frameplace, 0, bytesperline*clearsz);
     videoEndDrawing();   //}}}
@@ -648,7 +684,7 @@ void editorSetup2dSideView(void)
         m32_sidesin = sintable[m32_sideelev&2047];
         m32_sidecos = sintable[(m32_sideelev+512)&2047];
 
-        rotatepoint(zerovec, *(vec2_t *) &m32_viewplane, -m32_sideang, (vec2_t *) &m32_viewplane);
+        rotatepoint(zerovec, m32_viewplane.vec2, -m32_sideang, &m32_viewplane.vec2);
         m32_viewplane.x = mulscale14(m32_viewplane.x, m32_sidecos);
         m32_viewplane.y = mulscale14(m32_viewplane.y, m32_sidecos);
         m32_viewplane.z = m32_sidesin>>5;
@@ -668,7 +704,7 @@ static void editorGet2dSideViewDistance(int16_t sw, int16_t sect)
         p = &v;
     }
     else
-        p = (vec3_t *) &sprite[sw-MAXWALLS];
+        p = &sprite[sw-MAXWALLS].pos;
 
     m32_sidedist[sw] = p->x*m32_viewplane.x + p->y*m32_viewplane.y + (p->z>>4)*m32_viewplane.z;
 }
@@ -993,7 +1029,7 @@ static void editorDraw2dWall(int32_t i, int32_t posxe, int32_t posye, int32_t po
             {
                 col = editorcolors[15] - (M32_THROB>>1);
 
-                if (totalclock & 16)
+                if ((int32_t) totalclock & 16)
                     pointsize++;
             }
 
@@ -1059,7 +1095,7 @@ static void editorDraw2dSprite(int32_t j, int32_t posxe, int32_t posye, int32_t 
     int32_t x1, y1, x2, y2;
     int col;
 
-    const spritetype *const spr = &sprite[j];
+    auto const spr = &sprite[j];
     int16_t const blocking = (spr->cstat&1), hitblocking = (spr->cstat&256);
     int16_t const flooraligned = (spr->cstat&32), wallaligned = (spr->cstat&16);
 
@@ -1250,10 +1286,10 @@ void editorDraw2dScreen(const vec3_t *pos, int16_t cursectnum, int16_t ange, int
         for (i=0; i<numwalls; i++)
         {
             int32_t j = wall[i].nextwall;
-            if ((graywallbitmap[i>>3]&(1<<(i&7))) && (j < 0 || (graywallbitmap[j>>3]&(1<<(j&7)))))
-                graybitmap[i>>3] |= (1<<(i&7));
+            if ((graywallbitmap[i>>3]&pow2char[i&7]) && (j < 0 || (graywallbitmap[j>>3]&pow2char[j&7])))
+                graybitmap[i>>3] |= pow2char[i&7];
             else
-                graybitmap[i>>3] &= ~(1<<(i&7));
+                graybitmap[i>>3] &= ~pow2char[i&7];
         }
     }
 
@@ -1265,11 +1301,11 @@ void editorDraw2dScreen(const vec3_t *pos, int16_t cursectnum, int16_t ange, int
 #else
         if (alwaysshowgray)
             for (i=numwalls-1; i>=0; i--)
-                if (graybitmap[i>>3]&(1<<(i&7)))
+                if (graybitmap[i>>3]&pow2char[i&7])
                     editorDraw2dWall(i, posxe, posye, posze, zoome, 1+2);
 
         for (i=numwalls-1; i>=0; i--)
-            if ((graybitmap[i>>3]&(1<<(i&7)))==0)
+            if ((graybitmap[i>>3]&pow2char[i&7])==0)
                 editorDraw2dWall(i, posxe, posye, posze, zoome, 2);
 #endif
     }
@@ -1328,8 +1364,8 @@ void editorDraw2dScreen(const vec3_t *pos, int16_t cursectnum, int16_t ange, int
             int32_t j = m32_wallsprite[i];
             if (j<MAXWALLS)
             {
-                if (alwaysshowgray || !(graybitmap[j>>3]&(1<<(j&7))))
-                    editorDraw2dWall(j, posxe, posye, posze, zoome, !!(graybitmap[j>>3]&(1<<(j&7))));
+                if (alwaysshowgray || !(graybitmap[j>>3]&pow2char[j&7]))
+                    editorDraw2dWall(j, posxe, posye, posze, zoome, !!(graybitmap[j>>3]&pow2char[j&7]));
             }
             else
             {
@@ -1380,21 +1416,19 @@ void polymostSet2dView(void)
 #ifdef USE_OPENGL
     if (videoGetRenderMode() < REND_POLYMOST) return;
 
-    glViewport(0, 0, xres, yres);
+    glViewport(0, 0, xdim, ydim);
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0, xres, yres, 0, -1, 1);
+    glOrtho(0, xdim, ydim, 0, -1, 1);
 
     if (videoGetRenderMode() == REND_POLYMER)
     {
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
-
-        glDisable(GL_TEXTURE_2D);
     }
 
-    gloy1 = -1;
+    polymost2d = 1;
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);

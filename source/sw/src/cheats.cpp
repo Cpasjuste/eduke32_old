@@ -80,18 +80,16 @@ void PrevCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
     ExitLevel = TRUE;
 }
 
-static int32_t showallmap;
-
 void MapCheat(PLAYERp pp, char *UNUSED(cheat_string))
 {
-    showallmap ^= 1;
+    automapping ^= 1;
 
-    if (showallmap)
+    if (automapping)
         MapSetAll2D(0);
     else
         MapSetAll2D(0xFF);
 
-    sprintf(ds, "SHOWALLMAP %s", showallmap ? "ON" : "OFF");
+    sprintf(ds, "AUTOMAPPING %s", automapping ? "ON" : "OFF");
     PutStringInfo(pp, ds);
 }
 
@@ -116,6 +114,12 @@ void WeaponCheat(PLAYERp UNUSED(pp), char *UNUSED(cheat_string))
     {
         p = &Player[pnum];
         u = User[p->PlayerSprite];
+
+        if (!TEST(p->Flags, PF_TWO_UZI))
+        {
+            SET(p->Flags, PF_TWO_UZI);
+            SET(p->Flags, PF_PICKED_UP_AN_UZI);
+        }
 
         // ALL WEAPONS
         if (!SW_SHAREWARE)
@@ -155,12 +159,12 @@ void ClipCheat(PLAYERp pp, char *UNUSED(cheat_string))
 void WarpCheat(PLAYERp pp, char *cheat_string)
 {
     char *cp = cheat_string;
-    int episode_num;
     int level_num;
 
     cp += sizeof("swtrek")-1;
     level_num = atol(cp);
 
+    //int episode_num;
     //DSPRINTF(ds,"ep %d, lev %d",episode_num, level_num);
     //MONO_PRINT(ds);
 
@@ -198,13 +202,6 @@ void ItemCheat(PLAYERp pp, char *cheat_string)
     {
         p = &Player[pnum];
         memset(p->HasKey, TRUE, sizeof(p->HasKey));
-
-        if (p->Wpn[WPN_UZI] && p->CurWpn == p->Wpn[WPN_UZI])
-        {
-            SET(p->Flags, PF_TWO_UZI);
-            SET(p->Flags, PF_PICKED_UP_AN_UZI);
-            InitWeaponUzi(p);
-        }
 
         p->WpnShotgunAuto = 50;
         p->WpnRocketHeat = 5;
@@ -261,10 +258,10 @@ void BlackburnFunc(PLAYERp pp, char *UNUSED(cheat_string))
     PlayerSound(DIGI_TAUNTAI3,&pp->posx,&pp->posy,&pp->posz,v3df_dontpan|v3df_doppler|v3df_follow,pp);
 }
 
-int cheatcmp(char *str1, char *str2, int len)
+int cheatcmp(const char *str1, const char *str2, int len)
 {
-    char *cp1 = str1;
-    char *cp2 = str2;
+    const char *cp1 = str1;
+    const char *cp2 = str2;
 
     do
     {
@@ -288,7 +285,7 @@ int cheatcmp(char *str1, char *str2, int len)
 
 typedef struct
 {
-    char *CheatInputCode;
+    const char *CheatInputCode;
     void (*CheatInputFunc)(PLAYERp, char *);
     char flags;
 } CHEAT_INFO, *CHEAT_INFOp;
@@ -318,8 +315,6 @@ CHEAT_INFO ci[] =
 // !JIM! My simplified version of CheatInput which simply processes MessageInputString
 void CheatInput(void)
 {
-    static SWBOOL cur_show;
-    int ret;
     SWBOOL match = FALSE;
     unsigned int i;
 
@@ -423,7 +418,7 @@ void CheatInput(void)
             }
 
         // make sure string is lower cased
-        strlwr(CheatInputString);
+        Bstrlwr(CheatInputString);
 
         // check for at least one single match
         for (i = 0; i < SIZ(ci); i++)

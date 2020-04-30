@@ -108,7 +108,6 @@ void DecodePassword(char *pw)
 void ReadGameSetup(int32_t scripthandle)
 {
     int dummy;
-    int ret;
     extern char WangBangMacro[10][64];
 
     for (dummy = 0; dummy < 10; dummy++)
@@ -122,7 +121,7 @@ void ReadGameSetup(int32_t scripthandle)
 
     // option stuff
     dummy = -1;
-    ret = SCRIPT_GetNumber(scripthandle, "Options", "BorderNum",&dummy);
+    SCRIPT_GetNumber(scripthandle, "Options", "BorderNum",&dummy);
     if (dummy != -1) gs.BorderNum = dummy;
 
     dummy = -1;
@@ -224,6 +223,14 @@ void ReadGameSetup(int32_t scripthandle)
     dummy = -1;
     SCRIPT_GetNumber(scripthandle, "Options", "Stats",&dummy);
     if (dummy != -1) gs.Stats = dummy;
+
+    dummy = -1;
+    SCRIPT_GetNumber(scripthandle, "Options", "Darts",&dummy);
+    if (dummy != -1) gs.Darts = dummy;
+
+    dummy = -1;
+    SCRIPT_GetNumber(scripthandle, "Options", "WeaponAutoSwitch",&dummy);
+    if (dummy != -1) gs.WeaponAutoSwitch = dummy;
 
     dummy = -1;
     SCRIPT_GetNumber(scripthandle, "Options", "MouseAimingOn",&dummy);
@@ -331,6 +338,10 @@ void WriteGameSetup(int32_t scripthandle)
     SCRIPT_PutNumber(scripthandle, "Options", "MouseInvert",dummy,FALSE,FALSE);
     dummy = gs.Stats;
     SCRIPT_PutNumber(scripthandle, "Options", "Stats",dummy,FALSE,FALSE);
+    dummy = gs.Darts;
+    SCRIPT_PutNumber(scripthandle, "Options", "Darts",dummy,FALSE,FALSE);
+    dummy = gs.WeaponAutoSwitch;
+    SCRIPT_PutNumber(scripthandle, "Options", "WeaponAutoSwitch",dummy,FALSE,FALSE);
 
     EncodePassword(gs.Password);
     SCRIPT_PutString(scripthandle, "Options","Rooster",gs.Password);
@@ -352,7 +363,6 @@ void WriteGameSetup(int32_t scripthandle)
 
 void TermSetup(void)
 {
-    extern SWBOOL BotMode;
     CONFIG_WriteSetup();
     RTS_Shutdown();
 }

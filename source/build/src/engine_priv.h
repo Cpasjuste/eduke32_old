@@ -1,3 +1,11 @@
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
+
 #pragma once
 
 #ifndef ENGINE_PRIV_H
@@ -29,7 +37,7 @@ extern "C" {
 extern "C" {
 #endif
 
-extern uint16_t ATTRIBUTE((used)) sqrtable[4096], ATTRIBUTE((used)) shlookup[4096+256];
+extern uint16_t ATTRIBUTE((used)) sqrtable[4096], ATTRIBUTE((used)) shlookup[4096+256], ATTRIBUTE((used)) sqrtable_old[2048];
 
 #if defined(_MSC_VER) && !defined(NOASM)
 
@@ -197,10 +205,28 @@ extern uint16_t ATTRIBUTE((used)) sqrtable[4096], ATTRIBUTE((used)) shlookup[409
 
 #endif
 
+inline int32_t ksqrtasm_old(int32_t n)
+{
+    n = klabs(n);
+    int shift;
+    for (shift = 0; n >= 2048; n >>=2, shift++)
+    {
+    }
+    return (sqrtable_old[n]<<shift)>>10;
+}
+
+inline int32_t clip_nsqrtasm(int32_t n)
+{
+    if (enginecompatibilitymode == ENGINE_19950829)
+        return ksqrtasm_old(n);
+    return nsqrtasm(n);
+}
+
 extern int16_t thesector[MAXWALLSB], thewall[MAXWALLSB];
 extern int16_t bunchfirst[MAXWALLSB], bunchlast[MAXWALLSB];
 extern int16_t maskwall[MAXWALLSB], maskwallcnt;
-extern uspritetype *tspriteptr[MAXSPRITESONSCREEN + 1];
+extern tspriteptr_t tspriteptr[MAXSPRITESONSCREEN + 1];
+extern uint8_t* mirrorBuffer;
 extern int32_t xdimen, xdimenrecip, halfxdimen, xdimenscale, xdimscale, ydimen;
 extern float fxdimen;
 extern intptr_t frameoffset;
@@ -211,6 +237,9 @@ extern int16_t globalang, globalcursectnum;
 extern int32_t globalpal, cosglobalang, singlobalang;
 extern int32_t cosviewingrangeglobalang, sinviewingrangeglobalang;
 extern int32_t globalhisibility, globalpisibility, globalcisibility;
+#ifdef USE_OPENGL
+extern int32_t globvis2, globalvisibility2, globalhisibility2, globalpisibility2, globalcisibility2;
+#endif
 extern int32_t globvis, globalvisibility;
 extern int32_t xyaspect;
 extern int32_t globalshade;
@@ -243,35 +272,19 @@ extern int32_t rxi[8], ryi[8];
 // For GL_EXP2 fog:
 #define FOGSCALE 0.0000768f
 
-void calc_and_apply_fog(int32_t tile, int32_t shade, int32_t vis, int32_t pal);
-void calc_and_apply_fog_factor(int32_t tile, int32_t shade, int32_t vis, int32_t pal, float factor);
+void calc_and_apply_fog(int32_t shade, int32_t vis, int32_t pal);
+void calc_and_apply_fog_factor(int32_t shade, int32_t vis, int32_t pal, float factor);
 #endif
-
-extern void get_wallspr_points(uspritetype const * const spr, int32_t *x1, int32_t *x2,
-    int32_t *y1, int32_t *y2);
-extern void get_floorspr_points(uspritetype const * const spr, int32_t px, int32_t py,
-    int32_t *x1, int32_t *x2, int32_t *x3, int32_t *x4,
-    int32_t *y1, int32_t *y2, int32_t *y3, int32_t *y4);
 
 
 // int32_t wallmost(int16_t *mostbuf, int32_t w, int32_t sectnum, char dastat);
 int32_t wallfront(int32_t l1, int32_t l2);
 
-void set_globalang(fix16_t ang);
+void set_globalang(fix16_t const ang);
 
-#ifdef DEBUGGINGAIDS
-int32_t animateoffs(int const tilenum, int fakevar);
-#define DO_TILE_ANIM(Picnum, Fakevar) do { \
-        if (picanm[Picnum].sf&PICANM_ANIMTYPE_MASK) Picnum += animateoffs(Picnum, Fakevar); \
-    } while (0)
-#else
-int32_t animateoffs(int const tilenum);
-#define DO_TILE_ANIM(Picnum, Fakevar) do { \
-        if (picanm[Picnum].sf&PICANM_ANIMTYPE_MASK) Picnum += animateoffs(Picnum); \
-    } while (0)
-#endif
+int32_t animateoffs(int tilenum);
 
-static FORCE_INLINE int32_t bad_tspr(const uspritetype *tspr)
+static FORCE_INLINE int32_t bad_tspr(tspriteptr_t tspr)
 {
     // NOTE: tspr->owner >= MAXSPRITES (could be model) has to be handled by
     // caller.
@@ -290,7 +303,7 @@ static FORCE_INLINE int32_t getpalookupsh(int32_t davis) { return getpalookup(da
 
 void dorotspr_handle_bit2(int32_t *sx, int32_t *sy, int32_t *z, int32_t dastat,
                           int32_t cx1_plus_cx2, int32_t cy1_plus_cy2,
-                          int32_t *ret_ouryxaspect, int32_t *ret_ourxyaspect);
+                          int32_t *ret_yxaspect, int32_t *ret_xyaspect);
 
 ////// yax'y stuff //////
 #ifdef USE_OPENGL
@@ -298,11 +311,12 @@ extern void polymost_scansector(int32_t sectnum);
 #endif
 int32_t renderAddTsprite(int16_t z, int16_t sectnum);
 #ifdef YAX_ENABLE
-extern int32_t g_nodraw, scansector_retfast;
+extern int32_t g_nodraw, scansector_retfast, scansector_collectsprites;
 extern int32_t yax_globallev, yax_globalbunch;
 extern int32_t yax_globalcf, yax_nomaskpass, yax_nomaskdidit;
-extern uint8_t haveymost[YAX_MAXBUNCHES>>3];
-extern uint8_t yax_gotsector[MAXSECTORS>>3];
+extern uint8_t haveymost[(YAX_MAXBUNCHES+7)>>3];
+extern uint8_t yax_gotsector[(MAXSECTORS+7)>>3];
+extern int32_t yax_polymostclearzbuffer;
 
 static FORCE_INLINE int32_t yax_isislandwall(int32_t line, int32_t cf) { return (yax_vnextsec(line, cf) >= 0); }
 #endif
@@ -354,7 +368,7 @@ skipit:
                    "shrl $3, %%eax\n\t" \
                    "andl $7, %%ebx\n\t" \
                    "movb " ASMSYM("gotpic") "(%%eax), %%dl\n\t" \
-                   "movb " ASMSYM("pow2char") "(%%ebx), %%bl\n\t" \
+                   "movb " ASMSYM("pow2char_") "(%%ebx), %%bl\n\t" \
                    "orb %%bl, %%dl\n\t" \
                    "movb %%dl, " ASMSYM("gotpic") "(%%eax)" \
                    : "=a" (__a) : "a" (__a) \
@@ -365,7 +379,7 @@ skipit:
 
 static FORCE_INLINE void setgotpic(int32_t tilenume)
 {
-    if (walock[tilenume] < 200) walock[tilenume] = 199;
+    if (walock[tilenume] < CACHE1D_LOCKED) walock[tilenume] = CACHE1D_UNLOCKED;
     gotpic[tilenume>>3] |= pow2char[tilenume&7];
 }
 
@@ -391,13 +405,90 @@ static FORCE_INLINE const int8_t *getpsky(int32_t picnum, int32_t *dapyscale, in
 
 static FORCE_INLINE void set_globalpos(int32_t const x, int32_t const y, int32_t const z)
 {
-    globalposx  = x, fglobalposx = (float)x;
-    globalposy  = y, fglobalposy = (float)y;
-    globalposz  = z, fglobalposz = (float)z;
+    globalposx = x, fglobalposx = (float)x;
+    globalposy = y, fglobalposy = (float)y;
+    globalposz = z, fglobalposz = (float)z;
 }
 
 #ifdef __cplusplus
 }
 #endif
+
+template <typename T> static FORCE_INLINE void tileUpdatePicnum(T * const tileptr, int const obj)
+{
+    auto &tile = *tileptr;
+
+    if (picanm[tile].sf & PICANM_ANIMTYPE_MASK)
+        tile += animateoffs(tile);
+
+    if (((obj & 16384) == 16384) && (globalorientation & CSTAT_WALL_ROTATE_90) && rottile[tile].newtile != -1)
+        tile = rottile[tile].newtile;
+}
+
+// x1, y1: in/out
+// rest x/y: out
+template <typename T>
+static inline void get_wallspr_points(T const * const spr, int32_t *x1, int32_t *x2,
+                                      int32_t *y1, int32_t *y2)
+{
+    //These lines get the 2 points of the rotated sprite
+    //Given: (x1, y1) starts out as the center point
+
+    const int32_t tilenum=spr->picnum, ang=spr->ang;
+    const int32_t xrepeat = spr->xrepeat;
+    int32_t xoff = picanm[tilenum].xofs + spr->xoffset;
+    int32_t k, l, dax, day;
+
+    if (spr->cstat&4)
+        xoff = -xoff;
+
+    dax = sintable[ang&2047]*xrepeat;
+    day = sintable[(ang+1536)&2047]*xrepeat;
+
+    l = tilesiz[tilenum].x;
+    k = (l>>1)+xoff;
+
+    *x1 -= mulscale16(dax,k);
+    *x2 = *x1 + mulscale16(dax,l);
+
+    *y1 -= mulscale16(day,k);
+    *y2 = *y1 + mulscale16(day,l);
+}
+
+// x1, y1: in/out
+// rest x/y: out
+template <typename T>
+static inline void get_floorspr_points(T const * const spr, int32_t px, int32_t py,
+                                       int32_t *x1, int32_t *x2, int32_t *x3, int32_t *x4,
+                                       int32_t *y1, int32_t *y2, int32_t *y3, int32_t *y4)
+{
+    const int32_t tilenum = spr->picnum;
+    const int32_t cosang = sintable[(spr->ang+512)&2047];
+    const int32_t sinang = sintable[spr->ang&2047];
+
+    vec2_t const span = { tilesiz[tilenum].x, tilesiz[tilenum].y};
+    vec2_t const repeat = { spr->xrepeat, spr->yrepeat };
+
+    vec2_t adjofs = { picanm[tilenum].xofs + spr->xoffset, picanm[tilenum].yofs + spr->yoffset };
+
+    if (spr->cstat & 4)
+        adjofs.x = -adjofs.x;
+
+    if (spr->cstat & 8)
+        adjofs.y = -adjofs.y;
+
+    vec2_t const center = { ((span.x >> 1) + adjofs.x) * repeat.x, ((span.y >> 1) + adjofs.y) * repeat.y };
+    vec2_t const rspan  = { span.x * repeat.x, span.y * repeat.y };
+    vec2_t const ofs    = { -mulscale16(cosang, rspan.y), -mulscale16(sinang, rspan.y) };
+
+    *x1 += dmulscale16(sinang, center.x, cosang, center.y) - px;
+    *y1 += dmulscale16(sinang, center.y, -cosang, center.x) - py;
+
+    *x2 = *x1 - mulscale16(sinang, rspan.x);
+    *y2 = *y1 + mulscale16(cosang, rspan.x);
+
+    *x3 = *x2 + ofs.x, *x4 = *x1 + ofs.x;
+    *y3 = *y2 + ofs.y, *y4 = *y1 + ofs.y;
+}
 
 #endif	/* ENGINE_PRIV_H */

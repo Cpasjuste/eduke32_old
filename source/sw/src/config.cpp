@@ -30,7 +30,6 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "settings.h"
 #include "mytypes.h"
 #include "scriplib.h"
-#include "file_lib.h"
 #include "gamedefs.h"
 #include "keyboard.h"
 #include "function.h"
@@ -38,6 +37,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "fx_man.h"
 #include "sounds.h"
 #include "config.h"
+#include "common.h"
 #include "common_game.h"
 
 // we load this in to get default button and key assignments
@@ -46,8 +46,17 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "_functio.h"
 #include "_config.h"
 
+#include "renderlayer.h"
+
+#if defined RENDERTYPESDL && defined SDL_TARGET && SDL_TARGET > 1
+# include "sdl_inc.h"
+#endif
+
 extern void ReadGameSetup(int32_t scripthandle);
 extern void WriteGameSetup(int32_t scripthandle);
+
+ud_setup_t ud_setup{};
+int g_noSetup;
 
 //
 // Comm variables
@@ -59,14 +68,14 @@ int32_t NumberPlayers,CommPort,PortSpeed,IrqNumber,UartAddress;
 //
 // Sound variables
 //
+int32_t FXToggle    = 1;
+int32_t MusicToggle = 1;
 int32_t FXDevice    = 0;
-int32_t MusicDevice = 0;
+int32_t MusicDevice = ASS_AutoDetect;
 int32_t NumVoices   = 32;
 int32_t NumChannels = 2;
 int32_t NumBits     = 16;
 int32_t MixRate     = 44100;
-
-int32_t UseMouse = 1, UseJoystick = 0;
 
 uint8_t KeyboardKeys[NUMGAMEFUNCTIONS][2];
 int32_t MouseButtons[MAXMOUSEBUTTONS];
@@ -86,16 +95,8 @@ int32_t JoystickAnalogSaturate[MAXJOYAXES];
 // Screen variables
 //
 
-int32_t ScreenMode = 1;
-int32_t ScreenWidth = 640;
-int32_t ScreenHeight = 480;
-int32_t ScreenBPP = 8;
-int32_t ForceSetup = 1;
-
 extern char WangBangMacro[10][64];
 char  RTSName[MAXRTSNAMELENGTH];
-//static char setupfilename[64]={SETUPFILENAME};
-char setupfilename[64]= {SETUPFILENAME};
 static int32_t scripthandle = -1;
 
 
@@ -200,15 +201,35 @@ const char *CONFIG_AnalogNumToName(int32_t func)
 void CONFIG_SetDefaults(void)
 {
     // JBF 20031211
-    int32_t i,f;
-    uint8_t k1,k2;
+    int32_t i;
 
-    ScreenMode = 1;
-    ScreenWidth = 640;
-    ScreenHeight = 480;
-    ScreenBPP = 8;
+    ud_setup.ScreenMode = 1;
+
+#if defined RENDERTYPESDL && SDL_MAJOR_VERSION > 1
+    uint32_t inited = SDL_WasInit(SDL_INIT_VIDEO);
+    if (inited == 0)
+        SDL_Init(SDL_INIT_VIDEO);
+    else if (!(inited & SDL_INIT_VIDEO))
+        SDL_InitSubSystem(SDL_INIT_VIDEO);
+
+    SDL_DisplayMode dm;
+    if (SDL_GetDesktopDisplayMode(0, &dm) == 0)
+    {
+        ud_setup.ScreenWidth = dm.w;
+        ud_setup.ScreenHeight = dm.h;
+    }
+    else
+#endif
+    {
+        ud_setup.ScreenWidth = 1024;
+        ud_setup.ScreenHeight = 768;
+    }
+
+    ud_setup.ScreenBPP = 32;
+    FXToggle = 1;
+    MusicToggle = 1;
     FXDevice = 0;
-    MusicDevice = 0;
+    MusicDevice = ASS_AutoDetect;
     NumVoices = 32;
     NumChannels = 2;
     NumBits = 16;
@@ -229,8 +250,11 @@ void CONFIG_SetDefaults(void)
     Bstrcpy(WangBangMacro[8], MACRO9);
     Bstrcpy(WangBangMacro[9], MACRO10);
 
-    SetDefaultKeyDefinitions(0);
-    SetMouseDefaults(0);
+    SetDefaultKeyDefinitions(1);
+    SetMouseDefaults(1);
+
+    gs.MouseAimingOn = TRUE;
+    gs.AutoRun = TRUE;
 
     memset(MouseDigitalAxes, -1, sizeof(MouseDigitalAxes));
     for (i=0; i<MAXMOUSEAXES; i++)
@@ -242,7 +266,11 @@ void CONFIG_SetDefaults(void)
 
         MouseAnalogAxes[i] = CONFIG_AnalogNameToNum(mouseanalogdefaults[i]);
     }
-    CONTROL_SetMouseSensitivity(gs.MouseSpeed);
+    gs.MouseSpeed = DEFAULTMOUSESENSITIVITY*8192; // fix magic scale factor
+    CONTROL_MouseSensitivity = DEFAULTMOUSESENSITIVITY;
+
+#if 0
+    // joystick defaults are pointless
 
     memset(JoystickButtons, -1, sizeof(JoystickButtons));
     memset(JoystickButtonsClicked, -1, sizeof(JoystickButtonsClicked));
@@ -253,7 +281,7 @@ void CONFIG_SetDefaults(void)
     }
 
     memset(JoystickDigitalAxes, -1, sizeof(JoystickDigitalAxes));
-    for (i=0; i < (int32_t)(sizeof(joystickanalogdefaults)/sizeof(char *)); i++)
+    for (i=0; i < MAXJOYAXES; i++)
     {
         JoystickAnalogScale[i] = 65536;
         JoystickAnalogDead[i] = 1024;
@@ -264,13 +292,14 @@ void CONFIG_SetDefaults(void)
 
         JoystickAnalogAxes[i] = CONFIG_AnalogNameToNum(joystickanalogdefaults[i]);
     }
+#endif
 }
 
 
 void SetDefaultKeyDefinitions(int style)
 {
     int numkeydefaults;
-    char **keydefaultset;
+    const char **keydefaultset;
     int i, f, k1, k2;
 
     if (style)
@@ -291,7 +320,6 @@ void SetDefaultKeyDefinitions(int style)
         if (f == -1) continue;
         k1 = KB_StringToScanCode(keydefaultset[3*i+1]);
         k2 = KB_StringToScanCode(keydefaultset[3*i+2]);
-
         CONTROL_MapKey(i, k1, k2);
 
         KeyboardKeys[f][0] = k1;
@@ -302,7 +330,7 @@ void SetDefaultKeyDefinitions(int style)
 void SetMouseDefaults(int style)
 {
     int nummousedefaults;
-    char **mousedefaultset, **mouseclickeddefaultset;
+    const char **mousedefaultset, **mouseclickeddefaultset;
     int i;
 
     if (style)
@@ -403,7 +431,7 @@ void CONFIG_ReadKeys(int32_t scripthandle)
 void CONFIG_SetupMouse(void)
 {
     int32_t i;
-    char str[80],*p;
+    char str[80];
     char temp[80];
     int32_t function, scale;
 
@@ -458,7 +486,7 @@ void CONFIG_SetupMouse(void)
         CONTROL_SetAnalogAxisScale(i, MouseAnalogScale[i], controldevice_mouse);
     }
 
-    CONTROL_SetMouseSensitivity(gs.MouseSpeed);
+    CONTROL_MouseSensitivity = float(gs.MouseSpeed) * (1.f/8192.f); // fix magic scale factor
 }
 
 /*
@@ -472,9 +500,9 @@ void CONFIG_SetupMouse(void)
 void CONFIG_SetupJoystick(void)
 {
     int32_t i;
-    char str[80],*p;
+    char str[80];
     char temp[80];
-    int32_t function, scale;
+    int32_t scale;
 
     if (scripthandle < 0) return;
 
@@ -531,8 +559,9 @@ void CONFIG_SetupJoystick(void)
         CONTROL_MapDigitalAxis(i, JoystickDigitalAxes[i][0], 0, controldevice_joystick);
         CONTROL_MapDigitalAxis(i, JoystickDigitalAxes[i][1], 1, controldevice_joystick);
         CONTROL_SetAnalogAxisScale(i, JoystickAnalogScale[i], controldevice_joystick);
-        CONTROL_SetJoyAxisDead(i, JoystickAnalogDead[i]);
-        CONTROL_SetJoyAxisSaturate(i, JoystickAnalogSaturate[i]);
+        //CONTROL_SetJoyAxisDead(i, JoystickAnalogDead[i]);
+        //CONTROL_SetJoyAxisSaturate(i, JoystickAnalogSaturate[i]);
+        joySetDeadZone(i, JoystickAnalogDead[i], JoystickAnalogSaturate[i]); // [JM] !CHECKME!
     }
 }
 
@@ -547,8 +576,6 @@ void CONFIG_SetupJoystick(void)
 int32_t CONFIG_ReadSetup(void)
 {
     int32_t dummy;
-    char ret;
-    extern char ds[];
     extern char PlayerNameArg[32];
 
     char waveformtrackname[MAXWAVEFORMTRACKLENGTH] = {0};
@@ -556,25 +583,25 @@ int32_t CONFIG_ReadSetup(void)
     CONTROL_ClearAssignments();
     CONFIG_SetDefaults();
 
-    if (SafeFileExists(setupfilename))
+    if (buildvfs_exists(setupfilename))
         scripthandle = SCRIPT_Load(setupfilename);
 
     if (scripthandle < 0) return -1;
 
-    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenMode",&ScreenMode);
-    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenWidth",&ScreenWidth);
-    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenHeight",&ScreenHeight);
-    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenBPP", &ScreenBPP);
-    if (ScreenBPP < 8) ScreenBPP = 8;
+    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenMode",&ud_setup.ScreenMode);
+    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenWidth",&ud_setup.ScreenWidth);
+    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenHeight",&ud_setup.ScreenHeight);
+    SCRIPT_GetNumber(scripthandle, "Screen Setup", "ScreenBPP", &ud_setup.ScreenBPP);
+    if (ud_setup.ScreenBPP < 8) ud_setup.ScreenBPP = 8;
 
-#ifdef RENDERTYPEWIN
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "MaxRefreshFreq", (int32_t *)&maxrefreshfreq);
-#endif
 
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "GLTextureMode", &gltexfiltermode);
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "GLAnisotropy", &glanisotropy);
     SCRIPT_GetNumber(scripthandle, "Screen Setup", "GLUseTextureCompr", &glusetexcompr);
 
+    SCRIPT_GetNumber(scripthandle, "Sound Setup", "FXToggle",&FXToggle);
+    SCRIPT_GetNumber(scripthandle, "Sound Setup", "MusicToggle",&MusicToggle);
     SCRIPT_GetNumber(scripthandle, "Sound Setup", "FXDevice",&FXDevice);
     SCRIPT_GetNumber(scripthandle, "Sound Setup", "MusicDevice",&MusicDevice);
     SCRIPT_GetNumber(scripthandle, "Sound Setup", "FXVolume",&dummy);
@@ -594,9 +621,17 @@ int32_t CONFIG_ReadSetup(void)
     if (waveformtrackname[0] != '\0')
         memcpy(gs.WaveformTrackName, waveformtrackname, MAXWAVEFORMTRACKLENGTH);
 
-    SCRIPT_GetNumber(scripthandle, "Setup", "ForceSetup",&ForceSetup);
-    SCRIPT_GetNumber(scripthandle, "Controls","UseMouse",&UseMouse);
-    SCRIPT_GetNumber(scripthandle, "Controls","UseJoystick",&UseJoystick);
+    SCRIPT_GetNumber(scripthandle, "Setup", "ForceSetup",&ud_setup.ForceSetup);
+
+    if (g_grpNamePtr == NULL && g_addonNum == -1)
+    {
+        SCRIPT_GetStringPtr(scripthandle, "Setup", "SelectedGRP", &g_grpNamePtr);
+        if (g_grpNamePtr && !strlen(g_grpNamePtr))
+            g_grpNamePtr = dup_filename(G_DefaultGrpFile());
+    }
+
+    SCRIPT_GetNumber(scripthandle, "Controls","UseMouse",&ud_setup.UseMouse);
+    SCRIPT_GetNumber(scripthandle, "Controls","UseJoystick",&ud_setup.UseJoystick);
     SCRIPT_GetString(scripthandle, "Comm Setup", "RTSName",RTSName);
 
     SCRIPT_GetString(scripthandle, "Comm Setup","PlayerName",CommPlayerName);
@@ -631,17 +666,17 @@ void CONFIG_WriteSetup(void)
     if (scripthandle < 0)
         scripthandle = SCRIPT_Init(setupfilename);
 
-    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenWidth", ScreenWidth,FALSE,FALSE);
-    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenHeight",ScreenHeight,FALSE,FALSE);
-    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenMode",ScreenMode,FALSE,FALSE);
-    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenBPP",ScreenBPP,FALSE,FALSE);
-#ifdef RENDERTYPEWIN
+    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenWidth", ud_setup.ScreenWidth,FALSE,FALSE);
+    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenHeight",ud_setup.ScreenHeight,FALSE,FALSE);
+    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenMode",ud_setup.ScreenMode,FALSE,FALSE);
+    SCRIPT_PutNumber(scripthandle, "Screen Setup", "ScreenBPP",ud_setup.ScreenBPP,FALSE,FALSE);
     SCRIPT_PutNumber(scripthandle, "Screen Setup", "MaxRefreshFreq",maxrefreshfreq,FALSE,FALSE);
-#endif
     SCRIPT_PutNumber(scripthandle, "Screen Setup", "GLTextureMode",gltexfiltermode,FALSE,FALSE);
     SCRIPT_PutNumber(scripthandle, "Screen Setup", "GLAnisotropy",glanisotropy,FALSE,FALSE);
     SCRIPT_PutNumber(scripthandle, "Screen Setup", "GLUseTextureCompr",glusetexcompr,FALSE,FALSE);
 
+    SCRIPT_PutNumber(scripthandle, "Sound Setup", "FXToggle", FXToggle, FALSE, FALSE);
+    SCRIPT_PutNumber(scripthandle, "Sound Setup", "MusicToggle", MusicToggle, FALSE, FALSE);
     SCRIPT_PutNumber(scripthandle, "Sound Setup", "FXDevice", FXDevice, FALSE, FALSE);
     SCRIPT_PutNumber(scripthandle, "Sound Setup", "MusicDevice", MusicDevice, FALSE, FALSE);
     SCRIPT_PutNumber(scripthandle, "Sound Setup", "NumVoices", NumVoices, FALSE, FALSE);
@@ -654,9 +689,13 @@ void CONFIG_WriteSetup(void)
     SCRIPT_PutNumber(scripthandle, "Sound Setup", "ReverseStereo",dummy,FALSE,FALSE);
     SCRIPT_PutString(scripthandle, "Sound Setup", "WaveformTrackName", gs.WaveformTrackName);
 
-    SCRIPT_PutNumber(scripthandle, "Setup", "ForceSetup",ForceSetup,FALSE,FALSE);
-    SCRIPT_PutNumber(scripthandle, "Controls","UseMouse",UseMouse,FALSE,FALSE);
-    SCRIPT_PutNumber(scripthandle, "Controls","UseJoystick",UseJoystick,FALSE,FALSE);
+    SCRIPT_PutNumber(scripthandle, "Setup", "ForceSetup",ud_setup.ForceSetup,FALSE,FALSE);
+
+    if (g_grpNamePtr && g_addonNum == -1)
+        SCRIPT_PutString(scripthandle, "Setup", "SelectedGRP", g_grpNamePtr);
+
+    SCRIPT_PutNumber(scripthandle, "Controls","UseMouse",ud_setup.UseMouse,FALSE,FALSE);
+    SCRIPT_PutNumber(scripthandle, "Controls","UseJoystick",ud_setup.UseJoystick,FALSE,FALSE);
     SCRIPT_PutNumber(scripthandle, "Controls","MouseSensitivity",gs.MouseSpeed,FALSE,FALSE);
 
     WriteGameSetup(scripthandle);

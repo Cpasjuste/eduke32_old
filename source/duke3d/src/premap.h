@@ -27,35 +27,27 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 extern "C" {
 #endif
 
-typedef struct {
-    int32_t x1, y1;
-    int32_t xdimen, ydimen;
-} halfdimen_t;
-
-extern halfdimen_t g_halfScreen;
-extern int32_t g_halveScreenArea;
-
 extern int32_t g_levelTextTime;
 extern int32_t voting,vote_map,vote_episode;
 extern palette_t CrosshairColors;
-void G_SetupFilenameBasedMusic(char *nameBuf, const char *fileName, int levelNum);
+void G_SetupFilenameBasedMusic(char *nameBuf, const char *fileName);
 int G_EnterLevel(int gameMode);
 int G_FindLevelByFile(const char *fileName);
 void G_CacheMapData(void);
 void G_FreeMapState(int levelNum);
 void G_NewGame(int volumeNum, int levelNum, int skillNum);
-void G_ResetTimers(uint8_t keepgtics);
+void G_ResetTimers(bool saveMoveCnt);
 void G_SetCrosshairColor(int32_t r,int32_t g,int32_t b);
 void G_UpdateScreenArea(void);
 void G_SetViewportShrink(int32_t dir);
-void P_RandomSpawnPoint(int playerNum);
+void P_MoveToRandomSpawnPoint(int playerNum);
 void P_ResetInventory(int playerNum);
+void P_ResetMultiPlayer(int playerNum);
 void P_ResetPlayer(int playerNum);
-void P_ResetStatus(int playerNum);
 void P_ResetWeapons(int playerNum);
 void G_ClearFIFO(void);
 void G_ResetInterpolations(void);
-extern int32_t fragbarheight(void);
+int fragbarheight(void);
 
 #ifdef __cplusplus
 }

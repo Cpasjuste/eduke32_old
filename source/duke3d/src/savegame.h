@@ -25,6 +25,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include "game.h"
 
+#include "vfs.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -34,7 +36,7 @@ extern "C" {
 #else
 # define SV_MAJOR_VER 1
 #endif
-#define SV_MINOR_VER 6
+#define SV_MINOR_VER 7
 
 #pragma pack(push,1)
 typedef struct
@@ -45,6 +47,7 @@ typedef struct
     // 16 bytes
 
     uint32_t userbytever;
+    uint32_t scriptcrc;
 
     uint8_t comprthres;
     uint8_t recdiffsp, diffcompress, synccompress;
@@ -80,11 +83,13 @@ struct savebrief_t
 
     char name[MAXSAVEGAMENAMESTRUCT];
     char path[BMAX_PATH];
+    uint8_t isExt = 0;
 
     void reset()
     {
         name[0] = '\0';
         path[0] = '\0';
+        isExt = 0;
     }
     bool isValid() const
     {
@@ -98,6 +103,13 @@ struct menusave_t
     uint8_t isOldVer = 0;
     uint8_t isUnreadable = 0;
     uint8_t isAutoSave = 0;
+    void clear()
+    {
+        brief.reset();
+        isOldVer = 0;
+        isUnreadable = 0;
+        isAutoSave = 0;
+    }
 };
 
 extern savebrief_t g_lastautosave, g_lastusersave, g_freshload;
@@ -106,18 +118,18 @@ extern bool g_saveRequested;
 extern savebrief_t * g_quickload;
 
 extern menusave_t * g_menusaves;
-extern size_t g_nummenusaves;
+extern uint16_t g_nummenusaves;
 
 int32_t sv_updatestate(int32_t frominit);
-int32_t sv_readdiff(int32_t fil);
-uint32_t sv_writediff(FILE *fil);
-int32_t sv_loadheader(int32_t fil, int32_t spot, savehead_t *h);
-int32_t sv_loadsnapshot(int32_t fil, int32_t spot, savehead_t *h);
-int32_t sv_saveandmakesnapshot(FILE *fil, char const *name, int8_t spot, int8_t recdiffsp, int8_t diffcompress, int8_t synccompress, bool isAutoSave = false);
+int32_t sv_readdiff(buildvfs_kfd fil);
+uint32_t sv_writediff(buildvfs_FILE fil);
+int32_t sv_loadheader(buildvfs_kfd fil, int32_t spot, savehead_t *h);
+int32_t sv_loadsnapshot(buildvfs_kfd fil, int32_t spot, savehead_t *h);
+int32_t sv_saveandmakesnapshot(buildvfs_FILE fil, char const *name, int8_t spot, int8_t recdiffsp, int8_t diffcompress, int8_t synccompress, bool isAutoSave = false);
 void sv_freemem();
 void G_DeleteSave(savebrief_t const & sv);
 void G_DeleteOldSaves(void);
-size_t G_CountOldSaves(void);
+uint16_t G_CountOldSaves(void);
 int32_t G_SavePlayer(savebrief_t & sv, bool isAutoSave);
 int32_t G_LoadPlayer(savebrief_t & sv);
 int32_t G_LoadSaveHeaderNew(char const *fn, savehead_t *saveh);
@@ -128,10 +140,6 @@ int32_t G_LoadPlayerMaybeMulti(savebrief_t & sv);
 #ifdef YAX_ENABLE
 extern void sv_postyaxload(void);
 #endif
-
-// XXX: The 'bitptr' decl really belongs into gamedef.h, but we don't want to
-// pull all of it in savegame.c?
-extern char *bitptr;
 
 enum
 {
@@ -144,8 +152,8 @@ enum
     P2I_FWD_NON0 = 0+2,
     P2I_BACK_NON0 = 1+2,
 };
-void G_Util_PtrToIdx(void *ptr, int32_t const count, const void *base, int32_t const mode);
-void G_Util_PtrToIdx2(void *ptr, int32_t const count, size_t const stride, const void *base, int32_t const mode);
+void G_Util_PtrToIdx(void *ptr, int32_t count, const void *base, int32_t mode);
+void G_Util_PtrToIdx2(void *ptr, int32_t count, size_t stride, const void *base, int32_t mode);
 
 #ifdef LUNATIC
 extern const char *(*El_SerializeGamevars)(int32_t *slenptr, int32_t levelnum);

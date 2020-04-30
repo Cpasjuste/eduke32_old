@@ -154,8 +154,6 @@ int DoToiletGirl(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
-    short rnd_range = 0;
-    static int handle=0;
     SWBOOL ICanSee = FALSE;
 
     DoActorPickClosePlayer(SpriteNum);
@@ -170,7 +168,7 @@ int DoToiletGirl(short SpriteNum)
 
             choose_snd = RANDOM_P2(1024<<4)>>4;
 
-            if (!FX_SoundActive(handle))
+            if (!FX_SoundValidAndActive(handle))
             {
                 if (choose_snd > 750)
                     handle = PlaySound(DIGI_TOILETGIRLFART1,&sp->x,&sp->y,&sp->z,v3df_dontpan);
@@ -185,7 +183,7 @@ int DoToiletGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             if (RANDOM_RANGE(1000<<8)>>8 > 500)
                 madhandle = PlaySound(DIGI_ANIMEMAD1,&sp->x,&sp->y,&sp->z,v3df_dontpan);
@@ -232,7 +230,7 @@ int NullToiletGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             if (RANDOM_RANGE(1000<<8)>>8 > 500)
                 madhandle = PlaySound(DIGI_ANIMEMAD1,&sp->x,&sp->y,&sp->z,v3df_dontpan);
@@ -250,7 +248,6 @@ int NullToiletGirl(short SpriteNum)
 int ToiletGirlUzi(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (!TEST(u->Flags,SPR_CLIMBING))
         KeepActorOnFloor(SpriteNum);
@@ -267,7 +264,6 @@ int ToiletGirlUzi(short SpriteNum)
 
 int ToiletGirlPain(short SpriteNum)
 {
-    SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
 
     NullToiletGirl(SpriteNum);
@@ -402,8 +398,6 @@ int DoWashGirl(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
-    short rnd_range = 0;
-    static int handle=0;
     SWBOOL ICanSee = FALSE;
 
     DoActorPickClosePlayer(SpriteNum);
@@ -413,7 +407,7 @@ int DoWashGirl(short SpriteNum)
     {
         static int handle;
 
-        if (!FX_SoundActive(handle))
+        if (!FX_SoundValidAndActive(handle))
         {
             if (RANDOM_P2(1024<<4)>>4 > 500)
                 handle = PlaySound(DIGI_ANIMESING1,&sp->x,&sp->y,&sp->z,v3df_dontpan);
@@ -443,7 +437,7 @@ int DoWashGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             if (RANDOM_RANGE(1000<<8)>>8 > 500)
                 madhandle = PlaySound(DIGI_ANIMEMAD1,&sp->x,&sp->y,&sp->z,v3df_dontpan);
@@ -487,7 +481,7 @@ int NullWashGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             if (RANDOM_RANGE(1000<<8)>>8 > 500)
                 madhandle = PlaySound(DIGI_ANIMEMAD1,&sp->x,&sp->y,&sp->z,v3df_dontpan);
@@ -505,7 +499,6 @@ int NullWashGirl(short SpriteNum)
 int WashGirlUzi(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (!TEST(u->Flags,SPR_CLIMBING))
         KeepActorOnFloor(SpriteNum);
@@ -522,7 +515,6 @@ int WashGirlUzi(short SpriteNum)
 
 int WashGirlPain(short SpriteNum)
 {
-    SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
 
     NullWashGirl(SpriteNum);
@@ -621,8 +613,6 @@ int DoTrashCan(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
-    short rnd_range = 0;
-    static int handle=0;
 
     //(*u->ActorActionFunc) (SpriteNum);
 
@@ -643,7 +633,6 @@ int DoTrashCan(short SpriteNum)
 int TrashCanPain(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (TEST(u->Flags,SPR_SLIDING))
         DoActorSlide(SpriteNum);
@@ -831,7 +820,6 @@ int PachinkoCheckWin(short SpriteNum)
 {
     SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
-    short rnd;
 
     u->WaitTics = 0;  // Can operate it again now
 
@@ -840,7 +828,7 @@ int PachinkoCheckWin(short SpriteNum)
     if (TEST_BOOL1(sp)) return 0;
 
     // Well? Did I win????!
-    rnd = RANDOM_RANGE(1000);
+    /*short rnd = */RANDOM_RANGE(1000);
     if (RANDOM_RANGE(1000) > 900 || Pachinko_Win_Cheat)
     {
         short i, nexti;
@@ -895,9 +883,7 @@ int PachinkoCheckWin(short SpriteNum)
 int Pachinko1Operate(short SpriteNum)
 {
     SPRITEp sp = &sprite[SpriteNum];
-    USERp u = User[SpriteNum];
     short rnd;
-    PLAYERp pp = Player + myconnectindex;
 
     rnd = RANDOM_RANGE(1000);
     if (rnd > 900)
@@ -1289,8 +1275,6 @@ int DoCarGirl(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
-    short rnd_range = 0;
-    static int handle=0;
     SWBOOL ICanSee = FALSE;
 
     DoActorPickClosePlayer(SpriteNum);
@@ -1302,7 +1286,7 @@ int DoCarGirl(short SpriteNum)
         {
             static int madhandle;
 
-            if (!FX_SoundActive(madhandle))
+            if (!FX_SoundValidAndActive(madhandle))
             {
                 short choose;
                 choose = RANDOM_RANGE(1000);
@@ -1357,7 +1341,7 @@ int NullCarGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             short choose;
             choose = RANDOM_RANGE(1000);
@@ -1382,7 +1366,6 @@ int NullCarGirl(short SpriteNum)
 int CarGirlUzi(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (!TEST(u->Flags,SPR_CLIMBING))
         KeepActorOnFloor(SpriteNum);
@@ -1399,7 +1382,6 @@ int CarGirlUzi(short SpriteNum)
 
 int CarGirlPain(short SpriteNum)
 {
-    SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
 
     NullCarGirl(SpriteNum);
@@ -1516,8 +1498,6 @@ int DoMechanicGirl(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
-    short rnd_range = 0;
-    static int handle=0;
     SWBOOL ICanSee = FALSE;
 
     DoActorPickClosePlayer(SpriteNum);
@@ -1529,7 +1509,7 @@ int DoMechanicGirl(short SpriteNum)
         {
             static int madhandle;
 
-            if (!FX_SoundActive(madhandle))
+            if (!FX_SoundValidAndActive(madhandle))
             {
                 short choose;
                 choose = RANDOM_RANGE(1000);
@@ -1584,7 +1564,7 @@ int NullMechanicGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             short choose;
             choose = RANDOM_RANGE(1000);
@@ -1609,7 +1589,6 @@ int NullMechanicGirl(short SpriteNum)
 int MechanicGirlDrill(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (!TEST(u->Flags,SPR_CLIMBING))
         KeepActorOnFloor(SpriteNum);
@@ -1626,7 +1605,6 @@ int MechanicGirlDrill(short SpriteNum)
 
 int MechanicGirlPain(short SpriteNum)
 {
-    SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
 
     NullMechanicGirl(SpriteNum);
@@ -1744,8 +1722,6 @@ int DoSailorGirl(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
-    short rnd_range = 0;
-    static int handle=0;
     SWBOOL ICanSee = FALSE;
 
     DoActorPickClosePlayer(SpriteNum);
@@ -1757,7 +1733,7 @@ int DoSailorGirl(short SpriteNum)
         {
             static int madhandle;
 
-            if (!FX_SoundActive(madhandle))
+            if (!FX_SoundValidAndActive(madhandle))
             {
                 short choose;
                 choose = RANDOM_RANGE(1000);
@@ -1817,7 +1793,7 @@ int NullSailorGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             short choose;
             choose = RANDOM_RANGE(1000);
@@ -1846,7 +1822,6 @@ int NullSailorGirl(short SpriteNum)
 int SailorGirlThrow(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (!TEST(u->Flags,SPR_CLIMBING))
         KeepActorOnFloor(SpriteNum);
@@ -1863,7 +1838,6 @@ int SailorGirlThrow(short SpriteNum)
 
 int SailorGirlPain(short SpriteNum)
 {
-    SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
 
     NullSailorGirl(SpriteNum);
@@ -1964,8 +1938,7 @@ int DoPruneGirl(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
-    short rnd_range = 0;
-    static int madhandle=0,coyhandle=0;
+    static int madhandle, coyhandle;
     SWBOOL ICanSee = FALSE;
 
     DoActorPickClosePlayer(SpriteNum);
@@ -1975,7 +1948,7 @@ int DoPruneGirl(short SpriteNum)
     {
         if ((u->WaitTics -= ACTORMOVETICS) <= 0 && ICanSee)
         {
-            if (!FX_SoundActive(madhandle))
+            if (!FX_SoundValidAndActive(madhandle))
             {
                 short choose;
                 choose = STD_RANDOM_RANGE(1000);
@@ -1995,7 +1968,7 @@ int DoPruneGirl(short SpriteNum)
     }
     else
     {
-        if (!FX_SoundActive(coyhandle))
+        if (!FX_SoundValidAndActive(coyhandle))
         {
             short choose;
             choose = STD_RANDOM_RANGE(1000);
@@ -2046,7 +2019,7 @@ int NullPruneGirl(short SpriteNum)
     {
         static int madhandle;
 
-        if (!FX_SoundActive(madhandle))
+        if (!FX_SoundValidAndActive(madhandle))
         {
             short choose;
             choose = RANDOM_RANGE(1000);
@@ -2070,7 +2043,6 @@ int NullPruneGirl(short SpriteNum)
 int PruneGirlUzi(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (!TEST(u->Flags,SPR_CLIMBING))
         KeepActorOnFloor(SpriteNum);
@@ -2087,7 +2059,6 @@ int PruneGirlUzi(short SpriteNum)
 
 int PruneGirlPain(short SpriteNum)
 {
-    SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
 
     NullPruneGirl(SpriteNum);

@@ -432,26 +432,23 @@ BREAK_INFO SpriteBreakInfo[] =
 // SORT & SEARCH SUPPORT
 //////////////////////////////////////////////
 
-int CompareBreakInfo(BREAK_INFOp break_info1, BREAK_INFOp break_info2)
+static int CompareBreakInfo(void const * a, void const * b)
 {
+    auto break_info1 = (BREAK_INFO const *)a;
+    auto break_info2 = (BREAK_INFO const *)b;
+
     // will return a number less than 0 if break_info1 < break_info2
     return break_info1->picnum - break_info2->picnum;
 }
 
-int CompareSearchBreakInfo(short *picnum, BREAK_INFOp break_info)
-{
-    // will return a number less than 0 if picnum < break_info->picnum
-    return *picnum - break_info->picnum;
-}
-
 BREAK_INFOp FindWallBreakInfo(short picnum)
 {
-    return bsearch(&picnum, &WallBreakInfo, SIZ(WallBreakInfo), sizeof(BREAK_INFO), (int(*)(const void *,const void *))CompareSearchBreakInfo);
+    return (BREAK_INFOp)bsearch(&picnum, &WallBreakInfo, SIZ(WallBreakInfo), sizeof(BREAK_INFO), CompareBreakInfo);
 }
 
 BREAK_INFOp FindSpriteBreakInfo(short picnum)
 {
-    return bsearch(&picnum, &SpriteBreakInfo, SIZ(SpriteBreakInfo), sizeof(BREAK_INFO), (int(*)(const void *,const void *))CompareSearchBreakInfo);
+    return (BREAK_INFOp)bsearch(&picnum, &SpriteBreakInfo, SIZ(SpriteBreakInfo), sizeof(BREAK_INFO), CompareBreakInfo);
 }
 
 //////////////////////////////////////////////
@@ -460,8 +457,8 @@ BREAK_INFOp FindSpriteBreakInfo(short picnum)
 
 void SortBreakInfo(void)
 {
-    qsort(&SpriteBreakInfo, SIZ(SpriteBreakInfo), sizeof(BREAK_INFO), (int(*)(const void *,const void *))CompareBreakInfo);
-    qsort(&WallBreakInfo, SIZ(WallBreakInfo), sizeof(BREAK_INFO), (int(*)(const void *,const void *))CompareBreakInfo);
+    qsort(&SpriteBreakInfo, SIZ(SpriteBreakInfo), sizeof(BREAK_INFO), CompareBreakInfo);
+    qsort(&WallBreakInfo, SIZ(WallBreakInfo), sizeof(BREAK_INFO), CompareBreakInfo);
 }
 
 BREAK_INFOp SetupWallForBreak(WALLp wallp)
@@ -597,7 +594,7 @@ int AutoBreakWall(WALLp wallp, int hit_x, int hit_y, int hit_z, short ang, short
     // Check to see if it should break with current weapon type
     if (!CheckBreakToughness(break_info, type)) return FALSE;
 
-    if (hit_x != MAXLONG)
+    if (hit_x != INT32_MAX)
     {
         vec3_t hit_pos = { hit_x, hit_y, hit_z };
         // need correct location for spawning shrap
@@ -758,7 +755,6 @@ int WallBreakPosition(short hit_wall, short *sectnum, int *x, int *y, int *z, sh
     WALLp wp;
     int nx,ny;
     short wall_ang;
-    int ret=0;
 
     w = hit_wall;
     wp = &wall[w];
@@ -811,7 +807,7 @@ int WallBreakPosition(short hit_wall, short *sectnum, int *x, int *y, int *z, sh
     updatesectorz(*x,*y,*z,sectnum);
     if (*sectnum < 0)
     {
-        *x = MAXLONG;  // don't spawn shrap, just change wall
+        *x = INT32_MAX;  // don't spawn shrap, just change wall
         return FALSE;
     }
 
@@ -821,7 +817,6 @@ int WallBreakPosition(short hit_wall, short *sectnum, int *x, int *y, int *z, sh
 // If the tough parameter is not set, then it can't break tough walls and sprites
 SWBOOL HitBreakWall(WALLp wp, int hit_x, int hit_y, int hit_z, short ang, short type)
 {
-    short SpriteNum;
     short match = wp->hitag;
 
     if (match > 0)
@@ -830,7 +825,7 @@ SWBOOL HitBreakWall(WALLp wp, int hit_x, int hit_y, int hit_z, short ang, short 
         return TRUE;
     }
 
-    //if (hit_x == MAXLONG)
+    //if (hit_x == INT32_MAX)
     {
         short sectnum;
         WallBreakPosition(wp - wall, &sectnum, &hit_x, &hit_y, &hit_z, &ang);
@@ -848,7 +843,6 @@ int KillBreakSprite(short BreakSprite)
 {
     SPRITEp bp = &sprite[BreakSprite];
     USERp bu = User[BreakSprite];
-    short i;
 
     // Does not actually kill the sprite so it will be valid for the rest
     // of the loop traversal.
@@ -958,7 +952,6 @@ int AutoBreakSprite(short BreakSprite, short type)
     SPRITEp bp = &sprite[BreakSprite];
     BREAK_INFOp break_info;
     extern void DoWallBreakMatch(short match);
-    int SpawnBreakFlames(int16_t SpriteNum);
 
     break_info = FindSpriteBreakInfo(bp->picnum);
 
@@ -1050,14 +1043,10 @@ SWBOOL NullActor(USERp u)
 
 int HitBreakSprite(short BreakSprite, short type)
 {
-    SPRITEp sp;
     SPRITEp bp = &sprite[BreakSprite];
     USERp bu = User[BreakSprite];
-    short match = bp->lotag;
-    short match_extra;
-    short SpriteNum;
-    BREAK_INFOp break_info;
 
+    //SPRITEp sp;
     // ignore as a breakable if true
     //if (sp->lotag == TAG_SPRITE_HIT_MATCH)
     //    return(FALSE);
@@ -1109,14 +1098,14 @@ void DoWallBreakMatch(short match)
     short i,sectnum;
     int x,y,z;
     WALLp wp;
-    short nw,wall_ang;
+    short wall_ang;
 
     for (i=0; i<=numwalls; i++)
     {
         if (wall[i].hitag == match)
         {
             WallBreakPosition(i, &sectnum, &x, &y, &z, &wall_ang);
-            //nw = wall[i].point2;
+            //short nw = wall[i].point2;
             //wall_ang = NORM_ANGLE(getangle(wall[nw].x - wall[i].x, wall[nw].y - wall[i].y)+512);
             wp = &wall[i];
             wp->hitag = 0; // Reset the hitag

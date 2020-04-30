@@ -36,7 +36,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "lists.h"
 #include "interp.h"
 
-#include "net.h"
+#include "network.h"
 //#include "save.h"
 #include "savedef.h"
 #include "jsector.h"
@@ -90,10 +90,10 @@ extern short BossSpriteNum[3];
 void ScreenTileLock(void);
 void ScreenTileUnLock(void);
 
-int ScreenSaveSetup(PLAYERp pp);
+int ScreenSaveSetup(void);
 void ScreenSave(MFILE_WRITE fout);
 
-int ScreenLoadSaveSetup(PLAYERp pp);
+int ScreenLoadSaveSetup(void);
 void ScreenLoad(MFILE_READ fin);
 
 #define PANEL_SAVE 1
@@ -171,7 +171,7 @@ int SaveSymDataInfo(MFILE_WRITE fil, void *ptr)
 
     return 0;
 }
-int SaveSymCodeInfo(MFILE_WRITE fil, void *ptr)
+static int SaveSymCodeInfo_raw(MFILE_WRITE fil, void *ptr)
 {
     savedcodesym sym;
 
@@ -191,6 +191,11 @@ int SaveSymCodeInfo(MFILE_WRITE fil, void *ptr)
     MWRITE(&sym, sizeof(sym), 1, fil);
 
     return 0;
+}
+template <typename T>
+static int SaveSymCodeInfo(MFILE_WRITE fil, T * ptr)
+{
+    return SaveSymCodeInfo_raw(fil, (void *)ptr);
 }
 
 int LoadSymDataInfo(MFILE_READ fil, void **ptr)
@@ -216,8 +221,6 @@ int SaveGame(short save_num)
     MFILE_WRITE fil;
     int i,j;
     short ndx;
-    SPRITE tsp;
-    SPRITEp sp;
     PLAYER tp;
     PLAYERp pp;
     SECT_USERp sectu;
@@ -225,14 +228,11 @@ int SaveGame(short save_num)
     USERp u;
     ANIM tanim;
     ANIMp a;
-    int8_t code;
-    uint8_t data_code;
-    int16_t data_ndx;
     PANEL_SPRITE tpanel_sprite;
     PANEL_SPRITEp psp,cur,next;
     SECTOR_OBJECTp sop;
     char game_name[80];
-    int cnt = 0, saveisshot=0;
+    int saveisshot=0;
     OrgTileP otp, next_otp;
 
     Saveable_Init();
@@ -248,7 +248,7 @@ int SaveGame(short save_num)
     MWRITE(&Level,sizeof(Level),1,fil);
     MWRITE(&Skill,sizeof(Skill),1,fil);
 
-    ScreenSaveSetup(&Player[myconnectindex]);
+    ScreenSaveSetup();
 
     ScreenSave(fil);
 
@@ -392,6 +392,7 @@ int SaveGame(short save_num)
     MWRITE(headspritestat,sizeof(headspritestat),1,fil);
     MWRITE(prevspritestat,sizeof(prevspritestat),1,fil);
     MWRITE(nextspritestat,sizeof(nextspritestat),1,fil);
+    MWRITE(&tailspritefree,sizeof(tailspritefree),1,fil);
 
     //User information
     for (i = 0; i < MAXSPRITES; i++)
@@ -402,7 +403,6 @@ int SaveGame(short save_num)
             // write header
             MWRITE(&ndx,sizeof(ndx),1,fil);
 
-            sp = &sprite[i];
             memcpy(&tu, User[i], sizeof(USER));
             u = &tu;
 
@@ -483,10 +483,6 @@ int SaveGame(short save_num)
         else
             MWRITE(Track[i].TrackPoint, Track[i].NumPoints * sizeof(TRACK_POINT),1,fil);
     }
-
-    MWRITE(&vel,sizeof(vel),1,fil);
-    MWRITE(&svel,sizeof(svel),1,fil);
-    MWRITE(&angvel,sizeof(angvel),1,fil);
 
     MWRITE(&loc,sizeof(loc),1,fil);
     //MWRITE(&oloc,sizeof(oloc),1,fil);
@@ -653,6 +649,7 @@ int SaveGame(short save_num)
     MWRITE(&gNet,sizeof(gNet),1,fil);
 
     MWRITE(LevelSong,sizeof(LevelSong),1,fil);
+    MWRITE(&SongTrack,sizeof(SongTrack),1,fil);
 
     MWRITE(palette,sizeof(palette),1,fil);
     MWRITE(palette_data,sizeof(palette_data),1,fil);
@@ -710,7 +707,7 @@ int LoadGameFullHeader(short save_num, char *descr, short *level, short *skill)
     MREAD(level,sizeof(*level),1,fil);
     MREAD(skill,sizeof(*skill),1,fil);
 
-    tile = ScreenLoadSaveSetup(Player + myconnectindex);
+    tile = ScreenLoadSaveSetup();
     ScreenLoad(fil);
 
     MCLOSE_READ(fil);
@@ -722,7 +719,6 @@ void LoadGameDescr(short save_num, char *descr)
 {
     MFILE_READ fil;
     char game_name[80];
-    short tile;
     int ver;
 
     sprintf(game_name,"game%d.sav",save_num);
@@ -748,23 +744,14 @@ int LoadGame(short save_num)
     int i,j,saveisshot=0;
     short ndx,SpriteNum,sectnum;
     PLAYERp pp = NULL;
-    SPRITEp sp;
     USERp u;
     SECTOR_OBJECTp sop;
     SECT_USERp sectu;
-    int8_t code;
     ANIMp a;
-    uint8_t data_code;
-    int16_t data_ndx;
-    PANEL_SPRITEp psp,next,cur;
-    PANEL_SPRITE tpanel_sprite;
+    PANEL_SPRITEp psp,next;
     char game_name[80];
-    OrgTileP otp, next_otp;
+    OrgTileP otp;
 
-    int RotNdx;
-    int StateStartNdx;
-    int StateNdx;
-    int StateEndNdx;
     extern SWBOOL InMenuLevel;
 
     Saveable_Init();
@@ -794,7 +781,7 @@ int LoadGame(short save_num)
     MREAD(&Level,sizeof(Level),1,fil);
     MREAD(&Skill,sizeof(Skill),1,fil);
 
-    ScreenLoadSaveSetup(Player + myconnectindex);
+    ScreenLoadSaveSetup();
     ScreenLoad(fil);
     ScreenTileUnLock();
 
@@ -849,7 +836,7 @@ int LoadGame(short save_num)
             if (ndx == -1)
                 break;
 
-            psp = CallocMem(sizeof(PANEL_SPRITE), 1);
+            psp = (PANEL_SPRITEp)CallocMem(sizeof(PANEL_SPRITE), 1);
             ASSERT(psp);
 
             MREAD(psp, sizeof(PANEL_SPRITE),1,fil);
@@ -905,6 +892,7 @@ int LoadGame(short save_num)
     MREAD(headspritestat,sizeof(headspritestat),1,fil);
     MREAD(prevspritestat,sizeof(prevspritestat),1,fil);
     MREAD(nextspritestat,sizeof(nextspritestat),1,fil);
+    MREAD(&tailspritefree,sizeof(tailspritefree),1,fil);
 
     //User information
     memset(User, 0, sizeof(User));
@@ -912,29 +900,28 @@ int LoadGame(short save_num)
     MREAD(&SpriteNum, sizeof(SpriteNum),1,fil);
     while (SpriteNum != -1)
     {
-        sp = &sprite[SpriteNum];
         User[SpriteNum] = u = (USERp)CallocMem(sizeof(USER), 1);
         MREAD(u,sizeof(USER),1,fil);
 
         if (u->WallShade)
         {
-            u->WallShade = CallocMem(u->WallCount * sizeof(*u->WallShade), 1);
+            u->WallShade = (int8_t*)CallocMem(u->WallCount * sizeof(*u->WallShade), 1);
             MREAD(u->WallShade,sizeof(*u->WallShade)*u->WallCount,1,fil);
         }
 
         if (u->rotator)
         {
-            u->rotator = CallocMem(sizeof(*u->rotator), 1);
+            u->rotator = (ROTATORp)CallocMem(sizeof(*u->rotator), 1);
             MREAD(u->rotator,sizeof(*u->rotator),1,fil);
 
             if (u->rotator->origx)
             {
-                u->rotator->origx = CallocMem(u->rotator->num_walls * sizeof(*u->rotator->origx), 1);
+                u->rotator->origx = (int*)CallocMem(u->rotator->num_walls * sizeof(*u->rotator->origx), 1);
                 MREAD(u->rotator->origx,sizeof(*u->rotator->origx)*u->rotator->num_walls,1,fil);
             }
             if (u->rotator->origy)
             {
-                u->rotator->origy = CallocMem(u->rotator->num_walls * sizeof(*u->rotator->origy), 1);
+                u->rotator->origy = (int*)CallocMem(u->rotator->num_walls * sizeof(*u->rotator->origy), 1);
                 MREAD(u->rotator->origy,sizeof(*u->rotator->origy)*u->rotator->num_walls,1,fil);
             }
         }
@@ -1000,10 +987,6 @@ int LoadGame(short save_num)
             MREAD(Track[i].TrackPoint, Track[i].NumPoints * sizeof(TRACK_POINT),1,fil);
         }
     }
-
-    MREAD(&vel,sizeof(vel),1,fil);
-    MREAD(&svel,sizeof(svel),1,fil);
-    MREAD(&angvel,sizeof(angvel),1,fil);
 
     MREAD(&loc,sizeof(loc),1,fil);
 
@@ -1117,7 +1100,7 @@ int LoadGame(short save_num)
             if (ndx == -1)
                 break;
 
-            otp = CallocMem(sizeof(*otp), 1);
+            otp = (OrgTileP)CallocMem(sizeof(*otp), 1);
             ASSERT(otp);
 
             MREAD(otp, sizeof(*otp),1,fil);
@@ -1152,6 +1135,8 @@ int LoadGame(short save_num)
     MREAD(&gNet,sizeof(gNet),1,fil);
 
     MREAD(LevelSong,sizeof(LevelSong),1,fil);
+    decltype(SongTrack) SavedSongTrack;
+    MREAD(&SavedSongTrack,sizeof(SongTrack),1,fil);
 
     MREAD(palette,sizeof(palette),1,fil);
     MREAD(palette_data,sizeof(palette_data),1,fil);
@@ -1276,7 +1261,7 @@ int LoadGame(short save_num)
     screenpeek = myconnectindex;
     PlayingLevel = Level;
 
-    PlaySong(LevelSong, RedBookSong[Level], TRUE, TRUE);
+    PlaySong(LevelSong, SavedSongTrack, TRUE, FALSE);
     if (gs.Ambient)
         StartAmbientSound();
     FX_SetVolume(gs.SoundVolume);
@@ -1311,12 +1296,10 @@ ScreenSave(MFILE_WRITE fout)
 void
 ScreenLoad(MFILE_READ fin)
 {
-    int num;
+    renderSetTarget(SAVE_SCREEN_TILE, SAVE_SCREEN_YSIZE, SAVE_SCREEN_XSIZE);
 
-    setviewtotile(SAVE_SCREEN_TILE, SAVE_SCREEN_YSIZE, SAVE_SCREEN_XSIZE);
+    MREAD((void *)waloff[SAVE_SCREEN_TILE], SAVE_SCREEN_XSIZE * SAVE_SCREEN_YSIZE, 1, fin);
 
-    num = MREAD((void *)waloff[SAVE_SCREEN_TILE], SAVE_SCREEN_XSIZE * SAVE_SCREEN_YSIZE, 1, fin);
-
-    setviewback();
+    renderRestoreTarget();
 }
 

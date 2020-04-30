@@ -21,8 +21,9 @@
  */
 //-------------------------------------------------------------------------
 
+#import <Foundation/Foundation.h>
 
-#import <Cocoa/Cocoa.h>
+#include "compat.h"
 
 #import "GrpFile.game.h"
 #import "GameListSource.game.h"
@@ -32,15 +33,10 @@
 {
     self = [super init];
     if (self) {
-        struct grpfile *p;
-        int i;
-
         list = [[NSMutableArray alloc] init];
 
-        for (p = foundgrps; p; p=p->next) {
-            for (i=0; i<numgrpfiles; i++) if (p->crcval == grpfiles[i].crcval) break;
-            if (i == numgrpfiles) continue;
-            [list addObject:[[GrpFile alloc] initWithGrpfile:p andName:[NSString stringWithUTF8String:grpfiles[i].name]]];
+        for (grpfile_t const * p = foundgrps; p; p=p->next) {
+            [list addObject:[[GrpFile alloc] initWithGrpfile:p]];
         }
     }
 
@@ -60,8 +56,8 @@
 
 - (int)findIndexForGrpname:(NSString*)grpname
 {
-    unsigned i;
-    for (i=0; i<[list count]; i++) {
+    NSUInteger i, listcount = [list count];
+    for (i=0; i<listcount; i++) {
         if ([[[list objectAtIndex:i] grpname] isEqual:grpname]) return i;
     }
     return -1;
@@ -71,7 +67,9 @@
         objectValueForTableColumn:(NSTableColumn *)aTableColumn
             row:(NSInteger)rowIndex
 {
-    NSParameterAssert(rowIndex >= 0 && rowIndex < [list count]);
+    UNREFERENCED_PARAMETER(aTableView);
+
+    NSParameterAssert((NSUInteger)rowIndex < [list count]);
     switch ([[aTableColumn identifier] intValue]) {
         case 0:	// name column
             return [[list objectAtIndex:rowIndex] name];
@@ -83,6 +81,8 @@
 
 - (int)numberOfRowsInTableView:(NSTableView *)aTableView
 {
+    UNREFERENCED_PARAMETER(aTableView);
+
     return [list count];
 }
 @end

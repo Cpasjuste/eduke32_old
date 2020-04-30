@@ -7,10 +7,11 @@
 #ifndef EDUKE32_COMMON_H_
 #define EDUKE32_COMMON_H_
 
-#include "compat.h"
-#include "scriptfile.h"
 #include "cache1d.h"
+#include "compat.h"
 #include "pragmas.h"  // klabs
+#include "scriptfile.h"
+#include "vfs.h"
 
 
 #ifdef __cplusplus
@@ -33,7 +34,7 @@ tokenlist;
 
 typedef struct
 {
-    CACHE1D_FIND_REC *finddirs, *findfiles;
+    BUILDVFS_FIND_REC *finddirs, *findfiles;
     int32_t numdirs, numfiles;
 }
 fnlist_t;
@@ -48,7 +49,6 @@ enum
 
 
 //// EXTERN DECLS
-extern struct strllist *CommandPaths, *CommandGrps;
 
 #ifdef __cplusplus
 extern "C" {
@@ -97,7 +97,7 @@ void fnlist_clearnames(fnlist_t *fnl);
 int32_t fnlist_getnames(fnlist_t *fnl, const char *dirname, const char *pattern,
                         int32_t dirflags, int32_t fileflags);
 
-char *dup_filename(const char *fn);
+
 int32_t maybe_append_ext(char *wbuf, int32_t wbufsiz, const char *fn, const char *ext);
 
 // Approximations to 2D and 3D Euclidean distances. Initial EDuke32 SVN import says
@@ -107,6 +107,9 @@ int32_t maybe_append_ext(char *wbuf, int32_t wbufsiz, const char *fn, const char
 static inline int32_t sepldist(const int32_t dx, const int32_t dy)
 {
     vec2_t d = { klabs(dx), klabs(dy) };
+
+    if (!d.y) return d.x;
+    if (!d.x) return d.y;
 
     if (d.x < d.y)
         swaplong(&d.x, &d.y);
@@ -144,7 +147,14 @@ void COMMON_clearbackground(int32_t numcols, int32_t numrows);
 #define EDUKE32_TMRTIC t[ti++]=timerGetTicks()
 #define EDUKE32_TMRPRN do { int ii=0; fprintf(stderr,"%s: ",tmrstr); for (ii=1; ii<ti; ii++) fprintf(stderr,"%d ", t[ii]-t[ii-1]); fprintf(stderr,"\n"); } while (0)
 
-void Duke_CommonCleanup(void);
+#if defined _WIN32 && !defined EDUKE32_STANDALONE
+int Paths_ReadRegistryValue(char const * const SubKey, char const * const Value, char * const Output, DWORD * OutputSize);
+#endif
+
+using PathsParseFunc = void(*)(const char *);
+void Paths_ParseSteamLibraryVDF(const char * fn, PathsParseFunc func);
+void Paths_ParseXDGDesktopFile(const char * fn, PathsParseFunc func);
+void Paths_ParseXDGDesktopFilesFromGOG(const char * homepath, const char * game, PathsParseFunc func);
 
 #ifdef __cplusplus
 }

@@ -2,6 +2,18 @@
 # EDuke32 Makefile for GNU Make
 #
 
+### Global Profiles
+ifeq ($(FURY),1)
+    APPBASENAME := fury
+    APPNAME := Ion Fury
+    NETCODE := 0
+    POLYMER := 0
+    RETAIL_MENU := 1
+    STANDALONE := 1
+    USE_LIBVPX := 0
+endif
+
+### Platform and Toolchain Configuration
 include Common.mak
 
 ### File Extensions
@@ -37,31 +49,32 @@ endef
 libxmplite := libxmp-lite
 
 libxmplite_objs := \
+    common.c \
     control.c \
     dataio.c \
     effects.c \
     filter.c \
     format.c \
     hio.c \
+    it_load.c \
+    itsex.c \
     lfo.c \
     load.c \
     load_helpers.c \
     memio.c \
-    mixer.c \
     mix_all.c \
+    mixer.c \
+    mod_load.c \
+    mtm_load.c \
     period.c \
     player.c \
     read_event.c \
+    s3m_load.c \
+    sample.c \
     scan.c \
     smix.c \
     virtual.c \
-    common.c \
-    itsex.c \
-    it_load.c \
-    mod_load.c \
-    mtm_load.c \
-    s3m_load.c \
-    sample.c \
+    win32.c \
     xm_load.c \
 
 libxmplite_root := $(source)/$(libxmplite)
@@ -89,32 +102,41 @@ lpeg_inc := $(lpeg_root)/include
 lpeg_obj := $(obj)/$(lpeg)
 
 
-#### ENet
+#### PhysicsFS
 
-enet := enet
+physfs := physfs
 
-enet_objs := \
-    callbacks.c \
-    host.c \
-    list.c \
-    packet.c \
-    peer.c \
-    protocol.c \
-    compress.c \
+physfs_objs := \
+    physfs.c \
+    physfs_archiver_7z.c \
+    physfs_archiver_dir.c \
+    physfs_archiver_grp.c \
+    physfs_archiver_hog.c \
+    physfs_archiver_iso9660.c \
+    physfs_archiver_mvl.c \
+    physfs_archiver_qpak.c \
+    physfs_archiver_slb.c \
+    physfs_archiver_unpacked.c \
+    physfs_archiver_vdf.c \
+    physfs_archiver_wad.c \
+    physfs_archiver_zip.c \
+    physfs_byteorder.c \
+    physfs_unicode.c \
 
-enet_root := $(source)/$(enet)
-enet_src := $(enet_root)/src
-enet_inc := $(enet_root)/include
-enet_obj := $(obj)/$(enet)
-
-enet_cflags :=
-
-ifeq ($(PLATFORM),WINDOWS)
-    enet_objs += win32.c
+ifeq ($(PLATFORM),APPLE)
+    physfs_objs += physfs_platform_apple.m
+else ifeq ($(PLATFORM),WINDOWS)
+    physfs_objs += physfs_platform_windows.c
 else
-    enet_objs += unix.c
-    enet_cflags += -DHAS_SOCKLEN_T
+    physfs_objs += physfs_platform_unix.c
 endif
+
+physfs_root := $(source)/$(physfs)
+physfs_src := $(physfs_root)/src
+physfs_inc := $(physfs_root)/include
+physfs_obj := $(obj)/$(physfs)
+
+physfs_cflags :=
 
 
 #### glad
@@ -129,17 +151,43 @@ glad_src := $(glad_root)/src
 glad_inc := $(glad_root)/include
 glad_obj := $(obj)/$(glad)
 
-glad__no_cast_qual := -Wno-cast-qual
-ifeq (4,$(GCC_MAJOR))
-    ifneq (,$(filter 0 1 2 3 4,$(GCC_MINOR)))
-        glad__no_cast_qual :=
-    endif
-endif
-glad_cflags := $(glad__no_cast_qual)
+glad_cflags :=
 
 ifeq ($(RENDERTYPE),WIN)
     glad_objs += glad_wgl.c
 endif
+
+#### Voidwrap
+
+voidwrap := voidwrap
+
+voidwrap_objs := \
+    voidwrap_steam.cpp
+
+voidwrap_root := $(source)/$(voidwrap)
+voidwrap_src := $(voidwrap_root)/src
+voidwrap_inc := $(voidwrap_root)/include
+voidwrap_obj := $(obj)/$(voidwrap)
+
+ifeq ($(IMPLICIT_ARCH),x86_64)
+    ifeq ($(PLATFORM),WINDOWS)
+        voidwrap_lib := voidwrap_steam_x64.dll
+        steamworks_lib := win64/steam_api64.dll
+    else
+        voidwrap_lib := libvoidwrap_steam.so
+        steamworks_lib := linux64/libsteam_api.so
+    endif
+else
+    ifeq ($(PLATFORM),WINDOWS)
+        voidwrap_lib := voidwrap_steam_x86.dll
+        steamworks_lib := steam_api.dll
+    else
+        voidwrap_lib := libvoidwrap_steam.so
+        steamworks_lib := linux32/libsteam_api.so
+    endif
+endif
+
+voidwrap_cflags := -I$(voidwrap_root)/sdk/public/steam -fPIC -fvisibility=hidden -Wno-invalid-offsetof
 
 
 ##### Component Definitions
@@ -167,44 +215,59 @@ engine_cflags := -I$(engine_src)
 
 engine_deps :=
 
+ifneq (0,$(USE_PHYSFS))
+    engine_deps += physfs
+endif
+
 engine_objs := \
-    rev.cpp \
+    2d.cpp \
     baselayer.cpp \
     cache1d.cpp \
+    clip.cpp \
+    colmatch.cpp \
     common.cpp \
+    communityapi.cpp \
     compat.cpp \
+    cpuid.cpp \
     crc32.cpp \
     defs.cpp \
-    engine.cpp \
-    tiles.cpp \
-    clip.cpp \
-    2d.cpp \
-    hash.cpp \
-    palette.cpp \
-    polymost.cpp \
-    texcache.cpp \
     dxtfilter.cpp \
+    enet.cpp \
+    engine.cpp \
+    fix16.cpp \
+    hash.cpp \
     hightile.cpp \
-    textfont.cpp \
-    smalltextfont.cpp \
+    klzw.cpp \
     kplib.cpp \
     lz4.c \
-    osd.cpp \
-    pragmas.cpp \
-    scriptfile.cpp \
-    mmulti_null.cpp \
-    mutex.cpp \
-    xxhash.c \
     md4.cpp \
-    colmatch.cpp \
-    screenshot.cpp \
     mhk.cpp \
-    pngwrite.cpp \
     miniz.c \
-    miniz_tinfl.c \
     miniz_tdef.c \
-    fix16.c \
-    fix16_str.c \
+    miniz_tinfl.c \
+    mmulti.cpp \
+    mutex.cpp \
+    osd.cpp \
+    palette.cpp \
+    pngwrite.cpp \
+    polymost.cpp \
+    polymost1Frag.glsl \
+    polymost1Vert.glsl \
+    pragmas.cpp \
+    rev.cpp \
+    screenshot.cpp \
+    screentext.cpp \
+    scriptfile.cpp \
+    sjson.cpp \
+    smalltextfont.cpp \
+    softsurface.cpp \
+    texcache.cpp \
+    textfont.cpp \
+    tiles.cpp \
+    timer.cpp \
+    vfs.cpp \
+    xxhash.c \
+    zpl.cpp \
 
 engine_editor_objs := \
     build.cpp \
@@ -212,12 +275,14 @@ engine_editor_objs := \
     defs.cpp \
 
 engine_tools_objs := \
-    compat.cpp \
-    pragmas.cpp \
-    kplib.cpp \
-    cache1d.cpp \
-    crc32.cpp \
     colmatch.cpp \
+    compat.cpp \
+    crc32.cpp \
+    klzw.cpp \
+    kplib.cpp \
+    lz4.cpp \
+    pragmas.cpp \
+    vfs.cpp \
 
 ifeq (0,$(NOASM))
   engine_objs += a.nasm
@@ -228,7 +293,7 @@ else
   endif
 endif
 ifeq (1,$(USE_OPENGL))
-    engine_objs += voxmodel.cpp mdsprite.cpp
+    engine_objs += glsurface.cpp voxmodel.cpp mdsprite.cpp tilepacker.cpp
     engine_deps += glad
     ifeq (1,$(POLYMER))
         engine_objs += glbuild.cpp polymer.cpp
@@ -288,12 +353,11 @@ mact_inc := $(mact_root)/include
 mact_obj := $(obj)/$(mact)
 
 mact_objs := \
-    file_lib.cpp \
-    control.cpp \
-    keyboard.cpp \
-    joystick.cpp \
-    scriplib.cpp \
     animlib.cpp \
+    control.cpp \
+    joystick.cpp \
+    keyboard.cpp \
+    scriplib.cpp \
 
 
 #### AudioLib
@@ -301,18 +365,23 @@ mact_objs := \
 audiolib := audiolib
 
 audiolib_objs := \
+    driver_adlib.cpp \
+    driver_sf2.cpp \
     drivers.cpp \
+    flac.cpp \
+    formats.cpp \
     fx_man.cpp \
-    multivoc.cpp \
+    gmtimbre.cpp \
+    midi.cpp \
     mix.cpp \
     mixst.cpp \
+    multivoc.cpp \
+    music.cpp \
+    opl3.cpp \
     pitch.cpp \
-    formats.cpp \
     vorbis.cpp \
-    flac.cpp \
     xa.cpp \
     xmp.cpp \
-    driver_nosound.cpp \
 
 audiolib_root := $(source)/$(audiolib)
 audiolib_src := $(audiolib_root)/src
@@ -324,12 +393,10 @@ audiolib_cflags :=
 audiolib_deps :=
 
 ifeq ($(PLATFORM),WINDOWS)
-    ifeq ($(MIXERTYPE),WIN)
-        audiolib_objs += driver_directsound.cpp
-    endif
+    audiolib_objs += driver_directsound.cpp driver_winmm.cpp 
 endif
 
-ifeq ($(MIXERTYPE),SDL)
+ifeq ($(RENDERTYPE),SDL)
     ifeq (,$(filter $(PLATFORM),DARWIN WINDOWS WII))
         audiolib_cflags += `$(PKG_CONFIG) --cflags vorbis`
     endif
@@ -358,22 +425,22 @@ tools_cflags := $(engine_cflags)
 tools_deps := engine_tools
 
 tools_targets := \
+    arttool \
+    bsuite \
+    cacheinfo \
+    generateicon \
+    givedepth \
+    ivfrate \
     kextract \
     kgroup \
+    kmd2tool \
+    map2stl \
+    md2tool \
+    mkpalette \
     transpal \
+    unpackssi \
     wad2art \
     wad2map \
-    kmd2tool \
-    md2tool \
-    generateicon \
-    cacheinfo \
-    arttool \
-    givedepth \
-    mkpalette \
-    unpackssi \
-    bsuite \
-    ivfrate \
-    map2stl \
 
 ifeq ($(PLATFORM),WINDOWS)
     tools_targets += enumdisplay getdxdidf
@@ -397,14 +464,16 @@ kenbuild_cflags := -I$(kenbuild_src)
 kenbuild_game := ekenbuild
 kenbuild_editor := ekenbuild-editor
 
+kenbuild_game_deps := audiolib
+
 kenbuild_game_proper := EKenBuild
 kenbuild_editor_proper := EKenBuild Editor
 
 kenbuild_game_objs := \
-    game.cpp \
-    sound_stub.cpp \
     common.cpp \
     config.cpp \
+    kdmeng.cpp \
+    game.cpp \
 
 kenbuild_editor_objs := \
     bstub.cpp \
@@ -415,7 +484,7 @@ kenbuild_editor_rsrc_objs :=
 kenbuild_game_gen_objs :=
 kenbuild_editor_rsrc_objs :=
 
-ifeq (1,$(HAVE_GTK2))
+ifeq (11,$(HAVE_GTK2)$(STARTUP_WINDOW))
     kenbuild_game_objs += startgtk.game.cpp
     kenbuild_game_gen_objs += game_banner.c
     kenbuild_editor_gen_objs += build_banner.c
@@ -452,16 +521,19 @@ duke3d_src := $(duke3d_root)/src
 duke3d_rsrc := $(duke3d_root)/rsrc
 duke3d_obj := $(obj)/$(duke3d)
 
+ifeq ($(FURY),1)
+    ifeq ($(PLATFORM),WINDOWS)
+        duke3d_rsrc := $(duke3d_root)/rsrc/fury
+    endif
+    duke3d_obj := $(obj)/fury
+endif
+
 duke3d_cflags := -I$(duke3d_src)
 
 common_editor_deps := duke3d_common_editor engine_editor
 
-duke3d_game_deps := duke3d_common_midi audiolib mact
+duke3d_game_deps := audiolib mact
 duke3d_editor_deps := audiolib
-
-ifneq (0,$(NETCODE))
-    duke3d_game_deps += enet
-endif
 
 ifneq (0,$(LUNATIC))
     duke3d_game_deps += lunatic lunatic_game lpeg
@@ -485,35 +557,36 @@ duke3d_common_editor_objs := \
     m32vars.cpp \
 
 duke3d_game_objs := \
-    game.cpp \
-    global.cpp \
     actors.cpp \
-    gamedef.cpp \
-    gameexec.cpp \
-    gamevars.cpp \
-    player.cpp \
-    premap.cpp \
-    sector.cpp \
     anim.cpp \
+    cheats.cpp \
+    cmdline.cpp \
     common.cpp \
     config.cpp \
     demo.cpp \
+    game.cpp \
+    gamedef.cpp \
+    gameexec.cpp \
+    gamestructures.cpp \
+    gamevars.cpp \
+    global.cpp \
+    grpscan.cpp \
     input.cpp \
     menus.cpp \
     namesdyn.cpp \
-    net.cpp \
-    savegame.cpp \
-    rts.cpp \
-    osdfuncs.cpp \
+    network.cpp \
     osdcmds.cpp \
-    grpscan.cpp \
+    osdfuncs.cpp \
+    player.cpp \
+    premap.cpp \
+    rts.cpp \
+    savegame.cpp \
+    sbar.cpp \
+    screens.cpp \
+    sector.cpp \
     sounds.cpp \
     soundsdyn.cpp \
-    cheats.cpp \
-    sbar.cpp \
-    screentext.cpp \
-    screens.cpp \
-    cmdline.cpp \
+    text.cpp \
 
 duke3d_editor_objs := \
     astub.cpp \
@@ -631,16 +704,12 @@ ifeq ($(PLATFORM),DARWIN)
 endif
 
 ifeq ($(PLATFORM),WINDOWS)
-    LIBS += -lFLAC -lvorbisfile -lvorbis -logg
+    LIBS += -lFLAC -lvorbisfile -lvorbis -logg -ldsound
     duke3d_game_objs += winbits.cpp
     duke3d_game_rsrc_objs += gameres.rc
     duke3d_editor_rsrc_objs += buildres.rc
     ifeq ($(STARTUP_WINDOW),1)
         duke3d_game_objs += startwin.game.cpp
-    endif
-    ifeq ($(MIXERTYPE),WIN)
-        LIBS += -ldsound
-        duke3d_common_midi_objs := music.cpp midi.cpp mpu401.cpp
     endif
 endif
 
@@ -657,9 +726,6 @@ ifeq ($(RENDERTYPE),SDL)
     duke3d_game_rsrc_objs += game_icon.c
     duke3d_editor_rsrc_objs += build_icon.c
 endif
-ifeq ($(MIXERTYPE),SDL)
-    duke3d_common_midi_objs := sdlmusic.cpp
-endif
 
 
 #### Shadow Warrior
@@ -673,14 +739,14 @@ sw_obj := $(obj)/$(sw)
 
 sw_cflags := -I$(sw_src)
 
-sw_game_deps := duke3d_common_midi audiolib mact
+sw_game_deps := audiolib mact
 sw_editor_deps := audiolib
 
 sw_game := voidsw
-sw_editor := voidsw-editor
+sw_editor := wangulator
 
 sw_game_proper := VoidSW
-sw_editor_proper := VoidSW Editor
+sw_editor_proper := Wangulator
 
 sw_game_objs := \
     actor.cpp \
@@ -719,7 +785,7 @@ sw_game_objs := \
     menus.cpp \
     miscactr.cpp \
     morph.cpp \
-    net.cpp \
+    network.cpp \
     ninja.cpp \
     panel.cpp \
     player.cpp \
@@ -731,6 +797,7 @@ sw_game_objs := \
     rotator.cpp \
     rts.cpp \
     save.cpp \
+    saveable.cpp \
     scrip2.cpp \
     sector.cpp \
     serp.cpp \
@@ -753,23 +820,22 @@ sw_game_objs := \
     weapon.cpp \
     zilla.cpp \
     zombie.cpp \
-    saveable.cpp \
 
 sw_editor_objs := \
-    jnstub.cpp \
-    brooms.cpp \
     bldscript.cpp \
-    jbhlp.cpp \
+    brooms.cpp \
     colormap.cpp \
-    grpscan.cpp \
     common.cpp \
+    grpscan.cpp \
+    jbhlp.cpp \
+    jnstub.cpp \
 
 sw_game_rsrc_objs :=
 sw_editor_rsrc_objs :=
 sw_game_gen_objs :=
 sw_editor_gen_objs :=
 
-ifeq (1,$(HAVE_GTK2))
+ifeq (11,$(HAVE_GTK2)$(STARTUP_WINDOW))
     sw_game_objs += startgtk.game.cpp
     sw_game_gen_objs += game_banner.c
     sw_editor_gen_objs += build_banner.c
@@ -783,28 +849,47 @@ ifeq ($(PLATFORM),WINDOWS)
     sw_game_rsrc_objs += gameres.rc
     sw_editor_rsrc_objs += buildres.rc
 endif
+ifeq ($(PLATFORM),DARWIN)
+    ifeq ($(STARTUP_WINDOW),1)
+        sw_game_objs += GrpFile.game.mm GameListSource.game.mm StartupWinController.game.mm
+    endif
+endif
 
 
 #### Final setup
 
-COMPILERFLAGS += -I$(engine_inc) -I$(mact_inc) -I$(audiolib_inc) -I$(enet_inc) -I$(glad_inc)
+COMPILERFLAGS += \
+    -I$(engine_inc) \
+    -I$(mact_inc) \
+    -I$(audiolib_inc) \
+    -I$(glad_inc) \
+    -I$(voidwrap_inc) \
+    -MP -MMD \
+
+ifneq (0,$(USE_PHYSFS))
+    COMPILERFLAGS += -I$(physfs_inc) -DUSE_PHYSFS
+endif
 
 
 ##### Recipes
 
 games := \
-    kenbuild \
     duke3d \
+    kenbuild \
     sw \
 
 libraries := \
-    engine \
     audiolib \
-    mact \
-    enet \
+    engine \
+    glad \
     libxmplite \
     lpeg \
-    glad \
+    mact \
+    voidwrap \
+
+ifneq (0,$(USE_PHYSFS))
+    libraries += physfs
+endif
 
 components := \
     $(games) \
@@ -820,16 +905,16 @@ ifeq ($(PRETTY_OUTPUT),1)
 .SILENT:
 endif
 .PHONY: \
-    all \
-    start \
     $(addprefix clean,$(games) test utils tools) \
-    veryclean \
-    clean \
-    printutils \
-    printtools \
-    rev \
     $(engine_obj)/rev.$o \
+    all \
     clang-tools \
+    clean \
+    printtools \
+    printutils \
+    rev \
+    start \
+    veryclean \
 
 .SUFFIXES:
 .SECONDEXPANSION:
@@ -882,21 +967,15 @@ endef
 $(foreach i,$(games),$(foreach j,$(roles),$(eval $(call BUILDRULE,$i,$j))))
 
 
-include $(lpeg_root)/Dependencies.mak
-include $(engine_root)/Dependencies.mak
-include $(duke3d_root)/Dependencies.mak
-include $(sw_root)/Dependencies.mak
-
-
 #### Rules
 
 $(ebacktrace_dll): platform/Windows/src/backtrace.c
 	$(COMPILE_STATUS)
 	$(RECIPE_IF) $(CC) $(CONLYFLAGS) -O2 -ggdb -shared -Wall -Wextra -static-libgcc -I$(engine_inc) -o $@ $^ -lbfd -liberty -limagehlp $(RECIPE_RESULT_COMPILE)
 
-libcache1d$(DLLSUFFIX): $(engine_src)/cache1d.cpp
+libklzw$(DLLSUFFIX): $(engine_src)/klzw.cpp
 	$(COMPILE_STATUS)
-	$(RECIPE_IF) $(COMPILER_C) -DCACHE1D_COMPRESS_ONLY -shared -fPIC $< -o $@ $(RECIPE_RESULT_COMPILE)
+	$(RECIPE_IF) $(COMPILER_C) -shared -fPIC $< -o $@ $(RECIPE_RESULT_COMPILE)
 
 # to debug the tools link phase, make a copy of this rule explicitly replacing % with the name of a tool, such as kextract
 %$(EXESUFFIX): $(tools_obj)/%.$o $(foreach i,tools $(tools_deps),$(call expandobjs,$i))
@@ -909,6 +988,13 @@ enumdisplay$(EXESUFFIX): $(tools_obj)/enumdisplay.$o
 getdxdidf$(EXESUFFIX): $(tools_obj)/getdxdidf.$o
 	$(LINK_STATUS)
 	$(RECIPE_IF) $(LINKER) -o $@ $^ $(LIBDIRS) $(LIBS) -ldinput $(RECIPE_RESULT_LINK)
+
+
+### Voidwrap
+
+$(voidwrap_lib): $(foreach i,$(voidwrap),$(call expandobjs,$i))
+	$(LINK_STATUS)
+	$(RECIPE_IF) $(LINKER) -shared -Wl,-soname,$@ -o $@ $^ $(LIBDIRS) $(voidwrap_root)/sdk/redistributable_bin/$(steamworks_lib) $(RECIPE_RESULT_LINK)
 
 
 ### Lunatic
@@ -936,6 +1022,8 @@ $(duke3d_obj)/lunatic_%.def: $(lunatic_src)/%.lds | $(duke3d_obj)
 
 define OBJECTRULES
 
+include $(wildcard $($1_obj)/*.d)
+
 $$($1_obj)/%.$$o: $$($1_src)/%.nasm | $$($1_obj)
 	$$(COMPILE_STATUS)
 	$$(RECIPE_IF) $$(AS) $$(ASFLAGS) $$< -o $$@ $$(RECIPE_RESULT_COMPILE)
@@ -960,15 +1048,24 @@ $$($1_obj)/%.$$o: $$($1_src)/%.mm | $$($1_obj)
 	$$(COMPILE_STATUS)
 	$$(RECIPE_IF) $$(COMPILER_OBJCXX) $$($1_cflags) -c $$< -o $$@ $$(RECIPE_RESULT_COMPILE)
 
-$$($1_obj)/%.$$o: $$($1_obj)/%.c
+$$($1_obj)/%.$$o: $$($1_obj)/%.c | $$($1_obj)
 	$$(COMPILE_STATUS)
 	$$(RECIPE_IF) $$(COMPILER_C) $$($1_cflags) -c $$< -o $$@ $$(RECIPE_RESULT_COMPILE)
+
+$$($1_obj)/%.$$o: $$($1_src)/%.glsl | $$($1_obj)
+	@echo Creating $$($1_obj)/$$(<F).cpp from $$<
+	@$$(call RAW_ECHO,extern char const *$$(basename $$(<F));) > $$($1_obj)/$$(<F).cpp
+	@$$(call RAW_ECHO,char const *$$(basename $$(<F)) = R"shader$$(paren_open)) >> $$($1_obj)/$$(<F).cpp
+	@$$(call CAT,$$<) >> $$($1_obj)/$$(<F).cpp
+	@$$(call RAW_ECHO,$$(paren_close)shader";) >> $$($1_obj)/$$(<F).cpp
+	$$(COMPILE_STATUS)
+	$$(RECIPE_IF) $$(COMPILER_CXX) $$($1_cflags) -c $$($1_obj)/$$(<F).cpp -o $$@ $$(RECIPE_RESULT_COMPILE)
 
 ## Cosmetic stuff
 
 $$($1_obj)/%.$$o: $$($1_rsrc)/%.rc | $$($1_obj)
 	$$(COMPILE_STATUS)
-	$$(RECIPE_IF) $$(RC) -i $$< -o $$@ --include-dir=$$(engine_inc) --include-dir=$$($1_src) --include-dir=$$($1_rsrc) -DPOLYMER=$$(POLYMER) $$(RECIPE_RESULT_COMPILE)
+	$$(RECIPE_IF) $$(RC) -i $$< -o $$@ --include-dir=$$(engine_inc) --include-dir=$$($1_src) --include-dir=$$($1_rsrc) -DPOLYMER=$$(POLYMER) $(REVFLAG) $$(RECIPE_RESULT_COMPILE)
 
 $$($1_obj)/%.$$o: $$($1_rsrc)/%.c | $$($1_obj)
 	$$(COMPILE_STATUS)
@@ -1019,6 +1116,7 @@ cleantools:
 clean: cleanduke3d cleantools
 	-$(call RMDIR,$(obj))
 	-$(call RM,$(ebacktrace_dll))
+	-$(call RM,$(voidwrap_lib))
 
 printtools:
 	echo "$(addsuffix $(EXESUFFIX),$(tools_targets))"
@@ -1028,9 +1126,9 @@ rev: $(engine_obj)/rev.$o
 
 ### Compatibility
 
+cleantest: cleankenbuild
+cleanutils: cleantools
+printutils: printtools
 test: kenbuild
 utils: tools
-printutils: printtools
 veryclean: clean
-cleanutils: cleantools
-cleantest: cleankenbuild

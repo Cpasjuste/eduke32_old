@@ -29,6 +29,9 @@ Modifications for JonoF's port by Jonathon Fowler (jf@jonof.id.au)
 
 #ifndef mouse_h_
 #define mouse_h_
+
+#include "baselayer.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,32 +47,19 @@ extern "C" {
 #define RIGHT_MOUSE_PRESSED(button)     (((button)&RIGHT_MOUSE) != 0)
 #define MIDDLE_MOUSE_PRESSED(button)    (((button)&MIDDLE_MOUSE) != 0)
 
-#include "baselayer.h"
+extern int32_t CONTROL_MouseAxesScale[2];
+extern float   CONTROL_MouseSensitivity;
 
-static inline int32_t Mouse_Init(void)
+static inline bool MOUSE_Startup(void)
 {
     mouseInit();
     return ((inputdevices & 2) == 2);
 }
 
-
 static inline void MOUSE_Shutdown(void) { mouseUninit(); }
-
-#if 0
-static inline void MOUSE_ShowCursor(void) {}
-static inline void MOUSE_HideCursor(void) {}
-#endif
-
-static inline int32_t MOUSE_GetButtons(void)
-{
-    int32_t buttons;
-    mouseReadButtons(&buttons);
-    return buttons;
-}
-
-#define MOUSE_ClearButton(b) (g_mouseBits &= ~b)
-#define MOUSE_ClearAllButtons() g_mouseBits = 0
-#define MOUSE_GetDelta(x, y) mouseReadPos(x, y)
+static inline int32_t MOUSE_GetButtons(void) { return mouseReadButtons(); }
+static inline void MOUSE_ClearButton(int32_t b) { g_mouseBits &= ~b; }
+static inline void MOUSE_ClearAllButtons(void) { g_mouseBits = 0; }
 
 #ifdef __cplusplus
 }

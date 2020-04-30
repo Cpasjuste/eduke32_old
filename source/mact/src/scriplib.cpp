@@ -36,8 +36,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "compat.h"
 
 #include "scriplib.h"
-#include "file_lib.h"
 #include "_scrplib.h"
+
+#include "vfs.h"
 
 static script_t *scriptfiles[MAXSCRIPTFILES];
 
@@ -76,15 +77,15 @@ void SCRIPT_Delete(int32_t scripthandle)
         {
             s = SCRIPT(scripthandle,apScript)->nextsection;
             SCRIPT_FreeSection(SCRIPT(scripthandle,apScript));
-            Bfree(SCRIPT(scripthandle,apScript));
+            Xfree(SCRIPT(scripthandle,apScript));
             SCRIPT(scripthandle,apScript) = s;
         }
 
         SCRIPT_FreeSection(SCRIPT(scripthandle, apScript));
-        Bfree(SCRIPT(scripthandle,apScript));
+        Xfree(SCRIPT(scripthandle,apScript));
     }
 
-    Bfree(SC(scripthandle));
+    Xfree(SC(scripthandle));
     SC(scripthandle) = 0;
 }
 
@@ -99,16 +100,16 @@ void SCRIPT_FreeSection(ScriptSectionType * section)
     {
         e = section->entries->nextentry;
 
-        Bfree(section->entries->name);
-        Bfree(section->entries->value);
-        Bfree(section->entries);
+        Xfree(section->entries->name);
+        Xfree(section->entries->value);
+        Xfree(section->entries);
         section->entries = e;
     }
 
-    Bfree(section->entries->name);
-    Bfree(section->entries->value);
-    Bfree(section->entries);
-    Bfree(section->name);
+    Xfree(section->entries->name);
+    Xfree(section->entries->value);
+    Xfree(section->entries);
+    Xfree(section->name);
 }
 
 #define AllocSection(s) \
@@ -156,7 +157,7 @@ ScriptSectionType * SCRIPT_AddSection(int32_t scripthandle, const char * section
     if (s) return s;
 
     AllocSection(s);
-    s->name = Bstrdup(sectionname);
+    s->name = Xstrdup(sectionname);
     if (!SCRIPT(scripthandle,apScript))
     {
         SCRIPT(scripthandle,apScript) = s;
@@ -205,7 +206,7 @@ void SCRIPT_AddEntry(int32_t scripthandle, const char * sectionname, const char 
     if (!e)
     {
         AllocEntry(e);
-        e->name = Bstrdup(entryname);
+        e->name = Xstrdup(entryname);
         if (!s->entries)
         {
             s->entries = e;
@@ -219,18 +220,23 @@ void SCRIPT_AddEntry(int32_t scripthandle, const char * sectionname, const char 
         }
     }
 
-    Bfree(e->value);
-    e->value = Bstrdup(entryvalue);
+    Xfree(e->value);
+    e->value = Xstrdup(entryvalue);
 }
 
 
 int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
 {
-    char *fence = data + length;
-    char *dp, *sp, ch=0, lastch=0;
+    if (!data || length < 0) return 1;
+
     char const *currentsection = "";
-    char *currententry = NULL;
-    char *currentvalue = NULL;
+    char const *currententry   = NULL;
+    char const *currentvalue   = NULL;
+
+    char *fence  = data + length;
+    char  ch     = 0;
+    char  lastch = 0;
+
     enum
     {
         ParsingIdle,
@@ -240,6 +246,7 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
         ParsingValueBegin,
         ParsingValue
     };
+
     enum
     {
         ExpectingSection = 1,
@@ -248,18 +255,17 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
         ExpectingValue = 8,
         ExpectingComment = 16
     };
-    int32_t state;
-    int32_t expect;
-    int32_t linenum=1;
-    int32_t rv = 0;
-#define SETRV(v) if (v>rv||rv==0) rv=v
 
-    if (!data) return 1;
-    if (length < 0) return 1;
 
-    dp = sp = data;
-    state = ParsingIdle;
-    expect = ExpectingSection | ExpectingEntry;
+#define SETERR(v) do { if (v>errlevel||errlevel==0) errlevel=v; } while (0)
+
+    char *sp = data;
+    char *dp = data;
+
+    int state    = ParsingIdle;
+    int expect   = ExpectingSection | ExpectingEntry;
+    int linenum  = 1;
+    int errlevel = 0;
 
 #define EATLINE(p) while (length > 0 && *p != '\n' && *p != '\r') { p++; length--; }
 #define LETTER() { lastch = ch; ch = *(sp++); length--; }
@@ -287,7 +293,7 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
                 {
                     // Unexpected section start
                     printf("Unexpected start of section on line %d.\n", linenum);
-                    SETRV(-1);
+                    SETERR(-1);
                     EATLINE(sp);
                     continue;
                 }
@@ -303,7 +309,7 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
                     {
                         // Unexpected name start
                         printf("Unexpected entry LabelText on line %d.\n", linenum);
-                        SETRV(-1);
+                        SETERR(-1);
                         EATLINE(sp);
                         continue;
                     }
@@ -318,7 +324,7 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
                 {
                     // Unexpected character
                     printf("Illegal character (ASCII %d) on line %d.\n", ch, linenum);
-                    SETRV(-1);
+                    SETERR(-1);
                     EATLINE(sp);
                     continue;
                 }
@@ -335,7 +341,7 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
             case '\n':
             case '\r':	// Unexpected newline
                 printf("Unexpected newline on line %d.\n", linenum);
-                SETRV(-1);
+                SETERR(-1);
                 state = ParsingIdle;
                 linenum++;
                 continue;
@@ -361,13 +367,13 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
                 // unexpected comment
                 EATLINE(sp);
                 printf("Unexpected comment on line %d.\n", linenum);
-                SETRV(-1);
+                SETERR(-1);
                 fallthrough__;
             case '\n':
             case '\r':
                 // Unexpected newline
                 printf("Unexpected newline on line %d.\n", linenum);
-                SETRV(-1);
+                SETERR(-1);
                 expect = ExpectingSection | ExpectingEntry;
                 state = ParsingIdle;
                 linenum++;
@@ -418,7 +424,7 @@ int32_t SCRIPT_ParseBuffer(int32_t scripthandle, char *data, int32_t length)
 
     if (sp > fence) printf("Stepped outside the fence!\n");
 
-    return rv;
+    return errlevel;
 }
 
 
@@ -440,26 +446,27 @@ void SCRIPT_Free(int32_t scripthandle)
 
 int32_t SCRIPT_Load(char const * filename)
 {
-    int32_t s,h,l;
+    int32_t s,l;
     char *b;
+    buildvfs_fd h;
 
-    h = SafeOpenRead(filename, filetype_binary);
-    l = SafeFileLength(h)+1;
+    h = buildvfs_open_read(filename);
+    l = (int32_t)buildvfs_length(h)+1;
     b = (char *)Xmalloc(l);
-    SafeRead(h,b,l-1);
+    buildvfs_read(h,b,l-1);
     b[l-1] = '\n';	// JBF 20040111: evil nasty hack to trick my evil nasty parser
-    SafeClose(h);
+    buildvfs_close(h);
 
     s = SCRIPT_Init(filename);
     if (s<0)
     {
-        Bfree(b);
+        Xfree(b);
         return -1;
     }
 
     SCRIPT_ParseBuffer(s,b,l);
 
-    Bfree(b);
+    Xfree(b);
 
     return s;
 }
@@ -468,22 +475,27 @@ void SCRIPT_Save(int32_t scripthandle, char const * filename)
 {
     char const *section, *entry, *value;
     int32_t sec, ent, numsect, nument;
-    FILE *fp;
+    buildvfs_FILE fp;
 
 
     if (!filename) return;
     if (!SC(scripthandle)) return;
 
-    fp = fopen(filename, "w");
+    fp = buildvfs_fopen_write_text(filename);
     if (!fp) return;
 
     numsect = SCRIPT_NumberSections(scripthandle);
     for (sec=0; sec<numsect; sec++)
     {
         section = SCRIPT_Section(scripthandle, sec);
-        if (sec>0) fprintf(fp, "\n");
+        if (sec>0)
+            buildvfs_fputc('\n', fp);
         if (section[0] != 0)
-            fprintf(fp, "[%s]\n", section);
+        {
+            buildvfs_fputc('[', fp);
+            buildvfs_fputstrptr(fp, section);
+            buildvfs_fputstr(fp, "]\n");
+        }
 
         nument = SCRIPT_NumberEntries(scripthandle,section);
         for (ent=0; ent<nument; ent++)
@@ -491,11 +503,14 @@ void SCRIPT_Save(int32_t scripthandle, char const * filename)
             entry = SCRIPT_Entry(scripthandle,section,ent);
             value = SCRIPT_GetRaw(scripthandle,section,entry);
 
-            fprintf(fp, "%s = %s\n", entry, value);
+            buildvfs_fputstrptr(fp, entry);
+            buildvfs_fputstr(fp, " = ");
+            buildvfs_fputstrptr(fp, value);
+            buildvfs_fputc('\n', fp);
         }
     }
 
-    fclose(fp);
+    buildvfs_fclose(fp);
 }
 
 int32_t SCRIPT_NumberSections(int32_t scripthandle)
@@ -634,7 +649,7 @@ static char * SCRIPT_ParseString(char ** dest, char * p)
                 break;
             }
         }
-        if (ch == 0) return p;
+        return p;
     }
     else
     {
@@ -796,7 +811,7 @@ void SCRIPT_PutString(int32_t scripthandle, char const *sectionname, char const 
     *p=0;
 
     SCRIPT_AddEntry(scripthandle, sectionname, entryname, raw);
-    Bfree(raw);
+    Xfree(raw);
 }
 
 void SCRIPT_PutDoubleString
@@ -849,7 +864,7 @@ void SCRIPT_PutDoubleString
     *p=0;
 
     SCRIPT_AddEntry(scripthandle, sectionname, entryname, raw);
-    Bfree(raw);
+    Xfree(raw);
 }
 
 void SCRIPT_PutNumber

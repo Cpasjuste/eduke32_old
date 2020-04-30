@@ -23,6 +23,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #ifndef osdcmds_h_
 #define osdcmds_h_
 
+#include <inttypes.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -39,13 +41,6 @@ void onvideomodechange(int32_t newmode);
 
 extern float r_ambientlight,r_ambientlightrecip;
 
-// key bindings stuff
-typedef struct {
-    const char *name;
-    int32_t id;
-} keydef_t;
-
-extern const keydef_t ConsoleKeys[];
 extern const char *const ConsoleButtons[];
 
 extern uint32_t cl_cheatmask;

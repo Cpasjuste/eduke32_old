@@ -9,6 +9,8 @@
 #include "baselayer.h"
 #include "renderlayer.h"
 
+#include "vfs.h"
+
 static double clampd(double d, double mind, double maxd)
 {
     if (d != d || d<mind)
@@ -18,18 +20,18 @@ static double clampd(double d, double mind, double maxd)
     return d;
 }
 
-static int32_t readconfig(BFILE *fp, const char *key, char *value, uint32_t len)
+static int32_t readconfig(buildvfs_FILE fp, const char *key, char *value, uint32_t len)
 {
     char buf[1000], *k, *v, *eq;
     int32_t x=0;
 
     if (len < 1) return 0;
 
-    Brewind(fp);
+    buildvfs_rewind(fp);
 
     while (1)
     {
-        if (!Bfgets(buf, 1000, fp)) return 0;
+        if (!buildvfs_fgets(buf, 1000, fp)) return 0;
 
         if (buf[0] == ';') continue;
 
@@ -58,11 +60,6 @@ static int32_t readconfig(BFILE *fp, const char *key, char *value, uint32_t len)
 }
 
 extern int16_t brightness;
-#ifdef USE_OPENGL
-extern int32_t vsync;
-#endif
-extern char game_executable[BMAX_PATH];
-extern int32_t fullscreen;
 extern char default_buildkeys[NUMBUILDKEYS];
 static char *const keys = default_buildkeys;
 static int32_t default_grid=9;
@@ -109,12 +106,12 @@ extern int32_t ParentalLock;
 
 int32_t loadsetup(const char *fn)
 {
-    BFILE *fp;
+    buildvfs_FILE fp;
 #define VL 1024
     char val[VL];
     int32_t i;
 
-    if ((fp = Bfopen(fn, "rt")) == NULL) return -1;
+    if ((fp = buildvfs_fopen_read(fn)) == NULL) return -1;
 
     if (readconfig(fp, "forcesetup", val, VL) > 0) forcesetup = (atoi_safe(val) != 0);
     if (readconfig(fp, "fullscreen", val, VL) > 0) fullscreen = (atoi_safe(val) != 0);
@@ -244,6 +241,9 @@ int32_t loadsetup(const char *fn)
     if (readconfig(fp, "2d3d_y", val, VL) > 0)
         m32_2d3d.y = clamp(atoi_safe(val), 0, 0xffff);
 
+    if (readconfig(fp, "3dundo", val, VL) > 0)
+        m32_3dundo = !!atoi_safe(val);
+
     if (readconfig(fp, "autogray", val, VL) > 0)
         autogray = !!atoi_safe(val);
 //    if (readconfig(fp, "showinnergray", val, VL) > 0)
@@ -260,7 +260,9 @@ int32_t loadsetup(const char *fn)
 
     if (readconfig(fp, "remap", val, VL) > 0)
     {
-        char *p=val; int32_t v1,v2;
+        char *p=val;
+        uint32_t v1,v2;
+
         while (*p)
         {
             if (!sscanf(p,"%x",&v1))break;
@@ -298,14 +300,14 @@ int32_t loadsetup(const char *fn)
 
     scripthistend %= SCRIPTHISTSIZ;
 
-    Bfclose(fp);
+    buildvfs_fclose(fp);
 
     return 0;
 }
 
 void writesettings(void) // save binds and aliases to <cfgname>_m32_settings.cfg
 {
-    BFILE *fp;
+    buildvfs_FILE fp;
     char *ptr = Xstrdup(setupfilename);
     char tempbuf[128];
 
@@ -313,7 +315,7 @@ void writesettings(void) // save binds and aliases to <cfgname>_m32_settings.cfg
         Bsprintf(tempbuf, "m32_settings.cfg");
     else Bsprintf(tempbuf, "%s_m32_settings.cfg", strtok(ptr, "."));
 
-    fp = Bfopen(tempbuf, "wt");
+    fp = buildvfs_fopen_write(tempbuf);
 
     if (fp)
     {
@@ -322,13 +324,13 @@ void writesettings(void) // save binds and aliases to <cfgname>_m32_settings.cfg
         OSD_WriteAliases(fp);
         OSD_WriteCvars(fp);
 
-        Bfclose(fp);
+        buildvfs_fclose(fp);
 
         if (!Bstrcmp(setupfilename, defaultsetupfilename))
             OSD_Printf("Wrote m32_settings.cfg\n");
         else OSD_Printf("Wrote %s_m32_settings.cfg\n",ptr);
 
-        Bfree(ptr);
+        Xfree(ptr);
         return;
     }
 
@@ -336,15 +338,15 @@ void writesettings(void) // save binds and aliases to <cfgname>_m32_settings.cfg
         OSD_Printf("Error writing m32_settings.cfg: %s\n", strerror(errno));
     else OSD_Printf("Error writing %s_m32_settings.cfg: %s\n",ptr,strerror(errno));
 
-    Bfree(ptr);
+    Xfree(ptr);
 }
 
 int32_t writesetup(const char *fn)
 {
-    BFILE *fp;
+    buildvfs_FILE fp;
     int32_t i,j,first=1;
 
-    fp = Bfopen(fn,"wt");
+    fp = buildvfs_fopen_write(fn);
     if (!fp) return -1;
 
     Bfprintf(fp,
@@ -522,6 +524,9 @@ int32_t writesetup(const char *fn)
              "2d3d_x = %d\n"
              "2d3d_y = %d\n"
              "\n"
+             "; Enable undo in 3d mode\n"
+             "3dundo = %d\n"
+             "\n"
              "; Point and line highlight/selection distances\n"
              "pointhighlightdist = %d\n"
              "linehighlightdist = %d\n"
@@ -641,6 +646,7 @@ int32_t writesetup(const char *fn)
              corruptcheck_heinum, fixmaponsave_sprites, keeptexturestretch,
              showheightindicators,showambiencesounds,pathsearchmode,
              m32_2d3dmode,m32_2d3dsize,m32_2d3d.x, m32_2d3d.y,
+             m32_3dundo,
              pointhighlightdist, linehighlightdist,
              autogray, //showinnergray,
              graphicsmode,
@@ -685,7 +691,7 @@ int32_t writesetup(const char *fn)
             Bfprintf(fp, "hist%d = %s\n", j++, scripthist[i]);
     }
 
-    Bfclose(fp);
+    buildvfs_fclose(fp);
 
     writesettings();
 

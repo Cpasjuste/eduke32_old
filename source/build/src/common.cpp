@@ -8,6 +8,8 @@
 
 #include "common.h"
 
+#include "vfs.h"
+
 void PrintBuildInfo(void)
 {
     buildprint(
@@ -64,7 +66,7 @@ char *g_defNamePtr = NULL;
 
 void clearDefNamePtr(void)
 {
-    Bfree(g_defNamePtr);
+    Xfree(g_defNamePtr);
     // g_defNamePtr assumed to be assigned to right after
 }
 
@@ -129,15 +131,18 @@ int32_t G_CheckCmdSwitch(int32_t argc, char const * const * argv, const char *st
 // returns: 1 if file could be opened, 0 else
 int32_t testkopen(const char *filename, char searchfirst)
 {
-    int32_t fd = kopen4load(filename, searchfirst);
-    if (fd >= 0)
+    buildvfs_kfd fd = kopen4load(filename, searchfirst);
+    if (fd != buildvfs_kfd_invalid)
         kclose(fd);
-    return (fd >= 0);
+    return (fd != buildvfs_kfd_invalid);
 }
 
 // checks from path and in ZIPs, returns 1 if NOT found
 int32_t check_file_exist(const char *fn)
 {
+#ifdef USE_PHYSFS
+    return !PHYSFS_exists(fn);
+#else
     int32_t opsm = pathsearchmode;
     char *tfn;
 
@@ -155,10 +160,11 @@ int32_t check_file_exist(const char *fn)
             return 1;
         }
     }
-    else Bfree(tfn);
+    else Xfree(tfn);
     pathsearchmode = opsm;
 
     return 0;
+#endif
 }
 
 
@@ -178,14 +184,14 @@ void fnlist_clearnames(fnlist_t *fnl)
 int32_t fnlist_getnames(fnlist_t *fnl, const char *dirname, const char *pattern,
                         int32_t dirflags, int32_t fileflags)
 {
-    CACHE1D_FIND_REC *r;
+    BUILDVFS_FIND_REC *r;
 
     fnlist_clearnames(fnl);
 
     if (dirflags != -1)
-        fnl->finddirs = klistpath(dirname, "*", CACHE1D_FIND_DIR|dirflags);
+        fnl->finddirs = klistpath(dirname, "*", BUILDVFS_FIND_DIR|dirflags);
     if (fileflags != -1)
-        fnl->findfiles = klistpath(dirname, pattern, CACHE1D_FIND_FILE|fileflags);
+        fnl->findfiles = klistpath(dirname, pattern, BUILDVFS_FIND_FILE|fileflags);
 
     for (r=fnl->finddirs; r; r=r->next)
         fnl->numdirs++;
@@ -215,15 +221,16 @@ int32_t maybe_append_ext(char *wbuf, int32_t wbufsiz, const char *fn, const char
 
 int32_t ldist(const void *s1, const void *s2)
 {
-    vec2_t const *const sp1 = (vec2_t const *)s1;
-    vec2_t const *const sp2 = (vec2_t const *)s2;
-    return sepldist(sp1->x - sp2->x, sp1->y - sp2->y);
+    auto sp1 = (vec2_t const *)s1;
+    auto sp2 = (vec2_t const *)s2;
+    return sepldist(sp1->x - sp2->x, sp1->y - sp2->y)
+        + (enginecompatibilitymode != ENGINE_EDUKE32);
 }
 
 int32_t dist(const void *s1, const void *s2)
 {
-    vec3_t const *const sp1 = (vec3_t const *)s1;
-    vec3_t const *const sp2 = (vec3_t const *)s2;
+    auto sp1 = (vec3_t const *)s1;
+    auto sp2 = (vec3_t const *)s2;
     return sepdist(sp1->x - sp2->x, sp1->y - sp2->y, sp1->z - sp2->z);
 }
 
@@ -239,7 +246,7 @@ int32_t FindDistance3D(int32_t x, int32_t y, int32_t z)
 
 
 // Clear OSD background
-void COMMON_clearbackground(int32_t numcols, int32_t numrows)
+void COMMON_clearbackground(int numcols, int numrows)
 {
     UNREFERENCED_PARAMETER(numcols);
 
@@ -265,5 +272,261 @@ void COMMON_clearbackground(int32_t numcols, int32_t numrows)
     }
 # endif
 
-    CLEARLINES2D(0, min(ydim, numrows*8+8), editorcolors[16]);
+    CLEARLINES2D(0, min(ydim, numrows*8+8), blackcol*0x01010101);
+}
+
+#if defined _WIN32 && !defined EDUKE32_STANDALONE
+# define NEED_SHLWAPI_H
+# include "windows_inc.h"
+# ifndef KEY_WOW64_64KEY
+#  define KEY_WOW64_64KEY 0x0100
+# endif
+# ifndef KEY_WOW64_32KEY
+#  define KEY_WOW64_32KEY 0x0200
+# endif
+
+int Paths_ReadRegistryValue(char const * const SubKey, char const * const Value, char * const Output, DWORD * OutputSize)
+{
+    // KEY_WOW64_32KEY gets us around Wow6432Node on 64-bit builds
+    REGSAM const wow64keys[] = { KEY_WOW64_32KEY, KEY_WOW64_64KEY };
+
+    for (auto &wow64key : wow64keys)
+    {
+        HKEY hkey;
+        LONG keygood = RegOpenKeyEx(HKEY_LOCAL_MACHINE, NULL, 0, KEY_READ | wow64key, &hkey);
+
+        if (keygood != ERROR_SUCCESS)
+            continue;
+
+        LONG retval = SHGetValueA(hkey, SubKey, Value, NULL, Output, OutputSize);
+
+        RegCloseKey(hkey);
+
+        if (retval == ERROR_SUCCESS)
+            return 1;
+    }
+
+    return 0;
+}
+#endif
+
+// A bare-bones "parser" for Valve's KeyValues VDF format.
+// There is no guarantee this will function properly with ill-formed files.
+static void KeyValues_SkipWhitespace(char *& buf, char * const bufend)
+{
+    while (buf < bufend && (buf[0] == ' ' || buf[0] == '\n' || buf[0] == '\r' || buf[0] == '\t' || buf[0] == '\0'))
+        ++buf;
+
+    // comments
+    if (buf + 2 < bufend && buf[0] == '/' && buf[1] == '/')
+    {
+        while (buf < bufend && buf[0] != '\n' && buf[0] != '\r')
+            ++buf;
+
+        KeyValues_SkipWhitespace(buf, bufend);
+    }
+}
+static void KeyValues_SkipToEndOfQuotedToken(char *& buf, char * const bufend)
+{
+    ++buf;
+    while (buf < bufend && buf[0] != '\"' && buf[-1] != '\\')
+        ++buf;
+}
+static void KeyValues_SkipToEndOfUnquotedToken(char *& buf, char * const bufend)
+{
+    while (buf < bufend && buf[0] != ' ' && buf[0] != '\n' && buf[0] != '\r' && buf[0] != '\t' && buf[0] != '\0')
+        ++buf;
+}
+static void KeyValues_SkipNextWhatever(char *& buf, char * const bufend)
+{
+    KeyValues_SkipWhitespace(buf, bufend);
+
+    if (buf == bufend)
+        return;
+
+    if (buf[0] == '{')
+    {
+        ++buf;
+        do
+            KeyValues_SkipNextWhatever(buf, bufend);
+        while (buf[0] != '}');
+        ++buf;
+    }
+    else if (buf[0] == '\"')
+        KeyValues_SkipToEndOfQuotedToken(buf, bufend);
+    else if (buf[0] != '}')
+        KeyValues_SkipToEndOfUnquotedToken(buf, bufend);
+
+    KeyValues_SkipWhitespace(buf, bufend);
+}
+static char* KeyValues_NormalizeToken(char *& buf, char * const bufend)
+{
+    char * token = buf;
+
+    if (buf < bufend && buf[0] == '\"')
+    {
+        ++token;
+
+        KeyValues_SkipToEndOfQuotedToken(buf, bufend);
+        buf[0] = '\0';
+
+        // account for escape sequences
+        const char * readseeker = token;
+        char * writeseeker = token;
+        while (readseeker <= buf)
+        {
+            if (readseeker[0] == '\\')
+                ++readseeker;
+
+            writeseeker[0] = readseeker[0];
+
+            ++writeseeker;
+            ++readseeker;
+        }
+
+        return token;
+    }
+
+    KeyValues_SkipToEndOfUnquotedToken(buf, bufend);
+    buf[0] = '\0';
+
+    return token;
+}
+static void KeyValues_FindKey(char *& buf, char * const bufend, const char * token)
+{
+    char *ParentKey = KeyValues_NormalizeToken(buf, bufend);
+    if (token != NULL) // pass in NULL to find the next key instead of a specific one
+        while (buf < bufend && Bstrcmp(ParentKey, token) != 0)
+        {
+            KeyValues_SkipNextWhatever(buf, bufend);
+            ParentKey = KeyValues_NormalizeToken(buf, bufend);
+        }
+
+    KeyValues_SkipWhitespace(buf, bufend);
+}
+static int32_t KeyValues_FindParentKey(char *& buf, char * const bufend, const char * token)
+{
+    KeyValues_SkipWhitespace(buf, bufend);
+
+    // end of scope
+    if (buf[0] == '}')
+        return 0;
+
+    KeyValues_FindKey(buf, bufend, token);
+
+    // ignore the wrong type
+    while (buf < bufend && buf[0] != '{')
+    {
+        KeyValues_SkipNextWhatever(buf, bufend);
+        KeyValues_FindKey(buf, bufend, token);
+    }
+
+    if (buf == bufend)
+        return 0;
+
+    return 1;
+}
+static char* KeyValues_FindKeyValue(char *& buf, char * const bufend, const char * token)
+{
+    KeyValues_SkipWhitespace(buf, bufend);
+
+    // end of scope
+    if (buf[0] == '}')
+        return NULL;
+
+    KeyValues_FindKey(buf, bufend, token);
+
+    // ignore the wrong type
+    while (buf < bufend && buf[0] == '{')
+    {
+        KeyValues_SkipNextWhatever(buf, bufend);
+        KeyValues_FindKey(buf, bufend, token);
+    }
+
+    KeyValues_SkipWhitespace(buf, bufend);
+
+    if (buf == bufend)
+        return NULL;
+
+    return KeyValues_NormalizeToken(buf, bufend);
+}
+
+void Paths_ParseSteamLibraryVDF(const char * fn, PathsParseFunc func)
+{
+    buildvfs_fd const fd = buildvfs_open_read(fn);
+    if (fd == buildvfs_fd_invalid)
+        return;
+
+    int32_t size = buildvfs_length(fd);
+    if (size <= 0)
+        return;
+
+    auto const bufstart = (char *)Xmalloc(size+1);
+    char * buf = bufstart;
+    size = (int32_t)buildvfs_read(fd, buf, size);
+    buildvfs_close(fd);
+    char * const bufend = buf + size;
+    bufend[0] = '\0';
+
+    if (KeyValues_FindParentKey(buf, bufend, "LibraryFolders"))
+    {
+        char *result;
+        ++buf;
+        while ((result = KeyValues_FindKeyValue(buf, bufend, NULL)) != NULL)
+            func(result);
+    }
+
+    Xfree(bufstart);
+}
+
+void Paths_ParseXDGDesktopFile(const char * fn, PathsParseFunc func)
+{
+    buildvfs_fd const fd = buildvfs_open_read(fn);
+    if (fd == buildvfs_fd_invalid)
+        return;
+
+    int32_t size = buildvfs_length(fd);
+    if (size <= 0)
+        return;
+
+    auto const bufstart = (char *)Xmalloc(size+1);
+    char * buf = bufstart;
+    size = (int32_t)buildvfs_read(fd, buf, size);
+    buildvfs_close(fd);
+    char * const bufend = buf + size;
+    bufend[0] = '\0';
+
+    static char const s_PathEquals[] = "Path=";
+
+    while (buf < bufend)
+    {
+        if (Bstrncmp(buf, s_PathEquals, ARRAY_SIZE(s_PathEquals)-1) == 0)
+        {
+            const char * path = buf += ARRAY_SIZE(s_PathEquals)-1;
+
+            while (buf < bufend && *buf != '\n')
+                ++buf;
+            *buf = '\0';
+
+            func(path);
+
+            break;
+        }
+
+        while (buf < bufend && *buf++ != '\n') { }
+    }
+
+    Xfree(bufstart);
+}
+
+void Paths_ParseXDGDesktopFilesFromGOG(const char * homepath, const char * game, PathsParseFunc func)
+{
+    static char const * const locations[] = { ".local/share/applications", "Desktop" };
+    char buf[BMAX_PATH];
+
+    for (char const * location : locations)
+    {
+        Bsnprintf(buf, sizeof(buf), "%s/%s/gog_com-%s_1.desktop", homepath, location, game);
+        Paths_ParseXDGDesktopFile(buf, func);
+    }
 }

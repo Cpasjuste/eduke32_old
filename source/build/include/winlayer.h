@@ -4,6 +4,7 @@
 #ifndef build_interface_layer_
 #define build_interface_layer_ WIN
 
+#include "compat.h"
 #include "windows_inc.h"
 
 extern uint32_t maxrefreshfreq;
@@ -23,9 +24,9 @@ static inline void idle_waitevent(void)
     idle_waitevent_timeout(100);
 }
 
-static inline void idle(void)
+static inline void idle(int const msec = 1)
 {
-    idle_waitevent();
+    Sleep(msec);
 }
 
 #include "baselayer.h"

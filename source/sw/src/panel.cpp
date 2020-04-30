@@ -34,7 +34,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "lists.h"
 #include "game.h"
 #include "common_game.h"
-#include "net.h"
+#include "network.h"
 #include "pal.h"
 #include "vis.h"
 #include "text.h"
@@ -98,12 +98,12 @@ int ChangeWeapon(PLAYERp);
 ANIMATOR InitFire;
 
 int
-NullAnimator(short SpriteNum)
+NullAnimator(short UNUSED(SpriteNum))
 {
     return 0;
 }
 
-void pNullAnimator(PANEL_SPRITEp psp)
+void pNullAnimator(PANEL_SPRITEp UNUSED(psp))
 {
     return;
 }
@@ -111,7 +111,6 @@ void pNullAnimator(PANEL_SPRITEp psp)
 PANEL_SPRITEp
 pFindMatchingSprite(PLAYERp pp, int x, int y, short pri)
 {
-    PANEL_SPRITEp nsp;
     PANEL_SPRITEp psp=NULL, next;
 
     TRAVERSE(&pp->PanelSpriteList, psp, next)
@@ -132,7 +131,6 @@ pFindMatchingSprite(PLAYERp pp, int x, int y, short pri)
 PANEL_SPRITEp
 pFindMatchingSpriteID(PLAYERp pp, short id, int x, int y, short pri)
 {
-    PANEL_SPRITEp nsp;
     PANEL_SPRITEp psp=NULL, next;
 
     TRAVERSE(&pp->PanelSpriteList, psp, next)
@@ -153,7 +151,6 @@ pFindMatchingSpriteID(PLAYERp pp, short id, int x, int y, short pri)
 SWBOOL
 pKillScreenSpiteIDs(PLAYERp pp, short id)
 {
-    PANEL_SPRITEp nsp=NULL;
     PANEL_SPRITEp psp=NULL, next;
     SWBOOL found = FALSE;
 
@@ -228,7 +225,7 @@ void pSetSuicide(PANEL_SPRITEp psp)
     psp->PanelSpriteFunc = pSuicide;
 }
 
-void pToggleCrosshair(PLAYERp pp)
+void pToggleCrosshair(void)
 {
     if (gs.Crosshair)
         gs.Crosshair = FALSE;
@@ -408,7 +405,7 @@ PlayerUpdateAmmo(PLAYERp pp, short UpdateWeaponNum, short value)
 {
     USERp u = User[pp->PlayerSprite];
     short x,y;
-    short WeaponNum,min_ammo;
+    short WeaponNum;
 
 #define PANEL_AMMO_BOX_X 197
 #define PANEL_AMMO_XOFF 1
@@ -486,8 +483,8 @@ PlayerUpdateWeaponSummary(PLAYERp pp, short UpdateWeaponNum)
 #define WSUM_YOFF 6
 
     static short wsum_xoff[3] = {0,36,66};
-    static char *wsum_fmt1[3] = {"%d:", "%d:", "%d:"};
-    static char *wsum_fmt2[3] = {"%3d/%-3d", "%2d/%-2d", "%2d/%-2d"};
+    static const char *wsum_fmt1[3] = {"%d:", "%d:", "%d:"};
+    static const char *wsum_fmt2[3] = {"%3d/%-3d", "%2d/%-2d", "%2d/%-2d"};
     static short wsum_back_pic[3] = {2405, 2406, 2406};
 
     if (Prediction)
@@ -571,8 +568,6 @@ PlayerUpdateWeapon(PLAYERp pp, short WeaponNum)
 void
 PlayerUpdateKills(PLAYERp pp, short value)
 {
-    USERp u = User[pp->PlayerSprite];
-
 #define PANEL_KILLS_X 31
 #define PANEL_KILLS_Y 164
 
@@ -620,7 +615,6 @@ PlayerUpdateKills(PLAYERp pp, short value)
 void
 PlayerUpdateArmor(PLAYERp pp, short value)
 {
-    USERp u = User[pp->PlayerSprite];
     short x,y;
 
 #define PANEL_ARMOR_BOX_X 56
@@ -661,7 +655,6 @@ PlayerUpdateKeys(PLAYERp pp)
 #define PANEL_KEYS_YOFF 2
 #define KEYS_ERASE 2402
 
-    USERp u = User[pp->PlayerSprite];
     short x,y;
     short row,col;
     short i, xsize, ysize;
@@ -739,8 +732,6 @@ PlayerUpdateKeys(PLAYERp pp)
 void
 PlayerUpdateTimeLimit(PLAYERp pp)
 {
-    USERp u = User[pp->PlayerSprite];
-    short x,y;
     int seconds;
 
     if (Prediction)
@@ -767,7 +758,6 @@ void
 PlayerUpdatePanelInfo(PLAYERp pp)
 {
     USERp u = User[pp->PlayerSprite];
-    int i;
 
     if (Prediction)
         return;
@@ -990,7 +980,11 @@ WeaponOperate(PLAYERp pp)
     if (pp->WpnRocketType != 2 || pp->CurWpn != pp->Wpn[WPN_MICRO])
     {
         pp->InitingNuke = FALSE;
-        FX_StopSound(pp->nukevochandle);
+        if (pp->nukevochandle > 0)
+        {
+            FX_StopSound(pp->nukevochandle);
+            pp->nukevochandle = 0;
+        }
     }
 
     return 0;
@@ -1730,8 +1724,6 @@ PANEL_STATE ps_RetractStar[] =
 void
 pStarRestTest(PANEL_SPRITEp psp)
 {
-    SWBOOL force = !!TEST(psp->flags, PANF_UNHIDE_SHOOT);
-
     if (TEST_SYNC_KEY(psp->PlayerP, SK_SHOOT))
     {
         if (FLAG_KEY_PRESSED(psp->PlayerP, SK_SHOOT))
@@ -1805,7 +1797,7 @@ InitWeaponStar(PLAYERp pp)
     PlaySound(DIGI_PULL, &pp->posx, &pp->posy, &pp->posz, v3df_follow|v3df_dontpan);
     if (STD_RANDOM_RANGE(1000) > 900 && pp == Player+myconnectindex)
     {
-        if (!useDarts)
+        if (!gs.Darts)
             PlayerSound(DIGI_ILIKESHURIKEN,&pp->posx,&pp->posy,&pp->posz,v3df_follow|v3df_dontpan,pp);
     }
 
@@ -2926,8 +2918,6 @@ void
 SpawnUziShell(PANEL_SPRITEp psp)
 {
     PLAYERp pp = psp->PlayerP;
-    PANEL_SPRITEp shell;
-    int i, rand_val;
 
     if (psp->State && TEST(psp->State->flags, psf_Xflip))
     {
@@ -2997,7 +2987,6 @@ void
 SpawnShotgunShell(PANEL_SPRITEp psp)
 {
     PLAYERp pp = psp->PlayerP;
-    PANEL_SPRITEp shell;
 
 
     SpawnShell(pp->PlayerSprite,-4);
@@ -3010,6 +2999,7 @@ SpawnShotgunShell(PANEL_SPRITEp psp)
         PANEL_STATEp state[2];
     } PANEL_SHRAP, *PANEL_SHRAPp;
 
+    PANEL_SPRITEp shell;
 
     static PANEL_SHRAP ShellShrap[] =
     {
@@ -3231,7 +3221,6 @@ pShotgunSetRecoil(PANEL_SPRITEp psp)
 void
 pShotgunRecoilDown(PANEL_SPRITEp psp)
 {
-    short picnum = psp->picndx;
     int targetvel;
 
     int x = FIXED(psp->x, psp->xfract);
@@ -3750,8 +3739,6 @@ pRailSetRecoil(PANEL_SPRITEp psp)
 void
 pRailRecoilDown(PANEL_SPRITEp psp)
 {
-    short picnum = psp->picndx;
-
     int x = FIXED(psp->x, psp->xfract);
     int y = FIXED(psp->y, psp->yfract);
 
@@ -4201,8 +4188,6 @@ InitWeaponHothead(PLAYERp pp)
 void
 pHotheadRestTest(PANEL_SPRITEp psp)
 {
-    SWBOOL force = !!TEST(psp->flags, PANF_UNHIDE_SHOOT);
-
     if (TEST_SYNC_KEY(psp->PlayerP, SK_SHOOT))
     {
         if (FLAG_KEY_PRESSED(psp->PlayerP, SK_SHOOT))
@@ -4649,8 +4634,6 @@ InitWeaponMicro(PLAYERp pp)
 void
 pMicroRecoilDown(PANEL_SPRITEp psp)
 {
-    short picnum = psp->picndx;
-
     int x = FIXED(psp->x, psp->xfract);
     int y = FIXED(psp->y, psp->yfract);
 
@@ -5647,7 +5630,7 @@ InitWeaponGrenade(PLAYERp pp)
 void
 pGrenadeRecoilDown(PANEL_SPRITEp psp)
 {
-    short picnum = psp->picndx;
+//    short picnum = psp->picndx;
 
     int x = FIXED(psp->x, psp->xfract);
     int y = FIXED(psp->y, psp->yfract);
@@ -6647,7 +6630,8 @@ pFistPresent(PANEL_SPRITEp psp)
 void
 pFistSlide(PANEL_SPRITEp psp)
 {
-    int nx, ny;
+//    int nx;
+    int ny;
     short vel_adj;
 
     //nx = FIXED(psp->x, psp->xfract);
@@ -6777,7 +6761,8 @@ pFistSlideDown(PANEL_SPRITEp psp)
 void
 pFistSlideR(PANEL_SPRITEp psp)
 {
-    int nx, ny;
+//    int nx
+    int ny;
     short vel_adj;
 
     //nx = FIXED(psp->x, psp->xfract);
@@ -7206,7 +7191,7 @@ pSpawnSprite(PLAYERp pp, PANEL_STATEp state, uint8_t priority, int x, int y)
 
     ASSERT(pp);
 
-    psp = CallocMem(sizeof(PANEL_SPRITE), 1);
+    psp = (PANEL_SPRITEp)CallocMem(sizeof(PANEL_SPRITE), 1);
 
     PRODUCTION_ASSERT(psp);
 
@@ -7278,7 +7263,7 @@ pWeaponBob(PANEL_SPRITEp psp, short condition)
 
     bobvel = FindDistance2D(pp->xvect, pp->yvect) >> 15;
     bobvel = bobvel + DIV4(bobvel);
-    bobvel = min(bobvel, 128);
+    bobvel = min(bobvel, short(128));
 
     if (condition)
     {
@@ -7340,12 +7325,9 @@ pDisplaySprites(PLAYERp pp)
     USERp u = User[pp->PlayerSprite];
     PANEL_SPRITEp psp=NULL, next=NULL;
     short shade, picnum, overlay_shade = 0;
-    char KenFlags;
     int x, y;
-    int smoothratio;
     unsigned i;
 
-    SECT_USERp sectu = SectUser[pp->cursectnum];
     uint8_t pal = 0;
     short ang;
     int flags;
@@ -7355,7 +7337,6 @@ pDisplaySprites(PLAYERp pp)
     {
         ASSERT(ValidPtr(psp));
         ang = psp->rotate_ang;
-        KenFlags = 0;
         shade = 0;
         flags = 0;
         x = psp->x;
@@ -7387,7 +7368,7 @@ pDisplaySprites(PLAYERp pp)
             picnum = psp->picndx;
 
         // UK panzies have to have darts instead of shurikens.
-        if (useDarts)
+        if (gs.Darts)
             switch (picnum)
             {
             case STAR_REST:
@@ -7450,7 +7431,8 @@ pDisplaySprites(PLAYERp pp)
                 break;
 
             case STAR_REST:
-                if (!useDarts)
+            case 2510:
+                if (!gs.Darts)
                     picnum = 2138;
                 else
                     picnum = 2518; // Bloody Dart Hand
@@ -7485,17 +7467,23 @@ pDisplaySprites(PLAYERp pp)
         // if its a weapon sprite and the view is set to the outside don't draw the sprite
         if (TEST(psp->flags, PANF_WEAPON_SPRITE))
         {
-            pal = sector[pp->cursectnum].floorpal;
-
-            if (sector[pp->cursectnum].floorpal != PALETTE_DEFAULT)
+            SECT_USERp sectu = nullptr;
+            int16_t floorshade = 0;
+            if (pp->cursectnum >= 0)
             {
-                SECT_USERp sectu = SectUser[pp->cursectnum];
-                if (sectu && TEST(sectu->flags, SECTFU_DONT_COPY_PALETTE))
-                    pal = PALETTE_DEFAULT;
-            }
+                sectu = SectUser[pp->cursectnum];
+                pal = sector[pp->cursectnum].floorpal;
+                floorshade = sector[pp->cursectnum].floorshade;
 
-            if (pal == PALETTE_FOG || pal == PALETTE_DIVE || pal == PALETTE_DIVE_LAVA)
-                pal = psp->pal; // Set it back
+                if (pal != PALETTE_DEFAULT)
+                {
+                    if (sectu && TEST(sectu->flags, SECTFU_DONT_COPY_PALETTE))
+                        pal = PALETTE_DEFAULT;
+                }
+
+                if (pal == PALETTE_FOG || pal == PALETTE_DIVE || pal == PALETTE_DIVE_LAVA)
+                    pal = psp->pal; // Set it back
+            }
 
             ///////////
 
@@ -7505,7 +7493,7 @@ pDisplaySprites(PLAYERp pp)
             }
 
             //shade = overlay_shade = DIV2(sector[pp->cursectnum].floorshade + sector[pp->cursectnum].ceilingshade);
-            shade = overlay_shade = sector[pp->cursectnum].floorshade - 10;
+            shade = overlay_shade = floorshade - 10;
 
             if (TEST(psp->PlayerP->Flags, PF_VIEW_FROM_OUTSIDE))
             {
@@ -7589,12 +7577,43 @@ pDisplaySprites(PLAYERp pp)
         }
 
 #if 1
-        if (TEST(psp->flags, PANF_KILL_AFTER_SHOW) && !TEST(psp->flags, PANF_NOT_ALL_PAGES))
+        extern SWBOOL UsingMenus;
+        if (TEST(psp->flags, PANF_KILL_AFTER_SHOW) && !TEST(psp->flags, PANF_NOT_ALL_PAGES) && !UsingMenus)
         {
             psp->numpages = 0;
             SET(flags, ROTATE_SPRITE_ALL_PAGES);
         }
 #endif
+
+        // temporary hack to fix fist artifacts until a solution is found in the panel system itself
+        switch (picnum)
+        {
+            case FIST_SWING0:
+            case FIST_SWING1:
+            case FIST_SWING2:
+            case FIST2_SWING0:
+            case FIST2_SWING1:
+            case FIST2_SWING2:
+            case FIST3_SWING0:
+            case FIST3_SWING1:
+            case FIST3_SWING2:
+            case BLOODYFIST_SWING0:
+            case BLOODYFIST_SWING1:
+            case BLOODYFIST_SWING2:
+            case BLOODYFIST2_SWING0:
+            case BLOODYFIST2_SWING1:
+            case BLOODYFIST2_SWING2:
+            case BLOODYFIST3_SWING0:
+            case BLOODYFIST3_SWING1:
+            case BLOODYFIST3_SWING2:
+                if (TEST(flags, BIT(2)) && x > 160)
+                    x = 65;
+                else if (!TEST(flags, BIT(2)) && x < 160)
+                    x = 345;
+                break;
+            default:
+                break;
+        }
 
         rotatesprite(x << 16, y << 16,
                      psp->scale, ang,
@@ -7663,7 +7682,7 @@ pSpriteControl(PLAYERp pp)
         // RULE: Sprites can only kill themselves
         PRODUCTION_ASSERT(psp);
         ASSERT(ValidPtr(psp));
-        ASSERT((uint32_t) psp->Next != 0xCCCCCCCC);
+        // ASSERT((uint32_t) psp->Next != 0xCCCCCCCC);
 
         if (psp->State)
             pStateControl(psp);
@@ -7805,7 +7824,7 @@ PreUpdatePanel(void)
     DrawBeforeView = FALSE;
 }
 
-void rotatespritetile(int thex, int they, short tilenum,
+void rotatespritetile(short tilenum,
                       signed char shade, int cx1, int cy1,
                       int cx2, int cy2, char dapalnum)
 {

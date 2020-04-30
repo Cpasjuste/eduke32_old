@@ -35,15 +35,13 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "compat.h"
 #include "baselayer.h"
 #include "mmulti.h"
+#include "build.h"
 
 #include "mytypes.h"
 #include "keyboard.h"
 #include "sounds.h"
 #include "settings.h"
-
-//#define SW_SHAREWARE 1     // This determines whether game is shareware compile or not!
-extern char isShareware, useDarts;
-#define SW_SHAREWARE (isShareware)
+#include "common_game.h"
 
 // Turn warning off for unreferenced variables.
 // I really should fix them at some point
@@ -52,18 +50,22 @@ extern char isShareware, useDarts;
 
 #define ERR_STD_ARG __FILE__, __LINE__
 
+void _Assert(const char *expr, const char *strFile, unsigned uLine);
+#define PRODUCTION_ASSERT(f) \
+    do { \
+        if (!(f)) \
+            _Assert(#f,ERR_STD_ARG); \
+    } while (0)
+
+#if DEBUG || defined DEBUGGINGAIDS
+#define ASSERT(f) PRODUCTION_ASSERT(f)
+#else
+#define ASSERT(f) do { } while (0)
+#endif
+
 #if DEBUG
 void HeapCheck(char *, int);
 #define HEAP_CHECK() HeapCheck(__FILE__, __LINE__)
-
-void _Assert(char *, char *, unsigned);
-#define ASSERT(f) \
-    if (f)        \
-        do { } while(0);         \
-    else          \
-        _Assert(#f,ERR_STD_ARG);
-
-#define PRODUCTION_ASSERT(f) ASSERT(f)
 
 void dsprintf(char *, char *, ...);
 #define DSPRINTF dsprintf
@@ -74,7 +76,7 @@ void PokeStringMono(uint8_t Attr, uint8_t* String);
 extern int DispMono;
 #define MONO_PRINT(str) if (DispMono) PokeStringMono(/*MDA_NORMAL*/ 0, str)
 #else
-void adduserquote(char *daquote);
+void adduserquote(const char *daquote);
 extern int DispMono;
 #define MONO_PRINT(str) if (DispMono) CON_ConMessage(str); // Put it in my userquote stuff!
 //#define MONO_PRINT(str) if (DispMono) printf(str);
@@ -82,17 +84,9 @@ extern int DispMono;
 
 #define RANDOM_DEBUG 1 // Set this to 1 for network testing.
 #else
-#define ASSERT(f) do { } while(0)
 #define MONO_PRINT(str)
 
-void _Assert(char *, char *, unsigned);
-#define PRODUCTION_ASSERT(f) \
-    if (f)        \
-        do { } while(0);         \
-    else          \
-        _Assert(#f,ERR_STD_ARG);
-
-void dsprintf_null(char *, char *, ...);
+void dsprintf_null(char *str, const char *format, ...);
 #define DSPRINTF dsprintf_null
 //#define DSPRINTF()
 
@@ -362,9 +356,6 @@ extern char MessageOutputString[256];
 #define SET_SPRITE_TAG13(sp,val) (*((short*)&sprite[sp].xoffset)) = B_LITTLE16(val)
 #define SET_SPRITE_TAG14(sp,val) (*((short*)&sprite[sp].xrepeat)) = B_LITTLE16(val)
 
-// this will get you the other wall moved by dragpoint
-#define DRAG_WALL(w) (wall[wall[(w)].nextwall].point2)
-
 // OVER and UNDER water macros
 #define SpriteInDiveArea(sp) (TEST(sector[(sp)->sectnum].extra, SECTFX_DIVE_AREA) ? TRUE : FALSE)
 #define SpriteInUnderwaterArea(sp) (TEST(sector[(sp)->sectnum].extra, SECTFX_UNDERWATER|SECTFX_UNDERWATER2) ? TRUE : FALSE)
@@ -383,8 +374,8 @@ extern char MessageOutputString[256];
 #define TEST_SYNC_KEY(player, sync_num) TEST((player)->input.bits, (1 << (sync_num)))
 #define RESET_SYNC_KEY(player, sync_num) RESET((player)->input.bits, (1 << (sync_num)))
 
-#define TRAVERSE_SPRITE_SECT(l, o, n)    for ((o) = (l); (n) = nextspritesect[o], (o) != -1; (o) = (n))
-#define TRAVERSE_SPRITE_STAT(l, o, n)    for ((o) = (l); (n) = nextspritestat[o], (o) != -1; (o) = (n))
+#define TRAVERSE_SPRITE_SECT(l, o, n)    for ((o) = (l); (n) = (o) == -1 ? -1 : nextspritesect[o], (o) != -1; (o) = (n))
+#define TRAVERSE_SPRITE_STAT(l, o, n)    for ((o) = (l); (n) = (o) == -1 ? -1 : nextspritestat[o], (o) != -1; (o) = (n))
 #define TRAVERSE_CONNECT(i)   for (i = connecthead; i != -1; i = connectpoint2[i])
 
 
@@ -396,6 +387,15 @@ int StdRandomRange(int range);
 #define STD_RANDOM_P2(pwr_of_2) (MOD_P2(rand(),(pwr_of_2)))
 #define STD_RANDOM_RANGE(range) (StdRandomRange(range))
 #define STD_RANDOM() (rand())
+
+#if 0
+// TODO: PedanticMode
+#define RANDOM_NEG(x,y) (PedanticMode \
+                        ? ((RANDOM_P2(((x)<<(y))<<1) -  (x))<<(y)) \
+                        :  (RANDOM_P2(((x)<<(y))<<1) - ((x) <<(y))))
+#else
+#define RANDOM_NEG(x,y) ((RANDOM_P2(((x)<<(y))<<1) - (x))<<(y))
+#endif
 
 #define MOVEx(vel,ang) (((int)(vel) * (int)sintable[NORM_ANGLE((ang) + 512)]) >> 14)
 #define MOVEy(vel,ang) (((int)(vel) * (int)sintable[NORM_ANGLE((ang))]) >> 14)
@@ -538,11 +538,11 @@ int StdRandomRange(int range);
 #define MDA_REVERSEBLINK   0xF0
 
 // defines for move_sprite return value
-#define HIT_MASK (BIT(13)|BIT(14)|BIT(15))
+#define HIT_MASK (BIT(14)|BIT(15)|BIT(16))
 #define HIT_SPRITE (BIT(14)|BIT(15))
 #define HIT_WALL   BIT(15)
 #define HIT_SECTOR BIT(14)
-#define HIT_PLAX_WALL BIT(13)
+#define HIT_PLAX_WALL BIT(16)
 
 #define NORM_SPRITE(val) ((val) & (MAXSPRITES - 1))
 #define NORM_WALL(val) ((val) & (MAXWALLS - 1))
@@ -855,7 +855,7 @@ extern char con_quote[MAXCONQUOTES][256];
 int minitext(int x,int y,char *t,char p,char sb);
 int minitextshade(int x,int y,char *t,char s,char p,char sb);
 void operatefta(void);
-void adduserquote(char *daquote);
+void adduserquote(const char *daquote);
 void operateconfta(void);
 void addconquote(char *daquote);
 
@@ -872,6 +872,7 @@ void CON_CommandHistory(signed char dir);
 SWBOOL CON_AddCommand(const char *command, void (*function)(void));
 void CON_ProcessUserCommand(void);
 void CON_InitConsole(void);
+void CON_Quit(void);
 
 ///////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -898,8 +899,8 @@ typedef struct
     int16_t max_ammo;
     int16_t min_ammo;
     int16_t with_weapon;
-    char *weapon_name;
-    char *ammo_name;
+    const char *weapon_name;
+    const char *ammo_name;
     int16_t weapon_pickup;
     int16_t ammo_pickup;
 } DAMAGE_DATA, *DAMAGE_DATAp;
@@ -937,7 +938,7 @@ extern void (*InitWeapon[MAX_WEAPONS]) (PLAYERp);
 
 #define MAX_SW_PLAYERS_SW  (4)
 #define MAX_SW_PLAYERS_REG (8)
-#define MAX_SW_PLAYERS (isShareware ? MAX_SW_PLAYERS_SW : MAX_SW_PLAYERS_REG)
+#define MAX_SW_PLAYERS (SW_SHAREWARE ? MAX_SW_PLAYERS_SW : MAX_SW_PLAYERS_REG)
 
 typedef struct
 {
@@ -954,15 +955,15 @@ typedef struct
 
 #define MAX_LEVELS_REG 29
 #define MAX_LEVELS_SW 4
-#define MAX_LEVELS (isShareware ? MAX_LEVELS_SW : MAX_LEVELS_REG)
+#define MAX_LEVELS (SW_SHAREWARE ? MAX_LEVELS_SW : MAX_LEVELS_REG)
 
 typedef struct
 {
-    char *LevelName;
-    char *SongName;
-    char *Description;
-    char *BestTime;
-    char *ParTime;
+    const char *LevelName;
+    const char *SongName;
+    const char *Description;
+    const char *BestTime;
+    const char *ParTime;
 } LEVEL_INFO, *LEVEL_INFOp, * *LEVEL_INFOpp;
 
 extern LEVEL_INFO LevelInfo[MAX_LEVELS_REG+2];
@@ -977,12 +978,14 @@ extern char EpisodeSubtitles[2][MAX_EPISODE_SUBTITLE_LEN+1];
 extern char SkillNames[4][MAX_SKILL_NAME_LEN+2];
 
 #define MAX_FORTUNES 16
-extern char *ReadFortune[MAX_FORTUNES];
+extern const char *ReadFortune[MAX_FORTUNES];
 
 #define MAX_KEYS 8
-extern char *KeyMsg[MAX_KEYS];
-extern char *KeyDoorMessage[MAX_KEYS];
+extern const char *KeyMsg[MAX_KEYS];
+extern const char *KeyDoorMessage[MAX_KEYS];
 
+// TODO: Support compatible read/write of struct for big-endian
+#pragma pack(push,1)
 typedef struct
 {
     int16_t vel;
@@ -991,6 +994,7 @@ typedef struct
     int8_t aimvel;
     int32_t bits;
 } SW_PACKET;
+#pragma pack(pop)
 
 extern SW_PACKET loc;
 
@@ -1169,7 +1173,7 @@ struct PLAYERstruct
     short DiveDamageTics;
 
     // Death stuff
-    short DeathType;
+    uint16_t DeathType;
     short Kills;
     short Killer;  //who killed me
     short KilledPlayer[MAX_SW_PLAYERS_REG];
@@ -1753,11 +1757,19 @@ typedef struct
     unsigned int size, checksum;
 } MEM_HDR,*MEM_HDRp;
 
+#if !DEBUG
+# define ValidPtr(ptr) ((SWBOOL)(TRUE))
+# define AllocMem(size) Xmalloc(size)
+# define CallocMem(size, num) Xcalloc(size, num)
+# define ReAllocMem(ptr, size) Xrealloc(ptr, size)
+# define FreeMem(ptr) Xfree(ptr)
+#else
 SWBOOL ValidPtr(void *ptr);
 void *AllocMem(int size);
 void *CallocMem(int size, int num);
 void *ReAllocMem(void *ptr, int size);
 void FreeMem(void *ptr);
+#endif
 
 typedef struct
 {
@@ -2257,7 +2269,6 @@ extern char keys[];
 extern short screenpeek;
 
 extern int dimensionmode, zoom;
-extern int vel,svel,angvel;
 
 #define STAT_DAMAGE_LIST_SIZE 20
 extern int16_t StatDamageList[STAT_DAMAGE_LIST_SIZE];
@@ -2275,10 +2286,10 @@ extern unsigned char palette_data[256][3];
 extern SWBOOL NightVision;
 #endif
 
-int _PlayerSound(char *file, int line, int num, int *x, int *y, int *z, Voc3D_Flags flags, PLAYERp pp);
+int _PlayerSound(const char *file, int line, int num, int *x, int *y, int *z, Voc3D_Flags flags, PLAYERp pp);
 #define PlayerSound(num, x, y, z, flags, pp) _PlayerSound(__FILE__, __LINE__, (num), (x), (y), (z), (flags), (pp))
 
-#define MAXSO (MAXLONG)
+#define MAXSO (INT32_MAX)
 
 ///////////////////////////////////////////////////////////////
 //
@@ -2321,7 +2332,7 @@ void post_analyzesprites(void); // draw.c
 int COVERsetgamemode(int mode, int xdim, int ydim, int bpp);    // draw.c
 void ScreenCaptureKeys(void);   // draw.c
 
-int minigametext(int x,int y,char *t,char s,short dabits);  // jplayer.c
+int minigametext(int x,int y,const char *t,short dabits);  // jplayer.c
 void computergetinput(int snum,SW_PACKET *syn); // jplayer.c
 
 void DrawOverlapRoom(int tx,int ty,int tz,short tang,int thoriz,short tsectnum);    // rooms.c
@@ -2333,9 +2344,9 @@ void TermSetup(void);   // swconfig.c
 
 void InitSetup(void);   // setup.c
 
-void LoadKVXFromScript(char *filename); // scrip2.c
-void LoadPLockFromScript(char *filename);   // scrip2.c
-void LoadCustomInfoFromScript(char *filename);  // scrip2.c
+void LoadKVXFromScript(const char *filename); // scrip2.c
+void LoadPLockFromScript(const char *filename);   // scrip2.c
+void LoadCustomInfoFromScript(const char *filename);  // scrip2.c
 
 void EveryCheatToggle(PLAYERp pp,char *cheat_string);   // cheats.c
 
@@ -2356,7 +2367,7 @@ SWBOOL VatorSwitch(short match, short setting); // vator.c
 void MoveSpritesWithSector(short sectnum,int z_amt,SWBOOL type);  // vator.c
 void SetVatorActive(short SpriteNum);   // vator.c
 
-short DoSpikeMatch(PLAYERp pp,short match); // spike.c
+short DoSpikeMatch(short match); // spike.c
 void SpikeAlign(short SpriteNum);   // spike.c
 
 short DoSectorObjectSetScale(short match);  // morph.c
@@ -2374,7 +2385,7 @@ int DoWallMoveMatch(short match);   // wallmove.c
 int DoWallMove(SPRITEp sp); // wallmove.c
 SWBOOL CanSeeWallMove(SPRITEp wp,short match);    // wallmove.c
 
-short DoSpikeOperate(PLAYERp pp,short sectnum); // spike.c
+short DoSpikeOperate(short sectnum); // spike.c
 void SetSpikeActive(short SpriteNum);   // spike.c
 
 #define NTAG_SEARCH_LO 1
@@ -2384,3 +2395,9 @@ void SetSpikeActive(short SpriteNum);   // spike.c
 int COVERinsertsprite(short sectnum, short statnum);   //returns (short)spritenum;
 
 void AudioUpdate(void); // stupid
+
+extern short LastSaveNum;
+extern short QuickLoadNum;
+void LoadSaveMsg(const char *msg);
+SWBOOL DoQuickSave(short save_num);
+SWBOOL DoQuickLoad(void);

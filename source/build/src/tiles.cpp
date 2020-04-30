@@ -1,3 +1,10 @@
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
 
 #include "compat.h"
 #include "build.h"
@@ -5,8 +12,11 @@
 #include "engine_priv.h"
 #include "cache1d.h"
 #include "lz4.h"
+#include "crc32.h"
 
-void *pic = NULL;
+#include "vfs.h"
+
+static void *g_vm_data;
 
 // The tile file number (tilesXXX <- this) of each tile:
 // 0 <= . < MAXARTFILES_BASE: tile is in a "base" ART file
@@ -20,24 +30,28 @@ static int32_t tilefileoffs[MAXTILES];
 // necessary (have per-map ART files).
 static uint8_t *g_bakTileFileNum;
 static int32_t *g_bakTileFileOffs;
-static vec2s_t *g_bakTileSiz;
+static vec2_16_t *g_bakTileSiz;
+static char *g_bakPicSiz;
+static char *g_bakWalock;
+static intptr_t *g_bakWaloff;
 static picanm_t *g_bakPicAnm;
 static char * g_bakFakeTile;
 static char ** g_bakFakeTileData;
+static rottile_t *g_bakRottile;
 // NOTE: picsiz[] is not backed up, but recalculated when necessary.
 
 //static int32_t artsize = 0;
-static int32_t cachesize = 0;
+static int32_t g_vm_size = 0;
 
 static char artfilename[20];
 static char mapartfilename[BMAX_PATH];  // map-specific ART file name
 static int32_t mapartfnXXofs;  // byte offset to 'XX' (the number part) in the above
-static int32_t artfil = -1, artfilnum, artfilplc;
+static int32_t artfilnum, artfilplc;
+static buildvfs_kfd artfil;
 
 ////////// Per-map ART file loading //////////
 
 // Some forward declarations.
-static void tileUpdatePicSiz(int32_t picnum);
 static const char *artGetIndexedFileName(int32_t tilefilei);
 static int32_t artReadIndexedFile(int32_t tilefilei);
 
@@ -79,7 +93,7 @@ void artClearMapArt(void)
     {
         kclose(artfil);
 
-        artfil = -1;
+        artfil = buildvfs_kfd_invalid;
         artfilnum = -1;
         artfilplc = 0L;
     }
@@ -89,7 +103,7 @@ void artClearMapArt(void)
         if (tilefilenum[i] >= MAXARTFILES_BASE)
         {
             // XXX: OK way to free it? Better: cache1d API. CACHE1D_FREE
-            walock[i] = 1;
+            walock[i] = CACHE1D_FREE;
             waloff[i] = 0;
         }
     }
@@ -98,8 +112,12 @@ void artClearMapArt(void)
     RESTORE_MAPART_ARRAY(tilefilenum, g_bakTileFileNum);
     RESTORE_MAPART_ARRAY(tilefileoffs, g_bakTileFileOffs);
     RESTORE_MAPART_ARRAY(tilesiz, g_bakTileSiz);
+    RESTORE_MAPART_ARRAY(picsiz, g_bakPicSiz);
+    RESTORE_MAPART_ARRAY(walock, g_bakWalock);
+    RESTORE_MAPART_ARRAY(waloff, g_bakWaloff);
     RESTORE_MAPART_ARRAY(picanm, g_bakPicAnm);
     RESTORE_MAPART_ARRAY(faketile, g_bakFakeTile);
+    RESTORE_MAPART_ARRAY(rottile, g_bakRottile);
 
     for (size_t i = 0; i < MAXUSERTILES; ++i)
     {
@@ -134,9 +152,9 @@ void artSetupMapArt(const char *filename)
     mapartfnXXofs = Bstrlen(mapartfilename) - 6;
 
     // Check for first per-map ART file: if that one doesn't exist, don't load any.
-    int32_t fil = kopen4load(artGetIndexedFileName(MAXARTFILES_BASE), 0);
+    buildvfs_kfd fil = kopen4loadfrommod(artGetIndexedFileName(MAXARTFILES_BASE), 0);
 
-    if (fil == -1)
+    if (fil == buildvfs_kfd_invalid)
     {
         artClearMapArtFilename();
         return;
@@ -148,9 +166,13 @@ void artSetupMapArt(const char *filename)
     ALLOC_MAPART_ARRAY(tilefilenum, g_bakTileFileNum);
     ALLOC_MAPART_ARRAY(tilefileoffs, g_bakTileFileOffs);
     ALLOC_MAPART_ARRAY(tilesiz, g_bakTileSiz);
+    ALLOC_MAPART_ARRAY(picsiz, g_bakPicSiz);
+    ALLOC_MAPART_ARRAY(walock, g_bakWalock);
+    ALLOC_MAPART_ARRAY(waloff, g_bakWaloff);
     ALLOC_MAPART_ARRAY(picanm, g_bakPicAnm);
     ALLOC_MAPART_ARRAY(faketile, g_bakFakeTile);
     ALLOC_MAPART_ARRAY(faketiledata, g_bakFakeTileData);
+    ALLOC_MAPART_ARRAY(rottile, g_bakRottile);
 
     for (bssize_t i=MAXARTFILES_BASE; i<MAXARTFILES_TOTAL; i++)
     {
@@ -196,6 +218,7 @@ static void tileSetDataSafe(int32_t const tile, int32_t tsiz, char const * const
 
     if ((tsiz = LZ4_compress_default(buffer, newtile, tsiz, compressed_tsiz)) != -1)
     {
+        faketilesize[tile] = tsiz;
         faketiledata[tile] = (char *) Xrealloc(newtile, tsiz);
         faketile[tile>>3] |= pow2char[tile&7];
         tilefilenum[tile] = MAXARTFILES_TOTAL;
@@ -213,6 +236,7 @@ void tileSetData(int32_t const tile, int32_t tsiz, char const * const buffer)
 
     if ((tsiz = LZ4_compress_default(buffer, faketiledata[tile], tsiz, compressed_tsiz)) != -1)
     {
+        faketilesize[tile] = tsiz;
         faketiledata[tile] = (char *) Xrealloc(faketiledata[tile], tsiz);
         faketile[tile>>3] |= pow2char[tile&7];
         tilefilenum[tile] = MAXARTFILES_TOTAL;
@@ -231,7 +255,7 @@ static void tileSoftDelete(int32_t const tile)
     picsiz[tile] = 0;
 
     // CACHE1D_FREE
-    walock[tile] = 1;
+    walock[tile] = CACHE1D_FREE;
     waloff[tile] = 0;
 
     faketile[tile>>3] &= ~pow2char[tile&7];
@@ -255,7 +279,7 @@ void tileDelete(int32_t const tile)
 #endif
 }
 
-static void tileUpdatePicSiz(int32_t picnum)
+void tileUpdatePicSiz(int32_t picnum)
 {
     int j = 15;
 
@@ -277,10 +301,26 @@ void tileSetSize(int32_t picnum, int16_t dasizx, int16_t dasizy)
     tileUpdatePicSiz(picnum);
 }
 
-int32_t artReadHeader(int32_t const fil, char const * const fn, artheader_t * const local)
+int32_t artReadHeader(buildvfs_kfd const fil, char const * const fn, artheader_t * const local)
 {
     int32_t artversion;
     kread(fil, &artversion, 4); artversion = B_LITTLE32(artversion);
+
+    if (artversion == B_LITTLE32(0x4c495542))
+    {
+        kread(fil, &artversion, 4); artversion = B_LITTLE32(artversion);
+        if (artversion == B_LITTLE32(0x54524144))
+        {
+            kread(fil, &artversion, 4); artversion = B_LITTLE32(artversion);
+        }
+        else
+        {
+            initprintf("loadpics: Invalid art file, %s\n", fn);
+            kclose(fil);
+            return 1;
+        }
+    }
+
     if (artversion != 1)
     {
         initprintf("loadpics: Invalid art file version in %s\n", fn);
@@ -371,7 +411,7 @@ void tileConvertAnimFormat(int32_t const picnum)
     thispicanm->sf &= ~PICANM_MISC_MASK;
 }
 
-void artReadManifest(int32_t const fil, artheader_t const * const local)
+void artReadManifest(buildvfs_kfd const fil, artheader_t const * const local)
 {
     int16_t *tilesizx = (int16_t *) Xmalloc(local->numtiles * sizeof(int16_t));
     int16_t *tilesizy = (int16_t *) Xmalloc(local->numtiles * sizeof(int16_t));
@@ -391,7 +431,7 @@ void artReadManifest(int32_t const fil, artheader_t const * const local)
     DO_FREE_AND_NULL(tilesizy);
 }
 
-void artPreloadFile(int32_t const fil, artheader_t const * const local)
+void artPreloadFile(buildvfs_kfd const fil, artheader_t const * const local)
 {
     char *buffer = NULL;
     int32_t buffersize = 0;
@@ -414,7 +454,7 @@ void artPreloadFile(int32_t const fil, artheader_t const * const local)
     DO_FREE_AND_NULL(buffer);
 }
 
-static void artPreloadFileSafe(int32_t const fil, artheader_t const * const local)
+static void artPreloadFileSafe(buildvfs_kfd const fil, artheader_t const * const local)
 {
     char *buffer = NULL;
     int32_t buffersize = 0;
@@ -468,9 +508,9 @@ static int32_t artReadIndexedFile(int32_t tilefilei)
 {
     const char *fn = artGetIndexedFileName(tilefilei);
     const int32_t permap = (tilefilei >= MAXARTFILES_BASE);  // is it a per-map ART file?
-    int32_t fil;
+    buildvfs_kfd fil;
 
-    if ((fil = kopen4load(fn, 0)) != -1)
+    if ((fil = kopen4load(fn, 0)) != buildvfs_kfd_invalid)
     {
         artheader_t local;
         int const headerval = artReadHeader(fil, fn, &local);
@@ -488,7 +528,7 @@ static int32_t artReadIndexedFile(int32_t tilefilei)
             {
                 // Tiles having dummytile replacements or those that are
                 // cache1d-locked can't be replaced.
-                if (faketile[i>>3] & pow2char[i&7] || walock[i] >= 200)
+                if (faketile[i>>3] & pow2char[i&7] || walock[i] >= CACHE1D_LOCKED)
                 {
                     initprintf("loadpics: per-map ART file \"%s\": "
                         "tile %d has dummytile or is locked\n", fn, i);
@@ -504,7 +544,11 @@ static int32_t artReadIndexedFile(int32_t tilefilei)
 
         artReadManifest(fil, &local);
 
+#ifndef USE_PHYSFS
         if (cache1d_file_fromzip(fil))
+#else
+        if (1)
+#endif
         {
             if (permap)
                 artPreloadFileSafe(fil, &local);
@@ -545,24 +589,28 @@ int32_t artLoadFiles(const char *filename, int32_t askedsize)
 {
     Bstrncpyz(artfilename, filename, sizeof(artfilename));
 
-    Bmemset(&tilesiz[0], 0, sizeof(vec2s_t) * MAXTILES);
+    Bmemset(&tilesiz[0], 0, sizeof(vec2_16_t) * MAXTILES);
     Bmemset(picanm, 0, sizeof(picanm));
+
+    for (auto &rot : rottile)
+        rot = { -1, -1 };
 
     //    artsize = 0;
 
-    for (bssize_t tilefilei=0; tilefilei<MAXARTFILES_BASE; tilefilei++)
+    for (int tilefilei=0; tilefilei<MAXARTFILES_BASE; tilefilei++)
         artReadIndexedFile(tilefilei);
 
     Bmemset(gotpic, 0, sizeof(gotpic));
-
     //cachesize = min((int32_t)((Bgetsysmemsize()/100)*60),max(artsize,askedsize));
-    cachesize = (Bgetsysmemsize() <= (uint32_t)askedsize) ? (int32_t)((Bgetsysmemsize() / 100) * 60) : askedsize;
-    pic = Xaligned_alloc(16, cachesize);
-    cacheInitBuffer((intptr_t) pic, cachesize);
+    g_vm_size = (Bgetsysmemsize() <= (uint32_t)askedsize) ? (int32_t)((Bgetsysmemsize() / 100) * 60) : askedsize;
+    zpl_virtual_memory vm = Xvm_alloc(nullptr, g_vm_size);
+    g_vm_data = vm.data;
+    g_vm_size = vm.size;
+    g_cache.initBuffer((intptr_t) g_vm_data, g_vm_size);
 
     artUpdateManifest();
 
-    artfil = -1;
+    artfil = buildvfs_kfd_invalid;
     artfilnum = -1;
     artfilplc = 0L;
 
@@ -584,20 +632,22 @@ bool tileLoad(int16_t tileNum)
     // Allocate storage if necessary.
     if (waloff[tileNum] == 0)
     {
-        walock[tileNum] = 199;
-        cacheAllocateBlock(&waloff[tileNum], dasiz, &walock[tileNum]);
+        walock[tileNum] = CACHE1D_UNLOCKED;
+        g_cache.allocateBlock(&waloff[tileNum], dasiz, &walock[tileNum]);
     }
 
     tileLoadData(tileNum, dasiz, (char *) waloff[tileNum]);
 
 #ifdef USE_OPENGL
-    if (videoGetRenderMode() >= REND_POLYMOST)
+    if (videoGetRenderMode() >= REND_POLYMOST &&
+        in3dmode())
     {
         //POGOTODO: this type stuff won't be necessary down the line -- review this
         int type;
         for (type = 0; type <= 1; ++type)
         {
-            texcache_fetch(tileNum, 0, 0, (type ? DAMETH_CLAMPED : DAMETH_MASK) | PTH_INDEXED);
+            gltexinvalidate(tileNum, 0, (type ? DAMETH_CLAMPED : DAMETH_MASK) | DAMETH_INDEXED);
+            texcache_fetch(tileNum, 0, 0, (type ? DAMETH_CLAMPED : DAMETH_MASK) | DAMETH_INDEXED);
         }
     }
 #endif
@@ -607,36 +657,69 @@ bool tileLoad(int16_t tileNum)
     return (waloff[tileNum] != 0 && tilesiz[tileNum].x > 0 && tilesiz[tileNum].y > 0);
 }
 
+void tileMaybeRotate(int16_t tilenume)
+{
+    auto &rot = rottile[tilenume];
+    auto &siz = tilesiz[rot.owner];
+
+    auto src = (char *)waloff[rot.owner];
+    auto dst = (char *)waloff[tilenume];
+
+    // the engine has a squarerotatetile() we could call, but it mirrors at the same time
+    for (int x = 0; x < siz.x; ++x)
+    {
+        int const xofs = siz.x - x - 1;
+        int const yofs = siz.y * x;
+
+        for (int y = 0; y < siz.y; ++y)
+            *(dst + y * siz.x + xofs) = *(src + y + yofs);
+    }
+
+    tileSetSize(tilenume, siz.y, siz.x);
+}
+
 void tileLoadData(int16_t tilenume, int32_t dasiz, char *buffer)
 {
-    // dummy tiles for highres replacements and tilefromtexture definitions
+    int const owner = rottile[tilenume].owner;
 
-    if (faketile[tilenume>>3] & pow2char[tilenume&7])
+    if (owner != -1)
     {
-        if (faketiledata[tilenume] != NULL)
-            LZ4_decompress_fast(faketiledata[tilenume], buffer, dasiz);
+        if (!waloff[owner])
+            tileLoad(owner);
 
-        faketimerhandler();
+        if (waloff[tilenume])
+            tileMaybeRotate(tilenume);
+
         return;
     }
 
     int const tfn = tilefilenum[tilenume];
 
+    // dummy tiles for highres replacements and tilefromtexture definitions
+    if (faketile[tilenume>>3] & pow2char[tilenume&7])
+    {
+        if (faketiledata[tilenume] != NULL)
+            LZ4_decompress_safe(faketiledata[tilenume], buffer, faketilesize[tilenume], dasiz);
+
+        faketimerhandler();
+        return;
+    }
+
     // Potentially switch open ART file.
     if (tfn != artfilnum)
     {
-        if (artfil != -1)
+        if (artfil != buildvfs_kfd_invalid)
             kclose(artfil);
 
         char const *fn = artGetIndexedFileName(tfn);
 
-        artfil = kopen4load(fn, 0);
+        artfil = kopen4loadfrommod(fn, 0);
 
-        if (artfil == -1)
+        if (artfil == buildvfs_kfd_invalid)
         {
             initprintf("Failed opening ART file \"%s\"!\n", fn);
             engineUnInit();
-            Bexit(11);
+            Bexit(EXIT_FAILURE);
         }
 
         artfilnum = tfn;
@@ -691,6 +774,32 @@ static void tilePostLoad(int16_t tilenume)
 #endif
 }
 
+int32_t tileGetCRC32(int16_t tileNum)
+{
+    if ((unsigned)tileNum >= (unsigned)MAXTILES)
+        return 0;
+    int const dasiz = tilesiz[tileNum].x * tilesiz[tileNum].y;
+    if (dasiz <= 0)
+        return 0;
+
+    auto data = (char *)Xmalloc(dasiz);
+    tileLoadData(tileNum, dasiz, data);
+
+    int32_t crc = Bcrc32((unsigned char *)data, (unsigned int)dasiz, 0);
+
+    Xfree(data);
+
+    return crc;
+}
+
+vec2_16_t tileGetSize(int16_t tileNum)
+{
+    if ((unsigned)tileNum >= (unsigned)MAXTILES)
+        return vec2_16_t{};
+
+    return tilesiz[tileNum];
+}
+
 // Assumes pic has been initialized to zero.
 void artConvertRGB(palette_t * const pic, uint8_t const * const buf, int32_t const bufsizx, int32_t const sizx, int32_t const sizy)
 {
@@ -726,8 +835,8 @@ intptr_t tileCreate(int16_t tilenume, int32_t xsiz, int32_t ysiz)
 
     int const dasiz = xsiz*ysiz;
 
-    walock[tilenume] = 255;
-    cacheAllocateBlock(&waloff[tilenume], dasiz, &walock[tilenume]);
+    walock[tilenume] = CACHE1D_PERMANENT;
+    g_cache.allocateBlock(&waloff[tilenume], dasiz, &walock[tilenume]);
 
     tileSetSize(tilenume, xsiz, ysiz);
     Bmemset(&picanm[tilenume], 0, sizeof(picanm_t));
@@ -777,8 +886,8 @@ void tileCopySection(int32_t tilenume1, int32_t sx1, int32_t sy1, int32_t xsiz, 
 
 void Buninitart(void)
 {
-    if (artfil != -1)
+    if (artfil != buildvfs_kfd_invalid)
         kclose(artfil);
 
-    ALIGNED_FREE_AND_NULL(pic);
+    Xvm_free(zpl_vm(g_vm_data, g_vm_size));
 }

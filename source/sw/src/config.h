@@ -26,26 +26,55 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 #ifndef config_public_
 #define config_public_
-#ifdef __cplusplus
-extern "C" {
-#endif
+
+#include "compat.h"
 
 #include "function.h"
 #include "keyboard.h"
 #include "control.h"
 
+#ifdef __cplusplus
+struct ud_setup_t {
+    union {
+      int32_t usejoystick, UseJoystick = {0};
+    };
+    union {
+      int32_t usemouse, UseMouse = {1};
+    };
+    union {
+      int32_t fullscreen, ScreenMode = {1};
+    };
+    union {
+      int32_t xdim, ScreenWidth = {640};
+    };
+    union {
+      int32_t ydim, ScreenHeight = {480};
+    };
+    union {
+      int32_t bpp, ScreenBPP = {32};
+    };
+    union {
+      int32_t forcesetup, ForceSetup = {1};
+    };
+    int32_t noautoload = 0;
+};
+
+extern "C" {
+
+extern ud_setup_t ud_setup;
+#endif
+
+extern int g_noSetup;
+
 #define SETUPNAMEPARM "SETUPFILE"
 
 // screen externs
-extern int32_t ScreenMode; // Screen mode
-extern int32_t ScreenWidth;
-extern int32_t ScreenHeight;
-extern int32_t ScreenBPP;
 extern int32_t ScreenBufferMode;
 extern int32_t VesaBufferMode;
-extern int32_t ForceSetup;
 
 // sound externs
+extern int32_t FXToggle;
+extern int32_t MusicToggle;
 extern int32_t FXDevice; // Sound FX Card number
 extern int32_t MusicDevice; // Music Card number
 extern int32_t FXVolume; // FX Volume
@@ -82,7 +111,6 @@ extern char  RTSPath[MAXRTSPATHLENGTH];
 extern char  UserPath[MAXUSERLEVELPATHLENGTH];
 
 // controller externs
-extern int32_t UseMouse, UseJoystick;
 extern int32_t JoystickPort;
 extern int32_t MouseSensitivity;
 extern int32_t MouseAiming;
@@ -108,7 +136,7 @@ extern int32_t EnableRudder;
 extern int32_t MouseDigitalAxes[MAXMOUSEAXES][2];
 extern int32_t JoystickDigitalAxes[MAXJOYAXES][2];
 
-extern char setupfilename[64];
+extern char setupfilename[BMAX_PATH];
 extern char ExternalControlFilename[64];
 
 //style=0: classic

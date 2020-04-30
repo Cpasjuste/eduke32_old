@@ -6,7 +6,8 @@
 #endif
 
 #ifndef _WIN32_WINNT
-# define _WIN32_WINNT 0x0501
+# define _WIN32_WINNT _WIN32_WINNT_WINXP
+#define LOCALE_SNAME 0x0000005c  // locale name (ie: en-us)
 #endif
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -41,6 +42,17 @@
 #ifdef NEED_SHELLAPI_H
 # include <shellapi.h>
 # undef NEED_SHELLAPI_H
+#endif
+
+#ifdef NEED_DWMAPI_H
+# include <dwmapi.h>
+# undef NEED_DWMAPI_H
+#endif
+
+#ifdef NEED_BCRYPT_H
+# include <bcrypt.h>
+# undef small
+# undef NEED_BCRYPT_H
 #endif
 
 #ifdef NEED_SHLWAPI_H
@@ -141,4 +153,24 @@
 
 #ifndef UNREFERENCED_PARAMETER
 # define UNREFERENCED_PARAMETER(x) (x) = (x)
+#endif
+
+#ifdef RC_INVOKED
+# ifndef __DATE__
+#  define __DATE__ "0000-00-00"
+#  define EDUKE32_FAKE_DATE
+# endif
+# ifndef __TIME__
+#  define __TIME__ "00:00:00"
+#  define EDUKE32_FAKE_TIME
+# endif
+#endif
+
+#if defined REV
+# define REV__(x) #x
+# define REV_(x) REV__(x)
+# define REVSTR REV_(REV)
+#else
+# define REVSTR "r(?)"
+# define EDUKE32_UNKNOWN_REVISION
 #endif

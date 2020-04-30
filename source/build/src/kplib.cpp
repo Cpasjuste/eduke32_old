@@ -4,13 +4,13 @@ Copyright (c) 1998-2008 Ken Silverman
 Ken Silverman's official web site: http://advsys.net/ken
 
 Features of KPLIB.C:
-	* Routines for decoding JPG/PNG/GIF/PCX/TGA/BMP/DDS/CEL.
-		See kpgetdim(), kprender(), and optional helper function: kpzload().
-	* Routines for reading files out of ZIP/GRP files. All ZIP/GRP functions start with "kz".
-	* Multi-platform support: Dos/Windows/Linux/Mac/etc..
-	* Compact code, all in a single source file. Yeah, bad design on my part... but makes life
-		  easier for everyone else - you simply add a single C file to your project, throw a few
-		  externs in there, add the function calls, and you're done!
+    * Routines for decoding JPG/PNG/GIF/PCX/TGA/BMP/DDS/CEL.
+        See kpgetdim(), kprender(), and optional helper function: kpzload().
+    * Routines for reading files out of ZIP/GRP files. All ZIP/GRP functions start with "kz".
+    * Multi-platform support: Dos/Windows/Linux/Mac/etc..
+    * Compact code, all in a single source file. Yeah, bad design on my part... but makes life
+          easier for everyone else - you simply add a single C file to your project, throw a few
+          externs in there, add the function calls, and you're done!
 
 Brief history:
 1998?: Wrote KPEG, a JPEG viewer for DOS
@@ -34,23 +34,17 @@ credits.
 #include "kplib.h"
 #include "pragmas.h"
 
+#include "vfs.h"
+
 #if !defined(_WIN32)
-#include <dirent.h>
-static inline int32_t _lrotl(int32_t i, int sh) { return (i >> (-sh)) | (i << sh); }
-/*inline*/ int32_t filelength(int h)
-{
-    struct stat st;
-    if (fstat(h,&st) < 0) return -1;
-    return st.st_size;
-}
-#define _fileno fileno
+static FORCE_INLINE CONSTEXPR int32_t klrotl(int32_t i, int sh) { return (i >> (-sh)) | (i << sh); }
 #else
-#include <io.h>
-#ifdef __clang__
-#include <emmintrin.h>
-#else
-#include <intrin.h>
-#endif
+# define klrotl(i, sh) _lrotl(i, sh)
+# ifdef __clang__
+#  include <emmintrin.h>
+# else
+#  include <intrin.h>
+# endif
 #endif
 
 //use GCC-specific extension to force symbol name to be something in particular to override underscoring.
@@ -63,7 +57,7 @@ static inline int32_t _lrotl(int32_t i, int sh) { return (i >> (-sh)) | (i << sh
 static intptr_t kp_frameplace;
 static int32_t kp_bytesperline, kp_xres, kp_yres;
 
-static const int32_t pow2mask[32] =
+static CONSTEXPR const int32_t pow2mask[32] =
 {
     0x00000000,0x00000001,0x00000003,0x00000007,
     0x0000000f,0x0000001f,0x0000003f,0x0000007f,
@@ -74,7 +68,7 @@ static const int32_t pow2mask[32] =
     0x00ffffff,0x01ffffff,0x03ffffff,0x07ffffff,
     0x0fffffff,0x1fffffff,0x3fffffff,0x7fffffff,
 };
-static const int32_t pow2long[32] =
+static CONSTEXPR const int32_t pow2long[32] =
 {
     0x00000001,0x00000002,0x00000004,0x00000008,
     0x00000010,0x00000020,0x00000040,0x00000080,
@@ -192,10 +186,9 @@ static void suckbitsnextblock()
     if (zipfilmode)
     {
         //NOTE: should only read bytes inside compsize, not 64K!!! :/
-        int32_t n;
         B_BUF32(&olinbuf[0], B_UNBUF32(&olinbuf[sizeof(olinbuf)-4]));
-        n = min((unsigned) (kzfs.compleng-kzfs.comptell), sizeof(olinbuf)-4);
-        fread(&olinbuf[4], n, 1, kzfs.fil);
+        uint32_t n = min<uint32_t>(kzfs.compleng-kzfs.comptell, sizeof(olinbuf)-4);
+        buildvfs_fread(&olinbuf[4], n, 1, kzfs.fil);
         kzfs.comptell += n;
         bitpos -= ((sizeof(olinbuf)-4)<<3);
         return;
@@ -216,7 +209,7 @@ static void suckbitsnextblock()
     nbitpos = B_BIG32(B_UNBUF32(&filptr[8]));
     nfilptr = &filptr[nbitpos+12];
     B_BUF32(&fakebuf[0], B_UNBUF32(&filptr[0])); //Copy last dword of IDAT chunk
-    if (B_UNBUF32(&filptr[12]) == B_LITTLE32(0x54414449)) //Copy 1st dword of next IDAT chunk
+    if (B_UNBUF32(&filptr[12]) == B_LITTLE32(0x54414449u)) //Copy 1st dword of next IDAT chunk
         B_BUF32(&fakebuf[4], B_UNBUF32(&filptr[16]));
     filptr = &fakebuf[4]; bitpos -= 32;
 }
@@ -225,7 +218,7 @@ static inline int32_t peekbits(int32_t n) { return (B_LITTLE32(B_UNBUF32(&filptr
 static inline void suckbits(int32_t n) { bitpos += n; if (bitpos < 0) return; suckbitsnextblock(); }
 static inline int32_t getbits(int32_t n) { int32_t i = peekbits(n); suckbits(n); return i; }
 
-static int32_t hufgetsym(int32_t *hitab, int32_t *hbmax)
+static int32_t hufgetsym(int32_t *hitab, const int32_t *hbmax)
 {
     int32_t v, n;
 
@@ -245,7 +238,7 @@ static int32_t hufgetsym(int32_t *hitab, int32_t *hbmax)
 //   return hitab[hbmax[n]+v];
 //}
 
-static void qhufgencode(int32_t *hitab, int32_t *hbmax, int32_t *qhval, uint8_t *qhbit, int32_t numbits)
+static void qhufgencode(const int32_t *hitab, const int32_t *hbmax, int32_t *qhval, uint8_t *qhbit, int32_t numbits)
 {
     int32_t i, j, k, n, r;
 
@@ -293,7 +286,7 @@ static void qhufgencode(int32_t *hitab, int32_t *hbmax, int32_t *qhval, uint8_t 
 //hitab[inum] : Indices from size-ordered list to original symbol
 //hbmax[0-31] : Highest index (+1) of n-bit symbol
 
-static void hufgencode(int32_t *inbuf, int32_t inum, int32_t *hitab, int32_t *hbmax)
+static void hufgencode(const int32_t *inbuf, int32_t inum, int32_t *hitab, int32_t *hbmax)
 {
     int32_t i, tbuf[31], *tbufptr, *hbmaxptr;
 
@@ -565,7 +558,6 @@ static inline int32_t Paeth686(int32_t const a, int32_t const b, int32_t c)
 
 static inline void rgbhlineasm(int32_t x, int32_t xr1, intptr_t p, int32_t ixstp)
 {
-    int32_t i;
     if (!trnsrgb)
     {
         for (; x>xr1; p+=ixstp,x-=3) B_BUF32((void *) p, (B_UNBUF32(&olinbuf[x]))|B_LITTLE32(0xff000000));
@@ -573,7 +565,7 @@ static inline void rgbhlineasm(int32_t x, int32_t xr1, intptr_t p, int32_t ixstp
     }
     for (; x>xr1; p+=ixstp,x-=3)
     {
-        i = (B_UNBUF32(&olinbuf[x]))|B_LITTLE32(0xff000000);
+        int32_t i = (B_UNBUF32(&olinbuf[x]))|B_LITTLE32(0xff000000);
         if (i == trnsrgb) i &= B_LITTLE32(0xffffff);
         B_BUF32((void *) p, i);
     }
@@ -597,7 +589,7 @@ static inline void pal8hlineasm(int32_t x, int32_t xr1, intptr_t p, int32_t ixst
 static int32_t filter1st, filterest;
 static void putbuf(const uint8_t *buf, int32_t leng)
 {
-    int32_t i, x;
+    int32_t i;
     intptr_t p;
 
     if (filt < 0)
@@ -611,7 +603,7 @@ static void putbuf(const uint8_t *buf, int32_t leng)
 
     while (i < leng)
     {
-        x = i+xplc; if (x > leng) x = leng;
+        int32_t x = i+xplc; if (x > leng) x = leng;
         switch (filt)
         {
         case 0:
@@ -729,7 +721,7 @@ static int32_t kpngrend(const char *kfilebuf, int32_t kfilength,
 
     if (!pnginited) { pnginited = 1; initpngtables(); }
 
-    if ((B_UNBUF32(&kfilebuf[0]) != B_LITTLE32(0x474e5089)) || (B_UNBUF32(&kfilebuf[4]) != B_LITTLE32(0x0a1a0a0d)))
+    if ((B_UNBUF32(&kfilebuf[0]) != B_LITTLE32(0x474e5089u)) || (B_UNBUF32(&kfilebuf[4]) != B_LITTLE32(0x0a1a0a0du)))
         return -1; //"Invalid PNG file signature"
     filptr = (uint8_t const *)&kfilebuf[8];
 
@@ -740,7 +732,7 @@ static int32_t kpngrend(const char *kfilebuf, int32_t kfilength,
         leng = B_BIG32(B_UNBUF32(&filptr[0])); i = B_UNBUF32(&filptr[4]);
         filptr = &filptr[8];
 
-        if (i == (int32_t)B_LITTLE32(0x52444849)) //IHDR (must be first)
+        if (i == B_LITTLE32(0x52444849)) //IHDR (must be first)
         {
             xsiz = B_BIG32(B_UNBUF32(&filptr[0])); if (xsiz <= 0) return -1;
             ysiz = B_BIG32(B_UNBUF32(&filptr[4])); if (ysiz <= 0) return -1;
@@ -759,12 +751,12 @@ static int32_t kpngrend(const char *kfilebuf, int32_t kfilength,
                 for (i=0; i<paleng; i++,j+=k) palcol[i] = B_LITTLE32(j);
             }
         }
-        else if (i == (int32_t)B_LITTLE32(0x45544c50)) //PLTE (must be before IDAT)
+        else if (i == B_LITTLE32(0x45544c50)) //PLTE (must be before IDAT)
         {
             paleng = leng/3;
             for (i=paleng-1; i>=0; i--) palcol[i] = B_LITTLE32((B_BIG32(B_UNBUF32(&filptr[i*3]))>>8)|0xff000000);
         }
-        else if (i == (int32_t)B_LITTLE32(0x44474b62)) //bKGD (must be after PLTE and before IDAT)
+        else if (i == B_LITTLE32(0x44474b62)) //bKGD (must be after PLTE and before IDAT)
         {
             switch (kcoltype)
             {
@@ -788,7 +780,7 @@ static int32_t kpngrend(const char *kfilebuf, int32_t kfilength,
             bakb = (bakcol&255);
             bakcol = B_LITTLE32(bakcol);
         }
-        else if (i == (int32_t)B_LITTLE32(0x534e5274)) //tRNS (must be after PLTE and before IDAT)
+        else if (i == B_LITTLE32(0x534e5274)) //tRNS (must be after PLTE and before IDAT)
         {
             switch (kcoltype)
             {
@@ -810,7 +802,7 @@ static int32_t kpngrend(const char *kfilebuf, int32_t kfilength,
                 EDUKE32_UNREACHABLE_SECTION();
             }
         }
-        else if (i == (int32_t)B_LITTLE32(0x54414449)) { break; }  //IDAT
+        else if (i == B_LITTLE32(0x54414449)) { break; }  //IDAT
 
         filptr = &filptr[leng+4]; //crc = B_BIG32(B_UNBUF32(&filptr[-4]));
     }
@@ -1012,16 +1004,16 @@ static inline int32_t mulshr32(int32_t a, int32_t d)
 #elif defined(__GNUC__) && defined(__i386__) && !defined(NOASM)
 
 #define mulshr24(a,d) \
-	({ int32_t __a=(a), __d=(d); \
-		__asm__ __volatile__ ("imull %%edx; shrdl $24, %%edx, %%eax" \
-		: "+a" (__a), "+d" (__d) : : "cc"); \
-	 __a; })
+    ({ int32_t __a=(a), __d=(d); \
+        __asm__ __volatile__ ("imull %%edx; shrdl $24, %%edx, %%eax" \
+        : "+a" (__a), "+d" (__d) : : "cc"); \
+     __a; })
 
 #define mulshr32(a,d) \
-	({ int32_t __a=(a), __d=(d); \
-		__asm__ __volatile__ ("imull %%edx" \
-		: "+a" (__a), "+d" (__d) : : "cc"); \
-	 __d; })
+    ({ int32_t __a=(a), __d=(d); \
+        __asm__ __volatile__ ("imull %%edx" \
+        : "+a" (__a), "+d" (__d) : : "cc"); \
+     __d; })
 
 #else
 
@@ -1043,9 +1035,9 @@ static int32_t crmul[4096], cbmul[4096];
 
 static void initkpeg()
 {
-    int32_t i, j, x, y;
+    int32_t i, j, y;
 
-    x = 0;  //Back & forth diagonal pattern (aligning bytes for best compression)
+    int32_t x = 0;  //Back & forth diagonal pattern (aligning bytes for best compression)
     for (i=0; i<16; i+=2)
     {
         for (y=8-1; y>=0; y--)
@@ -1246,11 +1238,11 @@ static void yrbrend(int32_t x, int32_t y, int32_t *ldct)
 void (*kplib_yrbrend_func)(int32_t,int32_t,int32_t *) = yrbrend;
 
 #define KPEG_GETBITS(curbits, minbits, num, kfileptr, kfileend)\
-	while (curbits < minbits)\
-	{\
-		ch = *kfileptr++; num = (num<<8)+((int)ch); curbits += 8;\
-		if (ch == 255) { kfileptr++; if (kfileptr >= kfileend) { num <<= 8; curbits += 8; /*Hack to prevent read overrun on valid JPG by stuffing extra byte*/ } }\
-	}
+    while (curbits < minbits)\
+    {\
+        ch = *kfileptr++; num = (num<<8)+((int)ch); curbits += 8;\
+        if (ch == 255) { kfileptr++; if (kfileptr >= kfileend) { num <<= 8; curbits += 8; /*Hack to prevent read overrun on valid JPG by stuffing extra byte*/ } }\
+    }
 
 
 static int32_t kpegrend(const char *kfilebuf, int32_t kfilength,
@@ -1269,7 +1261,7 @@ static int32_t kpegrend(const char *kfilebuf, int32_t kfilength,
     kfileptr = (uint8_t const *)kfilebuf;
     kfileend = &kfileptr[kfilength];
 
-    if (B_UNBUF16(kfileptr) == B_LITTLE16(0xd8ff)) kfileptr += 2;
+    if (B_UNBUF16(kfileptr) == B_LITTLE16(0xD8FFu)) kfileptr += 2;
     else return -1; //"%s is not a JPEG file\n",filename
 
     restartinterval = 0;
@@ -1377,9 +1369,9 @@ static int32_t kpegrend(const char *kfilebuf, int32_t kfilength,
             kfileptr += leng;
             break;
         case 0xda:
-                if ((xdim <= 0) || (ydim <= 0)) { Bfree(dctbuf); return -1; }
+                if ((xdim <= 0) || (ydim <= 0)) { Xfree(dctbuf); return -1; }
 
-            lnumcomponents = (int32_t)(*kfileptr++); if (!lnumcomponents) { Bfree(dctbuf); return -1; }
+            lnumcomponents = (int32_t)(*kfileptr++); if (!lnumcomponents) { Xfree(dctbuf); return -1; }
             if (lnumcomponents > 1) kcoltype = 2;
             for (z=0; z<lnumcomponents; z++)
             {
@@ -1405,7 +1397,7 @@ static int32_t kpegrend(const char *kfilebuf, int32_t kfilength,
                     zz += dctx[z]*dcty[z];
                 }
                 z = zz*64*sizeof(int16_t);
-                dctbuf = (int16_t *)Bmalloc(z); if (!dctbuf) return -1;
+                dctbuf = (int16_t *)Xmalloc(z); if (!dctbuf) return -1;
                 Bmemset(dctbuf,0,z);
                 for (z=zz=0; z<gnumcomponents; z++) { dctptr[z] = &dctbuf[zz*64]; zz += dctx[z]*dcty[z]; }
             }
@@ -1615,7 +1607,7 @@ static int32_t kpegrend(const char *kfilebuf, int32_t kfilength,
             kplib_yrbrend_func(x,y,&dct[0][0]);
         }
 
-    Bfree(dctbuf); return 0;
+    Xfree(dctbuf); return 0;
 }
 
 //==============================  KPEGILIB ends ==============================
@@ -1762,8 +1754,8 @@ static int32_t kcelrend(const char *buf, int32_t fleng,
 
     kcoltype = 3; bitdepth = 8; paleng = 256; //For PNGOUT
 
-    xsiz = (int32_t)B_LITTLE16(B_UNBUF16(&buf[2])); if (xsiz <= 0) return -1;
-    ysiz = (int32_t)B_LITTLE16(B_UNBUF16(&buf[4])); if (ysiz <= 0) return -1;
+    xsiz = B_LITTLE16(B_UNBUF16(&buf[2])); if (xsiz <= 0) return -1;
+    ysiz = B_LITTLE16(B_UNBUF16(&buf[4])); if (ysiz <= 0) return -1;
 
     cptr = &buf[32];
     for (i=0; i<256; i++)
@@ -1805,8 +1797,8 @@ static int32_t ktgarend(const char *header, int32_t fleng,
     if (header[17]&0xc0) return -1;
 
     fptr = (uint8_t const *)&header[header[0]+18];
-    xsiz = (int32_t)B_LITTLE16(B_UNBUF16(&header[12])); if (xsiz <= 0) return -1;
-    ysiz = (int32_t)B_LITTLE16(B_UNBUF16(&header[14])); if (ysiz <= 0) return -1;
+    xsiz = B_LITTLE16(B_UNBUF16(&header[12])); if (xsiz <= 0) return -1;
+    ysiz = B_LITTLE16(B_UNBUF16(&header[14])); if (ysiz <= 0) return -1;
     colbyte = ((((int32_t)header[16])+7)>>3);
 
     if (header[1] == 1)
@@ -1846,7 +1838,7 @@ static int32_t ktgarend(const char *header, int32_t fleng,
                 if (header[1] == 1)
                 {
                     if (colbyte == 1) i = fptr[0];
-                    else i = (int32_t)B_LITTLE16(B_UNBUF16(&fptr[0]));
+                    else i = B_LITTLE16(B_UNBUF16(&fptr[0]));
                     nptr = &cptr[i*pixbyte];
                 }
                 else nptr = fptr;
@@ -1854,7 +1846,7 @@ static int32_t ktgarend(const char *header, int32_t fleng,
                 switch (pixbyte)
                 {
                 case 1: i = palcol[(int32_t)nptr[0]]; break;
-                case 2: i = (int32_t)B_LITTLE16(B_UNBUF16(&nptr[0]));
+                case 2: i = B_LITTLE16(B_UNBUF16(&nptr[0]));
                     i = B_LITTLE32(((i&0x7c00)<<9) + ((i&0x03e0)<<6) + ((i&0x001f)<<3) + 0xff000000);
                     break;
                 case 3: i = (B_UNBUF32(&nptr[0])) | B_LITTLE32(0xff000000); break;
@@ -1899,12 +1891,12 @@ static int32_t kbmprend(const char *buf, int32_t fleng,
     UNREFERENCED_PARAMETER(fleng);
 
     headsiz = B_UNBUF32(&buf[14]);
-    if (headsiz == (int32_t)B_LITTLE32(12)) //OS/2 1.x (old format)
+    if (headsiz == B_LITTLE32(12)) //OS/2 1.x (old format)
     {
         if (B_UNBUF16(&buf[22]) != B_LITTLE16(1)) return -1;
-        xsiz = (int32_t)B_LITTLE16(B_UNBUF16(&buf[18]));
-        ysiz = (int32_t)B_LITTLE16(B_UNBUF16(&buf[20]));
-        cdim = (int32_t)B_LITTLE16(B_UNBUF16(&buf[24]));
+        xsiz = B_LITTLE16(B_UNBUF16(&buf[18]));
+        ysiz = B_LITTLE16(B_UNBUF16(&buf[20]));
+        cdim = B_LITTLE16(B_UNBUF16(&buf[24]));
         comp = 0;
     }
     else //All newer formats...
@@ -1912,7 +1904,7 @@ static int32_t kbmprend(const char *buf, int32_t fleng,
         if (B_UNBUF16(&buf[26]) != B_LITTLE16(1)) return -1;
         xsiz = B_LITTLE32(B_UNBUF32(&buf[18]));
         ysiz = B_LITTLE32(B_UNBUF32(&buf[22]));
-        cdim = (int32_t)B_LITTLE16(B_UNBUF16(&buf[28]));
+        cdim = B_LITTLE16(B_UNBUF16(&buf[28]));
         comp = B_LITTLE32(B_UNBUF32(&buf[30]));
     }
     if ((xsiz <= 0) || (!ysiz)) return -1;
@@ -1925,7 +1917,7 @@ static int32_t kbmprend(const char *buf, int32_t fleng,
     if (cdim < 16)
     {
         if (cdim == 2) { palcol[0] = 0xffffffff; palcol[1] = B_LITTLE32(0xff000000); }
-        if (headsiz == (int32_t)B_LITTLE32(12)) j = 3; else j = 4;
+        if (headsiz == B_LITTLE32(12)) j = 3; else j = 4;
         for (i=0,cptr=&buf[headsiz+14]; cptr<&buf[rastoff]; i++,cptr+=j)
             palcol[i] = ((B_UNBUF32(&cptr[0]))|B_LITTLE32(0xff000000));
         kcoltype = 3; bitdepth = (int8_t)cdim; paleng = i; //For PNGOUT
@@ -1969,8 +1961,6 @@ static int32_t kbmprend(const char *buf, int32_t fleng,
 
     x0 = 0; x1 = xsiz;
     y0 = 0; y1 = ysiz;
-    if ((x0 >= daxres) || (x1 <= 0) || (y0 >= dayres) || (y1 <= 0)) return 0;
-    if (x0 < 0) x0 = 0;
     if (x1 > daxres) x1 = daxres;
     for (y=y0; y<y1; y++,cptr=&cptr[cptrinc])
     {
@@ -1984,17 +1974,17 @@ static int32_t kbmprend(const char *buf, int32_t fleng,
         case 16: for (x=x0; x<x1; x++)
                 {
                     i = ((int32_t)(B_UNBUF16(&cptr[x<<1])));
-                    lptr[x] = (_lrotl(i,palcol[0])&palcol[3]) +
-                              (_lrotl(i,palcol[1])&palcol[4]) +
-                              (_lrotl(i,palcol[2])&palcol[5]) + B_LITTLE32(0xff000000);
+                    lptr[x] = (klrotl(i,palcol[0])&palcol[3]) +
+                              (klrotl(i,palcol[1])&palcol[4]) +
+                              (klrotl(i,palcol[2])&palcol[5]) + B_LITTLE32(0xff000000);
                 } break;
         case 24: for (x=x0; x<x1; x++) lptr[x] = ((B_UNBUF32(&cptr[x*3]))|B_LITTLE32(0xff000000)); break;
         case 32: for (x=x0; x<x1; x++)
                 {
                     i = (B_UNBUF32(&cptr[x<<2]));
-                    lptr[x] = (_lrotl(i,palcol[0])&palcol[3]) +
-                              (_lrotl(i,palcol[1])&palcol[4]) +
-                              (_lrotl(i,palcol[2])&palcol[5]) + B_LITTLE32(0xff000000);
+                    lptr[x] = (klrotl(i,palcol[0])&palcol[3]) +
+                              (klrotl(i,palcol[1])&palcol[4]) +
+                              (klrotl(i,palcol[2])&palcol[5]) + B_LITTLE32(0xff000000);
                 } break;
         }
 
@@ -2012,7 +2002,7 @@ static int32_t kpcxrend(const char *buf, int32_t fleng,
     uint8_t c;
     uint8_t const *cptr;
 
-    if (B_UNBUF32(buf) != B_LITTLE32(0x0801050a)) return -1;
+    if (B_UNBUF32(buf) != B_LITTLE32(0x0801050au)) return -1;
     xsiz = B_LITTLE16(B_UNBUF16(&buf[ 8]))-B_LITTLE16(B_UNBUF16(&buf[4]))+1; if (xsiz <= 0) return -1;
     ysiz = B_LITTLE16(B_UNBUF16(&buf[10]))-B_LITTLE16(B_UNBUF16(&buf[6]))+1; if (ysiz <= 0) return -1;
     //buf[3]: bpp/plane:{1,2,4,8}
@@ -2229,16 +2219,16 @@ void kpgetdim(const char *buf, int32_t leng, int32_t *xsiz, int32_t *ysiz)
     if (B_UNBUF16(&ubuf[0]) == B_LITTLE16(0x5089)) //.PNG
     {
         lptr = (int32_t const *)buf;
-        if ((lptr[0] != (int32_t)B_LITTLE32(0x474e5089)) || (lptr[1] != (int32_t)B_LITTLE32(0x0a1a0a0d))) return;
+        if ((lptr[0] != B_LITTLE32(0x474e5089)) || (lptr[1] != B_LITTLE32(0x0a1a0a0d))) return;
         lptr = &lptr[2];
         while (((uintptr_t)lptr-(uintptr_t)buf) < (uintptr_t)(leng-16))
         {
-            if (lptr[1] == (int32_t)B_LITTLE32(0x52444849)) //IHDR
+            if (lptr[1] == B_LITTLE32(0x52444849)) //IHDR
                 {(*xsiz) = B_BIG32(lptr[2]); (*ysiz) = B_BIG32(lptr[3]); break; }
             lptr = (int32_t *)((intptr_t)lptr + B_BIG32(lptr[0]) + 12);
         }
     }
-    else if (B_UNBUF16(&ubuf[0]) == B_LITTLE16(0xd8ff)) //.JPG
+    else if (B_UNBUF16(&ubuf[0]) == B_LITTLE16(0xD8FFu)) //.JPG
     {
         cptr = (uint8_t const *)&buf[2];
         while (((uintptr_t)cptr-(uintptr_t)buf) < (uintptr_t)(leng-8))
@@ -2262,7 +2252,7 @@ void kpgetdim(const char *buf, int32_t leng, int32_t *xsiz, int32_t *ysiz)
         }
         else if ((ubuf[0] == 'B') && (ubuf[1] == 'M')) //.BMP
         {
-            if (B_UNBUF32(&buf[14]) == B_LITTLE32(12)) //OS/2 1.x (old format)
+            if (B_UNBUF32(&buf[14]) == B_LITTLE32(12u)) //OS/2 1.x (old format)
             {
                 if (B_UNBUF16(&buf[22]) != B_LITTLE16(1)) return;
                 (*xsiz) = (int32_t) B_LITTLE16(B_UNBUF16(&buf[18]));
@@ -2275,7 +2265,7 @@ void kpgetdim(const char *buf, int32_t leng, int32_t *xsiz, int32_t *ysiz)
                 (*ysiz) = B_LITTLE32(B_UNBUF32(&buf[22]));
             }
         }
-        else if (B_UNBUF32(ubuf) == B_LITTLE32(0x0801050a)) //.PCX
+        else if (B_UNBUF32(ubuf) == B_LITTLE32(0x0801050au)) //.PCX
         {
             (*xsiz) = B_LITTLE16(B_UNBUF16(&buf[8]))-B_LITTLE16(B_UNBUF16(&buf[4]))+1;
             (*ysiz) = B_LITTLE16(B_UNBUF16(&buf[10]))-B_LITTLE16(B_UNBUF16(&buf[6]))+1;
@@ -2312,7 +2302,7 @@ int32_t kprender(const char *buf, int32_t leng, intptr_t frameptr, int32_t bpl,
 
     if (B_UNBUF16(&ubuf[0]) == B_LITTLE16(0x5089)) //.PNG
         return kpngrend(buf,leng,frameptr,bpl,xdim,ydim);
-    else if (B_UNBUF16(&ubuf[0]) == B_LITTLE16(0xd8ff)) //.JPG
+    else if (B_UNBUF16(&ubuf[0]) == B_LITTLE16(0xD8FFu)) //.JPG
         return kpegrend(buf,leng,frameptr,bpl,xdim,ydim);
     else
     {
@@ -2320,7 +2310,7 @@ int32_t kprender(const char *buf, int32_t leng, intptr_t frameptr, int32_t bpl,
             return kgifrend(buf, leng, frameptr, bpl, xdim, ydim);
         else if ((ubuf[0] == 'B') && (ubuf[1] == 'M')) //.BMP
             return kbmprend(buf, leng, frameptr, bpl, xdim, ydim);
-        else if (B_UNBUF32(ubuf) == B_LITTLE32(0x0801050a)) //.PCX
+        else if (B_UNBUF32(ubuf) == B_LITTLE32(0x0801050au)) //.PCX
             return kpcxrend(buf, leng, frameptr, bpl, xdim, ydim);
 #ifdef KPCEL
         else if ((ubuf[0] == 0x19) && (ubuf[1] == 0x91) && (ubuf[10] == 8) && (ubuf[11] == 0)) //old .CEL/.PIC
@@ -2343,7 +2333,7 @@ int32_t kprender(const char *buf, int32_t leng, intptr_t frameptr, int32_t bpl,
 //Given: string i and string j. string j can have wildcards
 //Returns: 1:matches, 0:doesn't match
 
-extern char toupperlookup[256];
+
 
 int32_t wildmatch(const char *match, const char *wild)
 {
@@ -2400,19 +2390,17 @@ static int32_t kzhashead[256], kzhashpos, kzlastfnam = -1, kzhashsiz, kzdirnamhe
 
 static int32_t kzcheckhashsiz(int32_t siz)
 {
-    int32_t i;
-
     if (!kzhashbuf) //Initialize hash table on first call
     {
         Bmemset(kzhashead,-1,sizeof(kzhashead));
-        kzhashbuf = (char *)Bmalloc(KZHASHINITSIZE); if (!kzhashbuf) return 0;
+        kzhashbuf = (char *)Xmalloc(KZHASHINITSIZE); if (!kzhashbuf) return 0;
         kzhashpos = 0; kzlastfnam = -1; kzhashsiz = KZHASHINITSIZE; kzdirnamhead = -1;
     }
     if (kzhashpos+siz > kzhashsiz) //Make sure string fits in kzhashbuf
     {
-        i = kzhashsiz; do { i <<= 1; }
+        int32_t i = kzhashsiz; do { i <<= 1; }
         while (kzhashpos+siz > i);
-        kzhashbuf = (char *)Brealloc(kzhashbuf,i); if (!kzhashbuf) return 0;
+        kzhashbuf = (char *)Xrealloc(kzhashbuf,i); if (!kzhashbuf) return 0;
         kzhashsiz = i;
     }
     return 1;
@@ -2456,11 +2444,11 @@ void kzuninit()
 //If file not found, assumes it's a directory and adds it to an internal list
 int32_t kzaddstack(const char *filnam)
 {
-    FILE *fil;
+    buildvfs_FILE fil;
     int32_t i, j, k, leng, hashind, zipnamoffs, numfiles;
     char tempbuf[260+46];
 
-    fil = fopen(filnam,"rb");
+    fil = buildvfs_fopen_read(filnam);
     if (!fil) //if file not found, assume it's a directory
     {
         //Add directory name to internal list (using kzhashbuf for convenience of dynamic allocation)
@@ -2473,46 +2461,46 @@ int32_t kzaddstack(const char *filnam)
     }
 
     //Write ZIP/GRP filename to hash
-    i = strlen(filnam)+1; if (!kzcheckhashsiz(i)) { fclose(fil); return -1; }
+    i = strlen(filnam)+1; if (!kzcheckhashsiz(i)) { buildvfs_fclose(fil); return -1; }
     strcpy(&kzhashbuf[kzhashpos],filnam);
     zipnamoffs = kzhashpos; kzhashpos += i;
 
-    fread(&i,4,1,fil);
-    if (i == (int32_t)B_LITTLE32(0x04034b50)) //'PK\3\4' is ZIP file id
+    buildvfs_fread(&i,4,1,fil);
+    if (i == B_LITTLE32(0x04034b50)) //'PK\3\4' is ZIP file id
     {
-        fseek(fil,-22,SEEK_END);
-        fread(tempbuf,22,1,fil);
-        if (B_UNBUF32(&tempbuf[0]) == B_LITTLE32(0x06054b50)) //Fast way of finding dir info
+        buildvfs_fseek_abs(fil,buildvfs_flength(fil)-22);
+        buildvfs_fread(tempbuf,22,1,fil);
+        if (B_UNBUF32(&tempbuf[0]) == B_LITTLE32(0x06054b50u)) //Fast way of finding dir info
         {
             numfiles = B_LITTLE16(B_UNBUF16(&tempbuf[10]));
-            fseek(fil,B_LITTLE32(B_UNBUF32(&tempbuf[16])),SEEK_SET);
+            buildvfs_fseek_abs(fil,B_LITTLE32(B_UNBUF32(&tempbuf[16])));
         }
         else //Slow way of finding dir info (used when ZIP has junk at end)
         {
-            fseek(fil,0,SEEK_SET); numfiles = 0;
+            buildvfs_fseek_abs(fil,0); numfiles = 0;
             while (1)
             {
-                if (!fread(&j,4,1,fil)) { numfiles = -1; break; }
-                if (j == (int32_t)B_LITTLE32(0x02014b50)) break; //Found central file header :)
-                if (j != (int32_t)B_LITTLE32(0x04034b50)) { numfiles = -1; break; }
-                fread(tempbuf,26,1,fil);
-                fseek(fil,B_LITTLE32(B_UNBUF32(&tempbuf[14])) + B_LITTLE16(B_UNBUF16(&tempbuf[24])) + B_LITTLE16(B_UNBUF16(&tempbuf[22])),SEEK_CUR);
+                if (!buildvfs_fread(&j,4,1,fil)) { numfiles = -1; break; }
+                if (j == B_LITTLE32(0x02014b50)) break; //Found central file header :)
+                if (j != B_LITTLE32(0x04034b50)) { numfiles = -1; break; }
+                buildvfs_fread(tempbuf,26,1,fil);
+                buildvfs_fseek_rel(fil,B_LITTLE32(B_UNBUF32(&tempbuf[14])) + B_LITTLE16(B_UNBUF16(&tempbuf[24])) + B_LITTLE16(B_UNBUF16(&tempbuf[22])));
                 numfiles++;
             }
-            if (numfiles < 0) { fclose(fil); return -1; }
-            fseek(fil,-4,SEEK_CUR);
+            if (numfiles < 0) { buildvfs_fclose(fil); return -1; }
+            buildvfs_fseek_rel(fil,-4);
         }
         for (i=0; i<numfiles; i++)
         {
-            fread(tempbuf,46,1,fil);
-            if (B_UNBUF32(&tempbuf[0]) != B_LITTLE32(0x02014b50)) { fclose(fil); return 0; }
+            buildvfs_fread(tempbuf,46,1,fil);
+            if (B_UNBUF32(&tempbuf[0]) != B_LITTLE32(0x02014b50u)) { buildvfs_fclose(fil); return 0; }
 
             j = B_LITTLE16(B_UNBUF16(&tempbuf[28])); //filename length
-            fread(&tempbuf[46],j,1,fil);
+            buildvfs_fread(&tempbuf[46],j,1,fil);
             tempbuf[j+46] = 0;
 
             //Write information into hash
-            j = strlen(&tempbuf[46])+22; if (!kzcheckhashsiz(j)) { fclose(fil); return -1; }
+            j = strlen(&tempbuf[46])+22; if (!kzcheckhashsiz(j)) { buildvfs_fclose(fil); return -1; }
             hashind = kzcalchash(&tempbuf[46]);
             B_BUF32(&kzhashbuf[kzhashpos], kzhashead[hashind]);
             B_BUF32(&kzhashbuf[kzhashpos+4], kzlastfnam);
@@ -2525,24 +2513,24 @@ int32_t kzaddstack(const char *filnam)
 
             j  = B_LITTLE16(B_UNBUF16(&tempbuf[30])); //extra field length
             j += B_LITTLE16(B_UNBUF16(&tempbuf[32])); //file comment length
-            fseek(fil,j,SEEK_CUR);
+            buildvfs_fseek_rel(fil,j);
         }
     }
-    else if (i == (int32_t)B_LITTLE32(0x536e654b)) //'KenS' is GRP file id
+    else if (i == B_LITTLE32(0x536e654b)) //'KenS' is GRP file id
     {
-        fread(tempbuf,12,1,fil);
-        if ((B_UNBUF32(&tempbuf[0]) != B_LITTLE32(0x65766c69)) || //'ilve'
-                (B_UNBUF32(&tempbuf[4]) != B_LITTLE32(0x6e616d72)))   //'rman'
-            { fclose(fil); return 0; }
+        buildvfs_fread(tempbuf,12,1,fil);
+        if ((B_UNBUF32(&tempbuf[0]) != B_LITTLE32(0x65766c69u)) || //'ilve'
+                (B_UNBUF32(&tempbuf[4]) != B_LITTLE32(0x6e616d72u)))   //'rman'
+            { buildvfs_fclose(fil); return 0; }
         numfiles = B_LITTLE32(B_UNBUF32(&tempbuf[8])); k = ((numfiles+1)<<4);
         for (i=0; i<numfiles; i++,k+=leng)
         {
-            fread(tempbuf,16,1,fil);
+            buildvfs_fread(tempbuf,16,1,fil);
             leng = B_LITTLE32(B_UNBUF32(&tempbuf[12])); //File length
             tempbuf[12] = 0;
 
             //Write information into hash
-            j = strlen(tempbuf)+22; if (!kzcheckhashsiz(j)) { fclose(fil); return -1; }
+            j = strlen(tempbuf)+22; if (!kzcheckhashsiz(j)) { buildvfs_fclose(fil); return -1; }
             hashind = kzcalchash(tempbuf);
             B_BUF32(&kzhashbuf[kzhashpos], kzhashead[hashind]);
             B_BUF32(&kzhashbuf[kzhashpos+4], kzlastfnam);
@@ -2554,36 +2542,36 @@ int32_t kzaddstack(const char *filnam)
             kzhashead[hashind] = kzhashpos; kzlastfnam = kzhashpos; kzhashpos += j;
         }
     }
-    fclose(fil);
+    buildvfs_fclose(fil);
     return 0;
 }
 
 //this allows the use of kplib.c with a file that is already open
-void kzsetfil(FILE *fil)
+void kzsetfil(buildvfs_FILE fil)
 {
     kzfs.fil = fil;
     kzfs.comptyp = 0;
     kzfs.seek0 = 0;
-    kzfs.leng = filelength(_fileno(kzfs.fil));
+    kzfs.leng = buildvfs_flength(fil);
     kzfs.pos = 0;
     kzfs.i = 0;
 }
 
 intptr_t kzopen(const char *filnam)
 {
-    FILE *fil;
-    int32_t i, j, fileoffs, fileleng;
+    buildvfs_FILE fil{};
+    int32_t i, fileoffs, fileleng;
     char tempbuf[46+260], *zipnam, iscomp;
 
     //kzfs.fil = 0;
     if (filnam[0] != '|') //Search standalone file first
     {
-        kzfs.fil = fopen(filnam,"rb");
+        kzfs.fil = buildvfs_fopen_read(filnam);
         if (kzfs.fil)
         {
             kzfs.comptyp = 0;
             kzfs.seek0 = 0;
-            kzfs.leng = filelength(_fileno(kzfs.fil));
+            kzfs.leng = buildvfs_flength(fil);
             kzfs.pos = 0;
             kzfs.i = 0;
             return (intptr_t)kzfs.fil;
@@ -2591,8 +2579,8 @@ intptr_t kzopen(const char *filnam)
     }
     if (kzcheckhash(filnam,&zipnam,&fileoffs,&fileleng,&iscomp)) //Then check mounted ZIP/GRP files
     {
-        fil = fopen(zipnam,"rb"); if (!fil) return 0;
-        fseek(fil,fileoffs,SEEK_SET);
+        fil = buildvfs_fopen_read(zipnam); if (!fil) return 0;
+        buildvfs_fseek_abs(fil,fileoffs);
         if (!iscomp) //Must be from GRP file
         {
             kzfs.fil = fil;
@@ -2605,13 +2593,13 @@ intptr_t kzopen(const char *filnam)
         }
         else
         {
-            fread(tempbuf,30,1,fil);
-            if (B_UNBUF32(&tempbuf[0]) != B_LITTLE32(0x04034b50)) { fclose(fil); return 0; }
-            fseek(fil,B_LITTLE16(B_UNBUF16(&tempbuf[26]))+B_LITTLE16(B_UNBUF16(&tempbuf[28])),SEEK_CUR);
+            buildvfs_fread(tempbuf,30,1,fil);
+            if (B_UNBUF32(&tempbuf[0]) != B_LITTLE32(0x04034b50u)) { buildvfs_fclose(fil); return 0; }
+            buildvfs_fseek_rel(fil,B_LITTLE16(B_UNBUF16(&tempbuf[26]))+B_LITTLE16(B_UNBUF16(&tempbuf[28])));
 
             kzfs.fil = fil;
             kzfs.comptyp = B_LITTLE16(B_UNBUF16(&tempbuf[8]));
-            kzfs.seek0 = ftell(fil);
+            kzfs.seek0 = buildvfs_ftell(fil);
             kzfs.leng = B_LITTLE32(B_UNBUF32(&tempbuf[22]));
             kzfs.pos = 0;
             switch (kzfs.comptyp) //Compression method
@@ -2620,23 +2608,26 @@ intptr_t kzopen(const char *filnam)
             case 8:
                     if (!pnginited) { pnginited = 1; initpngtables(); }
                 kzfs.comptell = 0;
-                kzfs.compleng = (int32_t)B_LITTLE32(B_UNBUF32(&tempbuf[18]));
+                kzfs.compleng = B_LITTLE32(B_UNBUF32(&tempbuf[18]));
 
                 //WARNING: No file in ZIP can be > 2GB-32K bytes
                 gslidew = 0x7fffffff; //Force reload at beginning
 
                 return (intptr_t)kzfs.fil;
-            default: fclose(kzfs.fil); kzfs.fil = 0; return 0;
+            default: buildvfs_fclose(kzfs.fil); kzfs.fil = 0; return 0;
             }
         }
     }
 
     //Finally, check mounted dirs
+
+    int const namlen = strlen(filnam);
+
     for (i=kzdirnamhead; i>=0; i=B_UNBUF32(&kzhashbuf[i]))
     {
         strcpy(tempbuf,&kzhashbuf[i+4]);
-        j = strlen(tempbuf);
-        if (strlen(filnam)+1+j >= sizeof(tempbuf)) continue; //don't allow int32_t filenames to buffer overrun
+        uint32_t const j = strlen(tempbuf);
+        if (namlen+1+j >= sizeof(tempbuf)) continue; //don't allow int32_t filenames to buffer overrun
         if ((j) && (tempbuf[j-1] != '/') && (tempbuf[j-1] != '\\') && (filnam[0] != '/') && (filnam[0] != '\\'))
 #if defined(_WIN32)
             strcat(tempbuf,"\\");
@@ -2644,12 +2635,12 @@ intptr_t kzopen(const char *filnam)
             strcat(tempbuf,"/");
 #endif
         strcat(tempbuf,filnam);
-        kzfs.fil = fopen(tempbuf,"rb");
+        kzfs.fil = buildvfs_fopen_read(tempbuf);
         if (kzfs.fil)
         {
             kzfs.comptyp = 0;
             kzfs.seek0 = 0;
-            kzfs.leng = filelength(_fileno(kzfs.fil));
+            kzfs.leng = buildvfs_flength(fil);
             kzfs.pos = 0;
             kzfs.i = 0;
             return (intptr_t)kzfs.fil;
@@ -2659,12 +2650,14 @@ intptr_t kzopen(const char *filnam)
     return 0;
 }
 
+#ifndef USE_PHYSFS
 // --------------------------------------------------------------------------
 
 #if defined(_WIN32)
 static HANDLE hfind = INVALID_HANDLE_VALUE;
 static WIN32_FIND_DATA findata;
 #else
+#include <dirent.h>
 #define MAX_PATH 260
 static DIR *hfind = NULL;
 static struct dirent *findata = NULL;
@@ -2809,6 +2802,7 @@ int32_t kzfindfile(char *filnam)
 //NOTES:
 // * Directory names end with '\' or '/' (depending on system)
 // * Files inside zip begin with '|'
+#endif
 
 // --------------------------------------------------------------------------
 
@@ -2833,10 +2827,10 @@ int32_t kzread(void *buffer, int32_t leng)
     if (kzfs.comptyp == 0)
     {
         if (kzfs.pos != kzfs.i) //Seek only when position changes
-            { fseek(kzfs.fil,kzfs.seek0+kzfs.pos,SEEK_SET); kzfs.i = kzfs.pos; }
+            { buildvfs_fseek_abs(kzfs.fil,kzfs.seek0+kzfs.pos); kzfs.i = kzfs.pos; }
         i = min(kzfs.leng-kzfs.pos,leng);
-        fread(buffer,i,1,kzfs.fil);
-        kzfs.i += i; //kzfs.i is a local copy of ftell(kzfs.fil);
+        buildvfs_fread(buffer,i,1,kzfs.fil);
+        kzfs.i += i; //kzfs.i is a local copy of buildvfs_ftell(kzfs.fil);
     }
     else if (kzfs.comptyp == 8)
     {
@@ -2849,14 +2843,14 @@ int32_t kzread(void *buffer, int32_t leng)
 
         if (kzfs.pos < gslidew-32768) // Must go back to start :(
         {
-            if (kzfs.comptell) fseek(kzfs.fil,kzfs.seek0,SEEK_SET);
+            if (kzfs.comptell) buildvfs_fseek_abs(kzfs.fil,kzfs.seek0);
 
             gslidew = 0; gslider = 16384;
             kzfs.jmpplc = 0;
 
             //Initialize for suckbits/peekbits/getbits
-            kzfs.comptell = min((unsigned)kzfs.compleng,sizeof(olinbuf));
-            fread(&olinbuf[0],kzfs.comptell,1,kzfs.fil);
+            kzfs.comptell = min<int32_t>(kzfs.compleng,sizeof(olinbuf));
+            buildvfs_fread(&olinbuf[0],kzfs.comptell,1,kzfs.fil);
             //Make it re-load when there are < 32 bits left in FIFO
             bitpos = -(((int32_t)sizeof(olinbuf)-4)<<3);
             //Identity: filptr + (bitpos>>3) = &olinbuf[0]
@@ -3055,7 +3049,7 @@ void kpzdecode(int32_t const leng, intptr_t * const pic, int32_t * const xsiz, i
 
     if (kprender(kpzbuf, leng, *pic, ((*xsiz)<<2), *xsiz, *ysiz) < 0)
     {
-        Bfree((void *) *pic);
+        Xfree((void *) *pic);
         *pic = (intptr_t)NULL;
     }
 }

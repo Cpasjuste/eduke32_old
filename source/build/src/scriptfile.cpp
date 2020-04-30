@@ -11,6 +11,8 @@
 #include "compat.h"
 #include "cache1d.h"
 
+#include "vfs.h"
+
 
 #define ISWS(x) ((x == ' ') || (x == '\t') || (x == '\r') || (x == '\n'))
 static inline void skipoverws(scriptfile *sf) { if ((sf->textptr < sf->eof) && (!sf->textptr[0])) sf->textptr++; }
@@ -291,7 +293,6 @@ void scriptfile_preparse(scriptfile *sf, char *tx, int32_t flen)
     printf("[eof]\nnumlines=%d\n",sf->linenum);
     for (i=0; i<sf->linenum; i++) printf("line %d = byte %d\n",i,sf->lineoffs[i]);
 #endif
-    flen = nflen;
 
     sf->textbuf = sf->textptr = tx;
     sf->textlength = nflen;
@@ -300,8 +301,8 @@ void scriptfile_preparse(scriptfile *sf, char *tx, int32_t flen)
 
 scriptfile *scriptfile_fromfile(const char *fn)
 {
-    int32_t fp = kopen4load(fn, 0);
-    if (fp < 0) return nullptr;
+    buildvfs_kfd fp = kopen4load(fn, 0);
+    if (fp == buildvfs_kfd_invalid) return nullptr;
 
     uint32_t flen = kfilelength(fp);
     char *   tx   = (char *)Xmalloc(flen + 2);
@@ -340,10 +341,10 @@ scriptfile *scriptfile_fromstring(const char *string)
 void scriptfile_close(scriptfile *sf)
 {
     if (!sf) return;
-    Bfree(sf->lineoffs);
-    Bfree(sf->textbuf);
-    Bfree(sf->filename);
-    Bfree(sf);
+    Xfree(sf->lineoffs);
+    Xfree(sf->textbuf);
+    Xfree(sf->filename);
+    Xfree(sf);
 }
 
 int scriptfile_eof(scriptfile *sf)
@@ -379,7 +380,7 @@ int32_t scriptfile_getsymbolvalue(char const *name, int32_t *val)
     {
         if (name[0] == '0' && tolower(name[1]) == 'x')  // hex constants
         {
-            int64_t x;
+            uint64_t x;
             sscanf(name + 2, "%" PRIx64 "", &x);
 
             if (EDUKE32_PREDICT_FALSE(x > UINT32_MAX))

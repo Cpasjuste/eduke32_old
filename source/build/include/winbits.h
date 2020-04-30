@@ -1,38 +1,41 @@
 // Windows layer-independent code
 
+#ifndef winbits_h__
+#define winbits_h__
+
+#define NEED_DWMAPI_H
+#define NEED_BCRYPT_H
+
+#include "windows_inc.h"
+
 #include "compat.h"
 
-#define WindowClass "buildapp"
-
-extern int32_t backgroundidle;	// set to 1 to tell winlayer to go to idle priority when inactive
-
-extern int64_t win_timerfreq;
-
-extern char silentvideomodeswitch;
-
-extern BOOL CheckWinVersion(void);
-extern void win_allowtaskswitching(int32_t onf);
-extern int32_t win_checkinstance(void);
-
-#if defined(RENDERTYPEWIN) || SDL_MAJOR_VERSION==1
-extern int32_t win_inittimer(void);
-extern uint64_t win_getu64ticks(void);
+#ifdef APPNAME
+# define WindowClass APPNAME
+#else
+# define WindowClass "buildapp"
 #endif
 
-extern void win_open(void);
-extern void win_init(void);
-extern void win_setvideomode(int32_t c);
-extern void win_uninit(void);
-extern void win_close(void);
+// TODO: actually make the layout switching unnecessary :/
 
-extern void Win_GetOriginalLayoutName(void);
-extern void Win_SetKeyboardLayoutUS(int);
+extern int32_t win_priorityclass;
+extern char    win_silentvideomodeswitch;
+extern DWM_TIMING_INFO timingInfo;
 
-extern void ShowErrorBox(const char *m);
-
-extern LPTSTR GetWindowsErrorMsg(DWORD code);
-
-extern int32_t addsearchpath_ProgramFiles(const char *p);
-
-extern int32_t G_GetVersionFromWebsite(char *buffer);
-extern int32_t win_buildargs(char **argvbuf);
+int32_t windowsCheckForUpdates(char *buffer);
+int     windowsCheckAlreadyRunning(void);
+void    windowsDwmSetupComposition(int compEnable);
+int     windowsGetCommandLine(char **argvbuf);
+LPTSTR  windowsGetErrorMessage(DWORD code);
+HKL     windowsGetSystemKeyboardLayout(void);
+char *  windowsGetSystemKeyboardLayoutName(void);
+BOOL    windowsGetVersion(void);
+void    windowsHandleFocusChange(int const appactive);
+void    windowsShowError(const char *m);
+void    windowsPlatformCleanup(void);
+void    windowsPlatformInit(void);
+int     windowsPreInit(void);
+void    windowsSetupTimer(int useNtTimer);
+void    windowsSetKeyboardLayout(char const *layout, int focusChanged = false);
+void    windowsWaitForVBlank(void);
+#endif // winbits_h__

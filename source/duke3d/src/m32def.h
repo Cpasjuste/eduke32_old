@@ -79,10 +79,10 @@ typedef struct
     int32_t min, max;
 } memberlabel_t;
 
-extern const memberlabel_t SectorLabels[];
-extern const memberlabel_t WallLabels[];
-extern const memberlabel_t SpriteLabels[];
-extern const memberlabel_t LightLabels[];
+extern memberlabel_t const SectorLabels[];
+extern memberlabel_t const WallLabels[];
+extern memberlabel_t const SpriteLabels[];
+extern memberlabel_t const LightLabels[];
 
 
 typedef struct {
@@ -113,7 +113,7 @@ typedef struct {
     int32_t g_st;
     union {
         spritetype * pSprite;
-        uspritetype *pUSprite;
+        uspritetype const * pUSprite;
     };
     uint32_t flags;  // g_errorFlag, g_returnFlag;
 
@@ -475,6 +475,8 @@ enum ScriptKeywords_t
     CON_UPDATECURSECTNUM,
     CON_UPDATESECTOR,
     CON_UPDATESECTORZ,
+    CON_UPDATESECTORNEIGHBOR,
+    CON_UPDATESECTORNEIGHBORZ,
     CON_GETZRANGE,
     CON_CLIPMOVE,
     CON_LINEINTERSECT,

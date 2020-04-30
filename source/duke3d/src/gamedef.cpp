@@ -20,85 +20,120 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 //-------------------------------------------------------------------------
 
-#include "duke3d.h"
-#include "namesdyn.h"
 #include "gamedef.h"
-#include "gameexec.h"
-#include "savegame.h"
+
+#include "cheats.h"
 #include "common.h"
 #include "common_game.h"
-#include "cheats.h"
-
+#include "crc32.h"
+#include "duke3d.h"
+#include "gameexec.h"
+#include "gamestructures.h"
+#include "kplib.h"
+#include "namesdyn.h"
 #include "osd.h"
+#include "savegame.h"
+#include "vfs.h"
+
+#define LINE_NUMBER (g_lineNumber << 12)
 
 int32_t g_scriptVersion = 13; // 13 = 1.3D-style CON files, 14 = 1.4/1.5 style CON files
 
 char g_scriptFileName[BMAX_PATH] = "(none)";  // file we're currently compiling
 
-int32_t g_totalLines,g_lineNumber;
+int32_t g_totalLines;
+int32_t g_lineNumber;
+uint32_t g_scriptcrc;
 char g_szBuf[1024];
 
 #if !defined LUNATIC
-static char g_szCurrentBlockName[256] = "(none)", g_szLastBlockName[256] = "NULL";
-static int32_t g_checkingIfElse, g_processingState, g_lastKeyword = -1;
+static char *textptr;
+
+static char g_szCurrentBlockName[64] = "(none)";
+static char g_szLastBlockName[64] = "NULL";
+
+static bool g_checkingCase;
+static bool g_dynamicSoundMapping;
+static bool g_dynamicTileMapping;
+static bool g_labelsOnly;
+static bool g_processingState;
+static bool g_skipBranch;
+
+static int g_checkingIfElse;
+static int g_checkingSwitch;
+static int g_lastKeyword = -1;
+static int g_numBraces;
+static int g_numCases;
+
+static intptr_t apScriptGameEventEnd[MAXEVENTS];
+static intptr_t g_scriptActorOffset;
+static intptr_t g_scriptEventBreakOffset;
+static intptr_t g_scriptEventChainOffset;
+static intptr_t g_scriptEventOffset;
 
 // The pointer to the start of the case table in a switch statement.
 // First entry is 'default' code.
-static intptr_t *g_caseScriptPtr;
-static intptr_t previous_event;
-static int32_t g_numCases = 0, g_checkingCase = 0;
-static int32_t g_checkingSwitch = 0, g_currentEvent = -1;
-static int32_t g_labelsOnly = 0, g_skipKeywordCheck = 0, g_dynamicTileMapping = 0, g_dynamicSoundMapping = 0;
-static int32_t g_numBraces = 0;
+static intptr_t *g_caseTablePtr;
 
-static int32_t C_ParseCommand(int32_t loop);
-static int32_t C_SetScriptSize(int32_t size);
+static bool C_ParseCommand(bool loop = false);
+static void C_SetScriptSize(int32_t newsize);
 #endif
 
-int32_t g_numXStrings = 0;
+int32_t g_errorCnt;
+int32_t g_warningCnt;
+int32_t g_numXStrings;
 
 #ifdef LUNATIC
 weapondata_t g_playerWeapon[MAXPLAYERS][MAX_WEAPONS];
 #endif
 
 #if !defined LUNATIC
-static intptr_t g_parsingActorPtr;
-static intptr_t g_parsingEventPtr;
-static intptr_t g_parsingEventBreakPtr;
-static intptr_t apScriptGameEventEnd[MAXEVENTS];
-static char *textptr;
-#endif
-
-int32_t g_errorCnt,g_warningCnt;
-
-extern int32_t g_highestSoundIdx;
-
-#if !defined LUNATIC
-static char *C_GetLabelType(int32_t type)
+static char *C_GetLabelType(int const type)
 {
-    int32_t i;
-    char x[64];
-
-    const char *LabelTypeText[] =
+    static tokenmap_t const LabelType[] =
     {
-        "define",
-        "state",
-        "actor",
-        "action",
-        "ai",
-        "move"
+        { "action", LABEL_ACTION },
+        { "actor",  LABEL_ACTOR },
+        { "ai",     LABEL_AI },
+        { "define", LABEL_DEFINE },
+        { "event",  LABEL_EVENT },
+        { "move",   LABEL_MOVE },
+        { "state",  LABEL_STATE },
     };
 
-    x[0] = 0;
-    for (i=0; i<6; i++)
+    char x[64] = {};
+
+    for (auto &label : LabelType)
     {
-        if (!(type & (1<<i))) continue;
+        if ((type & label.val) != label.val)
+            continue;
+
         if (x[0]) Bstrcat(x, " or ");
-        Bstrcat(x, LabelTypeText[i]);
+        Bstrcat(x, label.token);
+
+        if (type == label.val)
+            break;
     }
 
     return Xstrdup(x);
 }
+
+static hashtable_t h_keywords   = { CON_END>>1, NULL };
+static hashtable_t h_iter       = { ITER_END>>1, NULL };
+
+static hashtable_t *const tables[] = {
+    &h_arrays,
+    &h_gamevars,
+    &h_iter,
+    &h_keywords,
+    &h_labels,
+};
+
+static hashtable_t *const tables_free[] = {
+    &h_iter,
+    &h_keywords,
+    &h_labels,
+};
 
 static tokenmap_t const vm_keywords[] =
 {
@@ -111,19 +146,19 @@ static tokenmap_t const vm_keywords[] =
     { "addammo",                CON_ADDAMMO },
     { "addinventory",           CON_ADDINVENTORY },
     { "addkills",               CON_ADDKILLS },
-    { "addlog",                 CON_ADDLOG },
+    { "addlog",                 CON_ADDLOGVAR },
     { "addlogvar",              CON_ADDLOGVAR },
     { "addphealth",             CON_ADDPHEALTH },
     { "addstrength",            CON_ADDSTRENGTH },
     { "addvar",                 CON_ADDVAR },
     { "addvarvar",              CON_ADDVARVAR },
     { "addweapon",              CON_ADDWEAPON },
-    { "addweaponvar",           CON_ADDWEAPONVAR },
+    { "addweaponvar",           CON_ADDWEAPON },
     { "ai",                     CON_AI },
     { "andvar",                 CON_ANDVAR },
     { "andvarvar",              CON_ANDVARVAR },
     { "angoff",                 CON_ANGOFF },
-    { "angoffvar",              CON_ANGOFFVAR },
+    { "angoffvar",              CON_ANGOFF },
     { "appendevent",            CON_APPENDEVENT },
     { "betaname",               CON_BETANAME },
     { "break",                  CON_BREAK },
@@ -131,6 +166,8 @@ static tokenmap_t const vm_keywords[] =
     { "calchypotenuse",         CON_CALCHYPOTENUSE },
     { "cansee",                 CON_CANSEE },
     { "canseespr",              CON_CANSEESPR },
+    { "capia",                  CON_CAPIA },
+    { "capis",                  CON_CAPIS },
     { "case",                   CON_CASE },
     { "changespritesect",       CON_CHANGESPRITESECT },
     { "changespritestat",       CON_CHANGESPRITESTAT },
@@ -156,6 +193,7 @@ static tokenmap_t const vm_keywords[] =
     { "default",                CON_DEFAULT },
     { "define",                 CON_DEFINE },
     { "definecheat",            CON_DEFINECHEAT },
+    { "definecheatdescription", CON_DEFINECHEATDESCRIPTION },
     { "definegamefuncname",     CON_DEFINEGAMEFUNCNAME },
     { "definegametype",         CON_DEFINEGAMETYPE },
     { "definelevelname",        CON_DEFINELEVELNAME },
@@ -192,18 +230,18 @@ static tokenmap_t const vm_keywords[] =
     { "ends",                   CON_ENDS },
     { "endswitch",              CON_ENDSWITCH },
     { "enhanced",               CON_ENHANCED },
-    { "eqspawnvar",             CON_EQSPAWNVAR },
-    { "eshootvar",              CON_ESHOOTVAR },
-    { "espawnvar",              CON_ESPAWNVAR },
+    { "eqspawnvar",             CON_EQSPAWN },
+    { "eshootvar",              CON_ESHOOT },
+    { "espawnvar",              CON_ESPAWN },
     { "eventloadactor",         CON_EVENTLOADACTOR },
-    { "ezshootvar",             CON_EZSHOOTVAR },
+    { "ezshootvar",             CON_EZSHOOT },
     { "fall",                   CON_FALL },
-    { "findnearactor3dvar",     CON_FINDNEARACTOR3DVAR },
-    { "findnearactorvar",       CON_FINDNEARACTORVAR },
-    { "findnearactorzvar",      CON_FINDNEARACTORZVAR },
-    { "findnearsprite3dvar",    CON_FINDNEARSPRITE3DVAR },
-    { "findnearspritevar",      CON_FINDNEARSPRITEVAR },
-    { "findnearspritezvar",     CON_FINDNEARSPRITEZVAR },
+    { "findnearactor3dvar",     CON_FINDNEARACTOR3D },
+    { "findnearactorvar",       CON_FINDNEARACTOR },
+    { "findnearactorzvar",      CON_FINDNEARACTORZ },
+    { "findnearsprite3dvar",    CON_FINDNEARSPRITE3D },
+    { "findnearspritevar",      CON_FINDNEARSPRITE },
+    { "findnearspritezvar",     CON_FINDNEARSPRITEZ },
     { "findotherplayer",        CON_FINDOTHERPLAYER },
     { "findplayer",             CON_FINDPLAYER },
     { "flash",                  CON_FLASH },
@@ -218,11 +256,13 @@ static tokenmap_t const vm_keywords[] =
     { "getactorvar",            CON_GETACTORVAR },
     { "getangle",               CON_GETANGLE },
     { "getangletotarget",       CON_GETANGLETOTARGET },
+    { "getarraysequence",       CON_GETARRAYSEQUENCE },
     { "getarraysize",           CON_GETARRAYSIZE },
     { "getceilzofslope",        CON_GETCEILZOFSLOPE },
     { "getclosestcol",          CON_GETCLOSESTCOL },
     { "getcurraddress",         CON_GETCURRADDRESS },
     { "getflorzofslope",        CON_GETFLORZOFSLOPE },
+    { "getgamefuncbind",        CON_GETGAMEFUNCBIND },
     { "getincangle",            CON_GETINCANGLE },
     { "getinput",               CON_GETINPUT },
     { "getkeyname",             CON_GETKEYNAME },
@@ -245,14 +285,14 @@ static tokenmap_t const vm_keywords[] =
     { "getwall",                CON_GETWALL },
     { "getzrange",              CON_GETZRANGE },
     { "globalsound",            CON_GLOBALSOUND },
-    { "globalsoundvar",         CON_GLOBALSOUNDVAR },
+    { "globalsoundvar",         CON_GLOBALSOUND },
     { "gmaxammo",               CON_GMAXAMMO },
     { "guniqhudid",             CON_GUNIQHUDID },
     { "guts",                   CON_GUTS },
     { "headspritesect",         CON_HEADSPRITESECT },
     { "headspritestat",         CON_HEADSPRITESTAT },
     { "hitradius",              CON_HITRADIUS },
-    { "hitradiusvar",           CON_HITRADIUSVAR },
+    { "hitradiusvar",           CON_HITRADIUS },
     { "hitscan",                CON_HITSCAN },
     { "ifaction",               CON_IFACTION },
     { "ifactioncount",          CON_IFACTIONCOUNT },
@@ -383,7 +423,7 @@ static tokenmap_t const vm_keywords[] =
     { "preloadtrackslotforswap", CON_PRELOADTRACKSLOTFORSWAP },
     { "pstomp",                 CON_PSTOMP },
     { "qgetsysstr",             CON_QGETSYSSTR },
-    { "qspawnvar",              CON_QSPAWNVAR },
+    { "qspawnvar",              CON_QSPAWN },
     { "qsprintf",               CON_QSPRINTF },
     { "qstrcat",                CON_QSTRCAT },
     { "qstrcmp",                CON_QSTRCMP },
@@ -430,6 +470,7 @@ static tokenmap_t const vm_keywords[] =
     { "setactorsoundpitch",     CON_SETACTORSOUNDPITCH },
     { "setactorvar",            CON_SETACTORVAR },
     { "setarray",               CON_SETARRAY },
+    { "setarraysequence",       CON_SETARRAYSEQUENCE },
     { "setaspect",              CON_SETASPECT },
     { "setcfgname",             CON_SETCFGNAME },
     { "setdefname",             CON_SETDEFNAME },
@@ -455,7 +496,7 @@ static tokenmap_t const vm_keywords[] =
     { "shiftvarr",              CON_SHIFTVARR },
     { "shiftvarvarl",           CON_SHIFTVARVARL },
     { "shiftvarvarr",           CON_SHIFTVARVARR },
-    { "shootvar",               CON_SHOOTVAR },
+    { "shootvar",               CON_SHOOT },
     { "showview",               CON_SHOWVIEW },
     { "showviewunbiased",       CON_SHOWVIEWUNBIASED },
     { "showviewq16",            CON_SHOWVIEWQ16 },
@@ -467,8 +508,8 @@ static tokenmap_t const vm_keywords[] =
     { "smaxammo",               CON_SMAXAMMO },
     { "sound",                  CON_SOUND },
     { "soundonce",              CON_SOUNDONCE },
-    { "soundoncevar",           CON_SOUNDONCEVAR },
-    { "soundvar",               CON_SOUNDVAR },
+    { "soundoncevar",           CON_SOUNDONCE },
+    { "soundvar",               CON_SOUND },
     { "spawn",                  CON_SPAWN },
     { "spawnceilingglass",      CON_SPAWNCEILINGGLASS },
     { "spawnwallstainedglass",  CON_SPAWNWALLSTAINEDGLASS },
@@ -488,17 +529,18 @@ static tokenmap_t const vm_keywords[] =
     { "startscreen",            CON_STARTSCREEN },
     { "starttrack",             CON_STARTTRACK },
     { "starttrackslot",         CON_STARTTRACKSLOT },
-    { "starttrackvar",          CON_STARTTRACKVAR },
+    { "starttrackvar",          CON_STARTTRACK },
     { "state",                  CON_STATE },
     { "stopactorsound",         CON_STOPACTORSOUND },
     { "stopallmusic",           CON_STOPALLMUSIC },
     { "stopallsounds",          CON_STOPALLSOUNDS },
     { "stopsound",              CON_STOPSOUND },
-    { "stopsoundvar",           CON_STOPSOUNDVAR },
+    { "stopsoundvar",           CON_STOPSOUND },
     { "strength",               CON_STRENGTH },
     { "subvar",                 CON_SUBVAR },
     { "subvarvar",              CON_SUBVARVAR },
     { "switch",                 CON_SWITCH },
+    { "swaparrays",             CON_SWAPARRAYS },
     { "swaptrackslot",          CON_SWAPTRACKSLOT },
     { "time",                   CON_TIME },
     { "tip",                    CON_TIP },
@@ -510,6 +552,8 @@ static tokenmap_t const vm_keywords[] =
     { "undefinevolume",         CON_UNDEFINEVOLUME },
     { "updatesector",           CON_UPDATESECTOR },
     { "updatesectorz",          CON_UPDATESECTORZ },
+    { "updatesectorneighbor",  CON_UPDATESECTORNEIGHBOR },
+    { "updatesectorneighborz", CON_UPDATESECTORNEIGHBORZ },
     { "useractor",              CON_USERACTOR },
     { "userquote",              CON_USERQUOTE },
     { "wackplayer",             CON_WACKPLAYER },
@@ -520,7 +564,7 @@ static tokenmap_t const vm_keywords[] =
     { "writearraytofile",       CON_WRITEARRAYTOFILE },
     { "xorvar",                 CON_XORVAR },
     { "xorvarvar",              CON_XORVARVAR },
-    { "zshootvar",              CON_ZSHOOTVAR },
+    { "zshootvar",              CON_ZSHOOT },
     { "{",                      CON_LEFTBRACE },
     { "}",                      CON_RIGHTBRACE },
 
@@ -568,6 +612,7 @@ static tokenmap_t const vm_keywords[] =
     { "getw",                   CON_GETWALL },
     { "getu",                   CON_GETUSERDEF },
     { "geti",                   CON_GETINPUT },
+    { "getarrayseq",            CON_GETARRAYSEQUENCE },
 
     { "setp",                   CON_SETPLAYER },
     { "setpv",                  CON_SETPLAYERVAR },
@@ -577,42 +622,238 @@ static tokenmap_t const vm_keywords[] =
     { "setw",                   CON_SETWALL },
     { "setu",                   CON_SETUSERDEF },
     { "seti",                   CON_SETINPUT },
+    { "setarrayseq",            CON_SETARRAYSEQUENCE },
 
     { "string",                 CON_DEFINEQUOTE },
     { "print",                  CON_QUOTE },
 
     { "dc",                     CON_DEFINECHEAT },
+    { "dcd",                    CON_DEFINECHEATDESCRIPTION },
     { "udc",                    CON_UNDEFINECHEAT },
     { "ck",                     CON_CHEATKEYS },
 
     { "qputs",                  CON_REDEFINEQUOTE },
 
-    { "espawn",                 CON_ESPAWNVAR },
-    { "qspawn",                 CON_QSPAWNVAR },
-    { "eqspawn",                CON_EQSPAWNVAR },
+    { "espawn",                 CON_ESPAWN },
+    { "qspawn",                 CON_QSPAWN },
+    { "eqspawn",                CON_EQSPAWN },
 
-    { "eshoot",                 CON_ESHOOTVAR },
-    { "zshoot",                 CON_ZSHOOTVAR },
-    { "ezshoot",                CON_EZSHOOTVAR },
-    { "shoot",                  CON_SHOOTVAR },
+    { "eshoot",                 CON_ESHOOT },
+    { "zshoot",                 CON_ZSHOOT },
+    { "ezshoot",                CON_EZSHOOT },
+    { "shoot",                  CON_SHOOT },
 
-    { "findnearactor",          CON_FINDNEARACTORVAR },
-    { "findnearactor3d",        CON_FINDNEARACTOR3DVAR },
-    { "findnearactorz",         CON_FINDNEARACTORZVAR },
+    { "findnearactor",          CON_FINDNEARACTOR },
+    { "findnearactor3d",        CON_FINDNEARACTOR3D },
+    { "findnearactorz",         CON_FINDNEARACTORZ },
 
-    { "findnearsprite",         CON_FINDNEARSPRITEVAR },
-    { "findnearsprite3d",       CON_FINDNEARSPRITE3DVAR },
-    { "findnearspritez",        CON_FINDNEARSPRITEZVAR },
+    { "findnearsprite",         CON_FINDNEARSPRITE },
+    { "findnearsprite3d",       CON_FINDNEARSPRITE3D },
+    { "findnearspritez",        CON_FINDNEARSPRITEZ },
 };
 
-char const * VM_GetKeywordForID(int32_t id)
+static const vec2_t varvartable[] =
 {
-    // could be better but this is only called for diagnostics, ayy lmao
+    { CON_IFVARVARA,         CON_IFVARA },
+    { CON_IFVARVARAE,        CON_IFVARAE },
+    { CON_IFVARVARAND,       CON_IFVARAND },
+    { CON_IFVARVARB,         CON_IFVARB },
+    { CON_IFVARVARBE,        CON_IFVARBE },
+    { CON_IFVARVARBOTH,      CON_IFVARBOTH },
+    { CON_IFVARVARE,         CON_IFVARE },
+    { CON_IFVARVAREITHER,    CON_IFVAREITHER },
+    { CON_IFVARVARG,         CON_IFVARG },
+    { CON_IFVARVARGE,        CON_IFVARGE },
+    { CON_IFVARVARL,         CON_IFVARL },
+    { CON_IFVARVARLE,        CON_IFVARLE },
+    { CON_IFVARVARN,         CON_IFVARN },
+    { CON_IFVARVAROR,        CON_IFVAROR },
+    { CON_IFVARVARXOR,       CON_IFVARXOR },
+
+    { CON_ADDVARVAR,         CON_ADDVAR },
+    { CON_ANDVARVAR,         CON_ANDVAR },
+    { CON_DISPLAYRANDVARVAR, CON_DISPLAYRANDVAR },
+    { CON_DIVVARVAR,         CON_DIVVAR },
+    { CON_MODVARVAR,         CON_MODVAR },
+    { CON_MULVARVAR,         CON_MULVAR },
+    { CON_ORVARVAR,          CON_ORVAR },
+    { CON_RANDVARVAR,        CON_RANDVAR },
+    { CON_SETVARVAR,         CON_SETVAR },
+    { CON_SHIFTVARVARL,      CON_SHIFTVARL },
+    { CON_SHIFTVARVARR,      CON_SHIFTVARR },
+    { CON_SUBVARVAR,         CON_SUBVAR },
+    { CON_WHILEVARVARL,      CON_WHILEVARL },
+    { CON_WHILEVARVARN,      CON_WHILEVARN },
+    { CON_XORVARVAR,         CON_XORVAR },
+};
+
+#ifdef CON_DISCRETE_VAR_ACCESS
+static const vec2_t globalvartable[] =
+{
+    { CON_IFVARA,         CON_IFVARA_GLOBAL },
+    { CON_IFVARAE,        CON_IFVARAE_GLOBAL },
+    { CON_IFVARAND,       CON_IFVARAND_GLOBAL },
+    { CON_IFVARB,         CON_IFVARB_GLOBAL },
+    { CON_IFVARBE,        CON_IFVARBE_GLOBAL },
+    { CON_IFVARBOTH,      CON_IFVARBOTH_GLOBAL },
+    { CON_IFVARE,         CON_IFVARE_GLOBAL },
+    { CON_IFVAREITHER,    CON_IFVAREITHER_GLOBAL },
+    { CON_IFVARG,         CON_IFVARG_GLOBAL },
+    { CON_IFVARGE,        CON_IFVARGE_GLOBAL },
+    { CON_IFVARL,         CON_IFVARL_GLOBAL },
+    { CON_IFVARLE,        CON_IFVARLE_GLOBAL },
+    { CON_IFVARN,         CON_IFVARN_GLOBAL },
+    { CON_IFVAROR,        CON_IFVAROR_GLOBAL },
+    { CON_IFVARXOR,       CON_IFVARXOR_GLOBAL },
+    { CON_WHILEVARL,      CON_WHILEVARL_GLOBAL },
+    { CON_WHILEVARN,      CON_WHILEVARN_GLOBAL },
+
+    { CON_ADDVAR,         CON_ADDVAR_GLOBAL },
+    { CON_ANDVAR,         CON_ANDVAR_GLOBAL },
+    { CON_DIVVAR,         CON_DIVVAR_GLOBAL },
+    { CON_MODVAR,         CON_MODVAR_GLOBAL },
+    { CON_MULVAR,         CON_MULVAR_GLOBAL },
+    { CON_ORVAR,          CON_ORVAR_GLOBAL },
+    { CON_RANDVAR,        CON_RANDVAR_GLOBAL },
+    { CON_SETVAR,         CON_SETVAR_GLOBAL },
+    { CON_SHIFTVARL,      CON_SHIFTVARL_GLOBAL },
+    { CON_SHIFTVARR,      CON_SHIFTVARR_GLOBAL },
+    { CON_SUBVAR,         CON_SUBVAR_GLOBAL },
+    { CON_XORVAR,         CON_XORVAR_GLOBAL },
+};
+
+static const vec2_t playervartable[] =
+{
+    { CON_IFVARA,         CON_IFVARA_PLAYER },
+    { CON_IFVARAE,        CON_IFVARAE_PLAYER },
+    { CON_IFVARAND,       CON_IFVARAND_PLAYER },
+    { CON_IFVARB,         CON_IFVARB_PLAYER },
+    { CON_IFVARBE,        CON_IFVARBE_PLAYER },
+    { CON_IFVARBOTH,      CON_IFVARBOTH_PLAYER },
+    { CON_IFVARE,         CON_IFVARE_PLAYER },
+    { CON_IFVAREITHER,    CON_IFVAREITHER_PLAYER },
+    { CON_IFVARG,         CON_IFVARG_PLAYER },
+    { CON_IFVARGE,        CON_IFVARGE_PLAYER },
+    { CON_IFVARL,         CON_IFVARL_PLAYER },
+    { CON_IFVARLE,        CON_IFVARLE_PLAYER },
+    { CON_IFVARN,         CON_IFVARN_PLAYER },
+    { CON_IFVAROR,        CON_IFVAROR_PLAYER },
+    { CON_IFVARXOR,       CON_IFVARXOR_PLAYER },
+    { CON_WHILEVARL,      CON_WHILEVARL_PLAYER },
+    { CON_WHILEVARN,      CON_WHILEVARN_PLAYER },
+
+    { CON_ADDVAR,         CON_ADDVAR_PLAYER },
+    { CON_ANDVAR,         CON_ANDVAR_PLAYER },
+    { CON_DIVVAR,         CON_DIVVAR_PLAYER },
+    { CON_MODVAR,         CON_MODVAR_PLAYER },
+    { CON_MULVAR,         CON_MULVAR_PLAYER },
+    { CON_ORVAR,          CON_ORVAR_PLAYER },
+    { CON_RANDVAR,        CON_RANDVAR_PLAYER },
+    { CON_SETVAR,         CON_SETVAR_PLAYER },
+    { CON_SHIFTVARL,      CON_SHIFTVARL_PLAYER },
+    { CON_SHIFTVARR,      CON_SHIFTVARR_PLAYER },
+    { CON_SUBVAR,         CON_SUBVAR_PLAYER },
+    { CON_XORVAR,         CON_XORVAR_PLAYER },
+};
+
+static const vec2_t actorvartable[] =
+{
+    { CON_IFVARA,         CON_IFVARA_ACTOR },
+    { CON_IFVARAE,        CON_IFVARAE_ACTOR },
+    { CON_IFVARAND,       CON_IFVARAND_ACTOR },
+    { CON_IFVARB,         CON_IFVARB_ACTOR },
+    { CON_IFVARBE,        CON_IFVARBE_ACTOR },
+    { CON_IFVARBOTH,      CON_IFVARBOTH_ACTOR },
+    { CON_IFVARE,         CON_IFVARE_ACTOR },
+    { CON_IFVAREITHER,    CON_IFVAREITHER_ACTOR },
+    { CON_IFVARG,         CON_IFVARG_ACTOR },
+    { CON_IFVARGE,        CON_IFVARGE_ACTOR },
+    { CON_IFVARL,         CON_IFVARL_ACTOR },
+    { CON_IFVARLE,        CON_IFVARLE_ACTOR },
+    { CON_IFVARN,         CON_IFVARN_ACTOR },
+    { CON_IFVAROR,        CON_IFVAROR_ACTOR },
+    { CON_IFVARXOR,       CON_IFVARXOR_ACTOR },
+    { CON_WHILEVARL,      CON_WHILEVARL_ACTOR },
+    { CON_WHILEVARN,      CON_WHILEVARN_ACTOR },
+
+    { CON_ADDVAR,         CON_ADDVAR_ACTOR },
+    { CON_ANDVAR,         CON_ANDVAR_ACTOR },
+    { CON_DIVVAR,         CON_DIVVAR_ACTOR },
+    { CON_MODVAR,         CON_MODVAR_ACTOR },
+    { CON_MULVAR,         CON_MULVAR_ACTOR },
+    { CON_ORVAR,          CON_ORVAR_ACTOR },
+    { CON_RANDVAR,        CON_RANDVAR_ACTOR },
+    { CON_SETVAR,         CON_SETVAR_ACTOR },
+    { CON_SHIFTVARL,      CON_SHIFTVARL_ACTOR },
+    { CON_SHIFTVARR,      CON_SHIFTVARR_ACTOR },
+    { CON_SUBVAR,         CON_SUBVAR_ACTOR },
+    { CON_XORVAR,         CON_XORVAR_ACTOR },
+};
+#endif
+
+static inthashtable_t h_varvar = { NULL, INTHASH_SIZE(ARRAY_SIZE(varvartable)) };
+#ifdef CON_DISCRETE_VAR_ACCESS
+static inthashtable_t h_globalvar = { NULL, INTHASH_SIZE(ARRAY_SIZE(globalvartable)) };
+static inthashtable_t h_playervar = { NULL, INTHASH_SIZE(ARRAY_SIZE(playervartable)) };
+static inthashtable_t h_actorvar = { NULL, INTHASH_SIZE(ARRAY_SIZE(actorvartable)) };
+#endif
+
+static inthashtable_t *const inttables[] = {
+    &h_varvar,
+#ifdef CON_DISCRETE_VAR_ACCESS
+    &h_globalvar,
+    &h_playervar,
+    &h_actorvar,
+#endif
+};
+
+
+const tokenmap_t iter_tokens [] =
+{
+    { "allsprites",       ITER_ALLSPRITES },
+    { "allspritesbystat", ITER_ALLSPRITESBYSTAT },
+    { "allspritesbysect", ITER_ALLSPRITESBYSECT },
+    { "allsectors",       ITER_ALLSECTORS },
+    { "allwalls",         ITER_ALLWALLS },
+    { "activelights",     ITER_ACTIVELIGHTS },
+    { "drawnsprites",     ITER_DRAWNSPRITES },
+    { "spritesofsector",  ITER_SPRITESOFSECTOR },
+    { "spritesofstatus",  ITER_SPRITESOFSTATUS },
+    { "loopofwall",       ITER_LOOPOFWALL },
+    { "wallsofsector",    ITER_WALLSOFSECTOR },
+    { "range",            ITER_RANGE },
+    // vvv alternatives go here vvv
+    { "lights",           ITER_ACTIVELIGHTS },
+    { "sprofsec",         ITER_SPRITESOFSECTOR },
+    { "sprofstat",        ITER_SPRITESOFSTATUS },
+    { "walofsec",         ITER_WALLSOFSECTOR },
+};
+
+// some keywords generate different opcodes depending on the context the keyword is used in
+// keywords_for_private_opcodes[] resolves those opcodes to the publicly facing keyword that can generate them
+static const tokenmap_t keywords_for_private_opcodes[] =
+{
+    { "getactor", CON_GETSPRITEEXT },
+    { "getactor", CON_GETACTORSTRUCT },
+    { "getactor", CON_GETSPRITESTRUCT },
+
+    { "setactor", CON_SETSPRITEEXT },
+    { "setactor", CON_SETACTORSTRUCT },
+    { "setactor", CON_SETSPRITESTRUCT },
+};
+
+char const *VM_GetKeywordForID(int32_t id)
+{
+    // could be better, but this is used strictly for diagnostic warning and error messages
     for (tokenmap_t const & keyword : vm_keywords)
         if (keyword.val == id)
             return keyword.token;
 
-    return nullptr;
+    for (tokenmap_t const & keyword : keywords_for_private_opcodes)
+        if (keyword.val == id)
+            return keyword.token;
+
+    return "<unknown instruction>";
 }
 #endif
 
@@ -754,6 +995,7 @@ const char *EventNames[MAXEVENTS] =
     "EVENT_ENDLEVELSCREEN",
     "EVENT_EXITGAMESCREEN",
     "EVENT_EXITPROGRAMSCREEN",
+    "EVENT_ALTFIRE",
     "EVENT_ALTWEAPON",
     "EVENT_DISPLAYOVERHEADMAPPLAYER",
     "EVENT_MENUCURSORLEFT",
@@ -769,788 +1011,94 @@ const char *EventNames[MAXEVENTS] =
     "EVENT_DAMAGEWALL",
     "EVENT_DAMAGEFLOOR",
     "EVENT_DAMAGECEILING",
+    "EVENT_DISPLAYROOMSCAMERATILE",
+    "EVENT_RESETGOTPICS",
+    "EVENT_VALIDATESTART",
+    "EVENT_NEWGAMECUSTOM",
+    "EVENT_INITCOMPLETE",
+    "EVENT_CAPIR",
 #ifdef LUNATIC
     "EVENT_ANIMATEALLSPRITES",
 #endif
 };
 
-#if !defined LUNATIC
-const memberlabel_t SectorLabels[]=
-{
-    { "wallptr",         SECTOR_WALLPTR,         0, 0 },
-    { "wallnum",         SECTOR_WALLNUM,         0, 0 },
-    { "ceilingz",        SECTOR_CEILINGZ,        0, 0 },
-    { "ceilingzgoal",    SECTOR_CEILINGZGOAL,    0, 0 },
-    { "ceilingzvel",     SECTOR_CEILINGZVEL,     0, 0 },
-    { "floorz",          SECTOR_FLOORZ,          0, 0 },
-    { "floorzgoal",      SECTOR_FLOORZGOAL,      0, 0 },
-    { "floorzvel",       SECTOR_FLOORZVEL,       0, 0 },
-    { "ceilingstat",     SECTOR_CEILINGSTAT,     0, 0 },
-    { "floorstat",       SECTOR_FLOORSTAT,       0, 0 },
-    { "ceilingpicnum",   SECTOR_CEILINGPICNUM,   0, 0 },
-    { "ceilingslope",    SECTOR_CEILINGSLOPE,    0, 0 },
-    { "ceilingshade",    SECTOR_CEILINGSHADE,    0, 0 },
-    { "ceilingpal",      SECTOR_CEILINGPAL,      0, 0 },
-    { "ceilingxpanning", SECTOR_CEILINGXPANNING, 0, 0 },
-    { "ceilingypanning", SECTOR_CEILINGYPANNING, 0, 0 },
-    { "floorpicnum",     SECTOR_FLOORPICNUM,     0, 0 },
-    { "floorslope",      SECTOR_FLOORSLOPE,      0, 0 },
-    { "floorshade",      SECTOR_FLOORSHADE,      0, 0 },
-    { "floorpal",        SECTOR_FLOORPAL,        0, 0 },
-    { "floorxpanning",   SECTOR_FLOORXPANNING,   0, 0 },
-    { "floorypanning",   SECTOR_FLOORYPANNING,   0, 0 },
-    { "visibility",      SECTOR_VISIBILITY,      0, 0 },
-    { "fogpal",          SECTOR_FOGPAL,          0, 0 }, // formerly filler
-    { "alignto",         SECTOR_FOGPAL,          0, 0 }, // formerly filler
-    { "lotag",           SECTOR_LOTAG,           0, 0 },
-    { "hitag",           SECTOR_HITAG,           0, 0 },
-    { "extra",           SECTOR_EXTRA,           0, 0 },
-    { "ceilingbunch",    SECTOR_CEILINGBUNCH,    0, 0 },
-    { "floorbunch",      SECTOR_FLOORBUNCH,      0, 0 },
-    { "ulotag",          SECTOR_ULOTAG,          0, 0 },
-    { "uhitag",          SECTOR_UHITAG,          0, 0 },
-    { NULL,             -1,                      0, 0  }     // END OF LIST
-};
+uint8_t *bitptr; // pointer to bitmap of which bytecode positions contain pointers
 
-const memberlabel_t WallLabels[]=
-{
-    { "x",          WALL_X,          0, 0 },
-    { "y",          WALL_Y,          0, 0 },
-    { "point2",     WALL_POINT2,     0, 0 },
-    { "nextwall",   WALL_NEXTWALL,   0, 0 },
-    { "nextsector", WALL_NEXTSECTOR, 0, 0 },
-    { "cstat",      WALL_CSTAT,      0, 0 },
-    { "picnum",     WALL_PICNUM,     0, 0 },
-    { "overpicnum", WALL_OVERPICNUM, 0, 0 },
-    { "shade",      WALL_SHADE,      0, 0 },
-    { "pal",        WALL_PAL,        0, 0 },
-    { "xrepeat",    WALL_XREPEAT,    0, 0 },
-    { "yrepeat",    WALL_YREPEAT,    0, 0 },
-    { "xpanning",   WALL_XPANNING,   0, 0 },
-    { "ypanning",   WALL_YPANNING,   0, 0 },
-    { "lotag",      WALL_LOTAG,      0, 0 },
-    { "hitag",      WALL_HITAG,      0, 0 },
-    { "extra",      WALL_EXTRA,      0, 0 },
-    { "ulotag",     WALL_ULOTAG,     0, 0 },
-    { "uhitag",     WALL_UHITAG,     0, 0 },
-    { "blend",      WALL_BLEND,      0, 0 },
-    { NULL,         -1,              0, 0  }     // END OF LIST
-};
-
-const memberlabel_t ActorLabels[]=
-{
-    { "x",              ACTOR_X,                      0, 0 },
-    { "y",              ACTOR_Y,                      0, 0 },
-    { "z",              ACTOR_Z,                      0, 0 },
-    { "cstat",          ACTOR_CSTAT,                  0, 0 },
-    { "picnum",         ACTOR_PICNUM,                 0, 0 },
-    { "shade",          ACTOR_SHADE,                  0, 0 },
-    { "pal",            ACTOR_PAL,                    0, 0 },
-    { "clipdist",       ACTOR_CLIPDIST,               0, 0 },
-//    { "filler",       ACTOR_DETAIL,                 0, 0 },
-    { "blend",          ACTOR_DETAIL,                 0, 0 },
-    { "xrepeat",        ACTOR_XREPEAT,                0, 0 },
-    { "yrepeat",        ACTOR_YREPEAT,                0, 0 },
-    { "xoffset",        ACTOR_XOFFSET,                0, 0 },
-    { "yoffset",        ACTOR_YOFFSET,                0, 0 },
-    { "sectnum",        ACTOR_SECTNUM,                0, 0 },
-    { "statnum",        ACTOR_STATNUM,                0, 0 },
-    { "ang",            ACTOR_ANG,                    0, 0 },
-    { "owner",          ACTOR_OWNER,                  0, 0 },
-    { "xvel",           ACTOR_XVEL,                   0, 0 },
-    { "yvel",           ACTOR_YVEL,                   0, 0 },
-    { "zvel",           ACTOR_ZVEL,                   0, 0 },
-    { "lotag",          ACTOR_LOTAG,                  0, 0 },
-    { "hitag",          ACTOR_HITAG,                  0, 0 },
-    { "extra",          ACTOR_EXTRA,                  0, 0 },
-
-    // ActorExtra labels...
-    { "htcgg",          ACTOR_HTCGG,                  0, 0 },
-    { "htpicnum",       ACTOR_HTPICNUM,               0, 0 },
-    { "htang",          ACTOR_HTANG,                  0, 0 },
-    { "htextra",        ACTOR_HTEXTRA,                0, 0 },
-    { "htowner",        ACTOR_HTOWNER,                0, 0 },
-    { "htmovflag",      ACTOR_HTMOVFLAG,              0, 0 },
-    { "httempang",      ACTOR_HTTEMPANG,              0, 0 },
-    { "htactorstayput", ACTOR_HTACTORSTAYPUT,         0, 0 },
-    { "htdispicnum",    ACTOR_HTDISPICNUM,            0, 0 },
-    { "httimetosleep",  ACTOR_HTTIMETOSLEEP,          0, 0 },
-    { "htfloorz",       ACTOR_HTFLOORZ,               0, 0 },
-    { "htceilingz",     ACTOR_HTCEILINGZ,             0, 0 },
-    { "htlastvx",       ACTOR_HTLASTVX,               0, 0 },
-    { "htlastvy",       ACTOR_HTLASTVY,               0, 0 },
-    { "htbposx",        ACTOR_HTBPOSX,                0, 0 },
-    { "htbposy",        ACTOR_HTBPOSY,                0, 0 },
-    { "htbposz",        ACTOR_HTBPOSZ,                0, 0 },
-    { "htg_t",          ACTOR_HTG_T,                  LABEL_HASPARM2, 10 },
-
-    // model flags
-
-    { "angoff",         ACTOR_ANGOFF,                 0, 0 },
-    { "pitch",          ACTOR_PITCH,                  0, 0 },
-    { "roll",           ACTOR_ROLL,                   0, 0 },
-    { "mdxoff",         ACTOR_MDXOFF,                 0, 0 },
-    { "mdyoff",         ACTOR_MDYOFF,                 0, 0 },
-    { "mdzoff",         ACTOR_MDZOFF,                 0, 0 },
-    { "mdflags",        ACTOR_MDFLAGS,                0, 0 },
-    { "xpanning",       ACTOR_XPANNING,               0, 0 },
-    { "ypanning",       ACTOR_YPANNING,               0, 0 },
-
-    { "htflags",        ACTOR_HTFLAGS,                0, 0 },
-
-    { "alpha",          ACTOR_ALPHA,                  0, 0 },
-
-    { "ulotag",         ACTOR_ULOTAG,                 0, 0 },
-    { "uhitag",         ACTOR_UHITAG,                 0, 0 },
-
-    { "isvalid",        ACTOR_ISVALID,                0, 0 },
-// aliases:
-    { "movflags",       ACTOR_HITAG,                  0, 0 },
-    { "detail",         ACTOR_DETAIL,                 0, 0 },  // deprecated name for 'blend'
-
-    { NULL,             -1,                           0, 0  }     // END OF LIST
-};
-
-const memberlabel_t TsprLabels[]=
-{
-    // tsprite access
-
-    { "tsprx",        ACTOR_X,        0, 0 },
-    { "tspry",        ACTOR_Y,        0, 0 },
-    { "tsprz",        ACTOR_Z,        0, 0 },
-    { "tsprcstat",    ACTOR_CSTAT,    0, 0 },
-    { "tsprpicnum",   ACTOR_PICNUM,   0, 0 },
-    { "tsprshade",    ACTOR_SHADE,    0, 0 },
-    { "tsprpal",      ACTOR_PAL,      0, 0 },
-    { "tsprclipdist", ACTOR_CLIPDIST, 0, 0 },
-//    { "tsprfiller", ACTOR_DETAIL,   0, 0 },
-    { "tsprblend",    ACTOR_DETAIL,   0, 0 },
-    { "tsprxrepeat",  ACTOR_XREPEAT,  0, 0 },
-    { "tspryrepeat",  ACTOR_YREPEAT,  0, 0 },
-    { "tsprxoffset",  ACTOR_XOFFSET,  0, 0 },
-    { "tspryoffset",  ACTOR_YOFFSET,  0, 0 },
-    { "tsprsectnum",  ACTOR_SECTNUM,  0, 0 },
-    { "tsprstatnum",  ACTOR_STATNUM,  0, 0 },
-    { "tsprang",      ACTOR_ANG,      0, 0 },
-    { "tsprowner",    ACTOR_OWNER,    0, 0 },
-#if 1
-    { "tsprxvel",     ACTOR_XVEL,     0, 0 },
-    { "tspryvel",     ACTOR_YVEL,     0, 0 },
-    { "tsprzvel",     ACTOR_ZVEL,     0, 0 },
-    { "tsprlotag",    ACTOR_LOTAG,    0, 0 },
-    { "tsprhitag",    ACTOR_HITAG,    0, 0 },
-    { "tsprextra",    ACTOR_EXTRA,    0, 0 },
-#endif
-// aliases:
-    { "tsprdetail",   ACTOR_DETAIL,   0, 0 },  // deprecated name for 'tsprblend'
-
-    { NULL,           -1,             0, 0  }     // END OF LIST
-};
-
-const memberlabel_t PlayerLabels[]=
-{
-    { "zoom",                  PLAYER_ZOOM,                  0, 0 },
-    { "exitx",                 PLAYER_EXITX,                 0, 0 },
-    { "exity",                 PLAYER_EXITY,                 0, 0 },
-    { "loogiex",               PLAYER_LOOGIEX,               LABEL_HASPARM2, 64 },
-    { "loogiey",               PLAYER_LOOGIEY,               LABEL_HASPARM2, 64 },
-    { "numloogs",              PLAYER_NUMLOOGS,              0, 0 },
-    { "loogcnt",               PLAYER_LOOGCNT,               0, 0 },
-    { "posx",                  PLAYER_POSX,                  0, 0 },
-    { "posy",                  PLAYER_POSY,                  0, 0 },
-    { "posz",                  PLAYER_POSZ,                  0, 0 },
-    { "horiz",                 PLAYER_HORIZ,                 0, 0 },
-    { "ohoriz",                PLAYER_OHORIZ,                0, 0 },
-    { "ohorizoff",             PLAYER_OHORIZOFF,             0, 0 },
-    { "invdisptime",           PLAYER_INVDISPTIME,           0, 0 },
-    { "bobposx",               PLAYER_BOBPOSX,               0, 0 },
-    { "bobposy",               PLAYER_BOBPOSY,               0, 0 },
-    { "oposx",                 PLAYER_OPOSX,                 0, 0 },
-    { "oposy",                 PLAYER_OPOSY,                 0, 0 },
-    { "oposz",                 PLAYER_OPOSZ,                 0, 0 },
-    { "pyoff",                 PLAYER_PYOFF,                 0, 0 },
-    { "opyoff",                PLAYER_OPYOFF,                0, 0 },
-    { "posxv",                 PLAYER_POSXV,                 0, 0 },
-    { "posyv",                 PLAYER_POSYV,                 0, 0 },
-    { "poszv",                 PLAYER_POSZV,                 0, 0 },
-    { "last_pissed_time",      PLAYER_LAST_PISSED_TIME,      0, 0 },
-    { "truefz",                PLAYER_TRUEFZ,                0, 0 },
-    { "truecz",                PLAYER_TRUECZ,                0, 0 },
-    { "player_par",            PLAYER_PLAYER_PAR,            0, 0 },
-    { "visibility",            PLAYER_VISIBILITY,            0, 0 },
-    { "bobcounter",            PLAYER_BOBCOUNTER,            0, 0 },
-    { "weapon_sway",           PLAYER_WEAPON_SWAY,           0, 0 },
-    { "pals_time",             PLAYER_PALS_TIME,             0, 0 },
-    { "randomflamex",          PLAYER_RANDOMFLAMEX,          0, 0 },
-    { "crack_time",            PLAYER_CRACK_TIME,            0, 0 },
-    { "aim_mode",              PLAYER_AIM_MODE,              0, 0 },
-    { "ang",                   PLAYER_ANG,                   0, 0 },
-    { "oang",                  PLAYER_OANG,                  0, 0 },
-    { "angvel",                PLAYER_ANGVEL,                0, 0 },
-    { "cursectnum",            PLAYER_CURSECTNUM,            0, 0 },
-    { "look_ang",              PLAYER_LOOK_ANG,              0, 0 },
-    { "last_extra",            PLAYER_LAST_EXTRA,            0, 0 },
-    { "subweapon",             PLAYER_SUBWEAPON,             0, 0 },
-    { "ammo_amount",           PLAYER_AMMO_AMOUNT,           LABEL_HASPARM2, MAX_WEAPONS },
-    { "wackedbyactor",         PLAYER_WACKEDBYACTOR,         0, 0 },
-    { "frag",                  PLAYER_FRAG,                  0, 0 },
-    { "fraggedself",           PLAYER_FRAGGEDSELF,           0, 0 },
-    { "curr_weapon",           PLAYER_CURR_WEAPON,           0, 0 },
-    { "last_weapon",           PLAYER_LAST_WEAPON,           0, 0 },
-    { "tipincs",               PLAYER_TIPINCS,               0, 0 },
-    { "horizoff",              PLAYER_HORIZOFF,              0, 0 },
-    { "wantweaponfire",        PLAYER_WANTWEAPONFIRE,        0, 0 },
-    { "holoduke_amount",       PLAYER_HOLODUKE_AMOUNT,       0, 0 },
-    { "newowner",              PLAYER_NEWOWNER,              0, 0 },
-    { "hurt_delay",            PLAYER_HURT_DELAY,            0, 0 },
-    { "hbomb_hold_delay",      PLAYER_HBOMB_HOLD_DELAY,      0, 0 },
-    { "jumping_counter",       PLAYER_JUMPING_COUNTER,       0, 0 },
-    { "airleft",               PLAYER_AIRLEFT,               0, 0 },
-    { "knee_incs",             PLAYER_KNEE_INCS,             0, 0 },
-    { "access_incs",           PLAYER_ACCESS_INCS,           0, 0 },
-    { "fta",                   PLAYER_FTA,                   0, 0 },
-    { "ftq",                   PLAYER_FTQ,                   0, 0 },
-    { "access_wallnum",        PLAYER_ACCESS_WALLNUM,        0, 0 },
-    { "access_spritenum",      PLAYER_ACCESS_SPRITENUM,      0, 0 },
-    { "kickback_pic",          PLAYER_KICKBACK_PIC,          0, 0 },
-    { "got_access",            PLAYER_GOT_ACCESS,            0, 0 },
-    { "weapon_ang",            PLAYER_WEAPON_ANG,            0, 0 },
-    { "firstaid_amount",       PLAYER_FIRSTAID_AMOUNT,       0, 0 },
-    { "somethingonplayer",     PLAYER_SOMETHINGONPLAYER,     0, 0 },
-    { "on_crane",              PLAYER_ON_CRANE,              0, 0 },
-    { "i",                     PLAYER_I,                     0, 0 },
-    { "one_parallax_sectnum",  PLAYER_ONE_PARALLAX_SECTNUM,  0, 0 },
-    { "over_shoulder_on",      PLAYER_OVER_SHOULDER_ON,      0, 0 },
-    { "random_club_frame",     PLAYER_RANDOM_CLUB_FRAME,     0, 0 },
-    { "fist_incs",             PLAYER_FIST_INCS,             0, 0 },
-    { "one_eighty_count",      PLAYER_ONE_EIGHTY_COUNT,      0, 0 },
-    { "cheat_phase",           PLAYER_CHEAT_PHASE,           0, 0 },
-    { "dummyplayersprite",     PLAYER_DUMMYPLAYERSPRITE,     0, 0 },
-    { "extra_extra8",          PLAYER_EXTRA_EXTRA8,          0, 0 },
-    { "quick_kick",            PLAYER_QUICK_KICK,            0, 0 },
-    { "heat_amount",           PLAYER_HEAT_AMOUNT,           0, 0 },
-    { "actorsqu",              PLAYER_ACTORSQU,              0, 0 },
-    { "timebeforeexit",        PLAYER_TIMEBEFOREEXIT,        0, 0 },
-    { "customexitsound",       PLAYER_CUSTOMEXITSOUND,       0, 0 },
-    { "weaprecs",              PLAYER_WEAPRECS,              LABEL_HASPARM2, MAX_WEAPONS },
-    { "weapreccnt",            PLAYER_WEAPRECCNT,            0, 0 },
-    { "interface_toggle_flag", PLAYER_INTERFACE_TOGGLE_FLAG, 0, 0 },
-    { "rotscrnang",            PLAYER_ROTSCRNANG,            0, 0 },
-    { "dead_flag",             PLAYER_DEAD_FLAG,             0, 0 },
-    { "show_empty_weapon",     PLAYER_SHOW_EMPTY_WEAPON,     0, 0 },
-    { "scuba_amount",          PLAYER_SCUBA_AMOUNT,          0, 0 },
-    { "jetpack_amount",        PLAYER_JETPACK_AMOUNT,        0, 0 },
-    { "steroids_amount",       PLAYER_STEROIDS_AMOUNT,       0, 0 },
-    { "shield_amount",         PLAYER_SHIELD_AMOUNT,         0, 0 },
-    { "holoduke_on",           PLAYER_HOLODUKE_ON,           0, 0 },
-    { "pycount",               PLAYER_PYCOUNT,               0, 0 },
-    { "weapon_pos",            PLAYER_WEAPON_POS,            0, 0 },
-    { "frag_ps",               PLAYER_FRAG_PS,               0, 0 },
-    { "transporter_hold",      PLAYER_TRANSPORTER_HOLD,      0, 0 },
-    { "clipdist",              PLAYER_CLIPDIST,              0, 0 },
-    { "last_full_weapon",      PLAYER_LAST_FULL_WEAPON,      0, 0 },
-    { "footprintshade",        PLAYER_FOOTPRINTSHADE,        0, 0 },
-    { "boot_amount",           PLAYER_BOOT_AMOUNT,           0, 0 },
-    { "scream_voice",          PLAYER_SCREAM_VOICE,          0, 0 },
-    { "gm",                    PLAYER_GM,                    0, 0 },
-    { "on_warping_sector",     PLAYER_ON_WARPING_SECTOR,     0, 0 },
-    { "footprintcount",        PLAYER_FOOTPRINTCOUNT,        0, 0 },
-    { "hbomb_on",              PLAYER_HBOMB_ON,              0, 0 },
-    { "jumping_toggle",        PLAYER_JUMPING_TOGGLE,        0, 0 },
-    { "rapid_fire_hold",       PLAYER_RAPID_FIRE_HOLD,       0, 0 },
-    { "on_ground",             PLAYER_ON_GROUND,             0, 0 },
-    { "name",                  PLAYER_NAME,                  LABEL_ISSTRING, 32 },
-    { "inven_icon",            PLAYER_INVEN_ICON,            0, 0 },
-    { "buttonpalette",         PLAYER_BUTTONPALETTE,         0, 0 },
-    { "jetpack_on",            PLAYER_JETPACK_ON,            0, 0 },
-    { "spritebridge",          PLAYER_SPRITEBRIDGE,          0, 0 },
-    { "lastrandomspot",        PLAYER_LASTRANDOMSPOT,        0, 0 },
-    { "scuba_on",              PLAYER_SCUBA_ON,              0, 0 },
-    { "footprintpal",          PLAYER_FOOTPRINTPAL,          0, 0 },
-    { "heat_on",               PLAYER_HEAT_ON,               0, 0 },
-    { "holster_weapon",        PLAYER_HOLSTER_WEAPON,        0, 0 },
-    { "falling_counter",       PLAYER_FALLING_COUNTER,       0, 0 },
-    { "gotweapon",             PLAYER_GOTWEAPON,             LABEL_HASPARM2, MAX_WEAPONS },
-    { "refresh_inventory",     PLAYER_REFRESH_INVENTORY,     0, 0 },
-    { "palette",               PLAYER_PALETTE,               0, 0 },
-    { "toggle_key_flag",       PLAYER_TOGGLE_KEY_FLAG,       0, 0 },
-    { "knuckle_incs",          PLAYER_KNUCKLE_INCS,          0, 0 },
-    { "walking_snd_toggle",    PLAYER_WALKING_SND_TOGGLE,    0, 0 },
-    { "palookup",              PLAYER_PALOOKUP,              0, 0 },
-    { "hard_landing",          PLAYER_HARD_LANDING,          0, 0 },
-    { "max_secret_rooms",      PLAYER_MAX_SECRET_ROOMS,      0, 0 },
-    { "secret_rooms",          PLAYER_SECRET_ROOMS,          0, 0 },
-    { "pals",                  PLAYER_PALS,                  LABEL_HASPARM2, 3 },
-    { "max_actors_killed",     PLAYER_MAX_ACTORS_KILLED,     0, 0 },
-    { "actors_killed",         PLAYER_ACTORS_KILLED,         0, 0 },
-    { "return_to_center",      PLAYER_RETURN_TO_CENTER,      0, 0 },
-    { "runspeed",              PLAYER_RUNSPEED,              0, 0 },
-    { "sbs",                   PLAYER_SBS,                   0, 0 },
-    { "reloading",             PLAYER_RELOADING,             0, 0 },
-    { "auto_aim",              PLAYER_AUTO_AIM,              0, 0 },
-    { "movement_lock",         PLAYER_MOVEMENT_LOCK,         0, 0 },
-    { "sound_pitch",           PLAYER_SOUND_PITCH,           0, 0 },
-    { "weaponswitch",          PLAYER_WEAPONSWITCH,          0, 0 },
-    { "team",                  PLAYER_TEAM,                  0, 0 },
-    { "max_player_health",     PLAYER_MAX_PLAYER_HEALTH,     0, 0 },
-    { "max_shield_amount",     PLAYER_MAX_SHIELD_AMOUNT,     0, 0 },
-    { "max_ammo_amount",       PLAYER_MAX_AMMO_AMOUNT,       LABEL_HASPARM2, MAX_WEAPONS },
-    { "last_quick_kick",       PLAYER_LAST_QUICK_KICK,       0, 0 },
-    { "autostep",              PLAYER_AUTOSTEP,              0, 0 },
-    { "autostep_sbw",          PLAYER_AUTOSTEP_SBW,          0, 0 },
-    { "hudpal",                PLAYER_HUDPAL,                0, 0 },
-    { "index",                 PLAYER_INDEX,                 0, 0 },
-    { "connected",             PLAYER_CONNECTED,             0, 0 },
-    { "frags",                 PLAYER_FRAGS,                 LABEL_HASPARM2, MAXPLAYERS },
-    { "deaths",                PLAYER_DEATHS,                0, 0 },
-    { "last_used_weapon",      PLAYER_LAST_USED_WEAPON,      0, 0 },
-    { NULL,                    -1,                           0, 0  }     // END OF LIST
-};
-
-const memberlabel_t ProjectileLabels[]=
-{
-    { "workslike",  PROJ_WORKSLIKE,   0, 0 },
-    { "spawns",     PROJ_SPAWNS,      0, 0 },
-    { "sxrepeat",   PROJ_SXREPEAT,    0, 0 },
-    { "syrepeat",   PROJ_SYREPEAT,    0, 0 },
-    { "sound",      PROJ_SOUND,       0, 0 },
-    { "isound",     PROJ_ISOUND,      0, 0 },
-    { "vel",        PROJ_VEL,         0, 0 },
-    { "extra",      PROJ_EXTRA,       0, 0 },
-    { "decal",      PROJ_DECAL,       0, 0 },
-    { "trail",      PROJ_TRAIL,       0, 0 },
-    { "txrepeat",   PROJ_TXREPEAT,    0, 0 },
-    { "tyrepeat",   PROJ_TYREPEAT,    0, 0 },
-    { "toffset",    PROJ_TOFFSET,     0, 0 },
-    { "tnum",       PROJ_TNUM,        0, 0 },
-    { "drop",       PROJ_DROP,        0, 0 },
-    { "cstat",      PROJ_CSTAT,       0, 0 },
-    { "clipdist",   PROJ_CLIPDIST,    0, 0 },
-    { "shade",      PROJ_SHADE,       0, 0 },
-    { "xrepeat",    PROJ_XREPEAT,     0, 0 },
-    { "yrepeat",    PROJ_YREPEAT,     0, 0 },
-    { "pal",        PROJ_PAL,         0, 0 },
-    { "extra_rand", PROJ_EXTRA_RAND,  0, 0 },
-    { "hitradius",  PROJ_HITRADIUS,   0, 0 },
-    { "velmult",    PROJ_MOVECNT,     0, 0 },
-    { "offset",     PROJ_OFFSET,      0, 0 },
-    { "bounces",    PROJ_BOUNCES,     0, 0 },
-    { "bsound",     PROJ_BSOUND,      0, 0 },
-    { "range",      PROJ_RANGE,       0, 0 },
-    { "flashcolor", PROJ_FLASH_COLOR, 0, 0 },
-    { "userdata",   PROJ_USERDATA,    0, 0 },
-    { NULL,         -1,               0, 0  }     // END OF LIST
-};
-
-const memberlabel_t UserdefsLabels[]=
-{
-    //   { "<null>", 1,                                          0, 0 },
-    { "god",                    USERDEFS_GOD,                    0, 0 },
-    { "warp_on",                USERDEFS_WARP_ON,                0, 0 },
-    { "cashman",                USERDEFS_CASHMAN,                0, 0 },
-    { "eog",                    USERDEFS_EOG,                    0, 0 },
-    { "showallmap",             USERDEFS_SHOWALLMAP,             0, 0 },
-    { "show_help",              USERDEFS_SHOW_HELP,              0, 0 },
-    { "scrollmode",             USERDEFS_SCROLLMODE,             0, 0 },
-    { "clipping",               USERDEFS_CLIPPING,               0, 0 },
-    { "user_name",              USERDEFS_USER_NAME,              LABEL_HASPARM2, MAXPLAYERS },
-    { "ridecule",               USERDEFS_RIDECULE,               LABEL_HASPARM2 | LABEL_ISSTRING, 10 },
-    { "savegame",               USERDEFS_SAVEGAME,               LABEL_HASPARM2 | LABEL_ISSTRING, 10 },
-    { "pwlockout",              USERDEFS_PWLOCKOUT,              LABEL_ISSTRING, 128 },
-    { "rtsname;",               USERDEFS_RTSNAME,                LABEL_ISSTRING, 128 },
-    { "overhead_on",            USERDEFS_OVERHEAD_ON,            0, 0 },
-    { "last_overhead",          USERDEFS_LAST_OVERHEAD,          0, 0 },
-    { "showweapons",            USERDEFS_SHOWWEAPONS,            0, 0 },
-    { "pause_on",               USERDEFS_PAUSE_ON,               0, 0 },
-    { "from_bonus",             USERDEFS_FROM_BONUS,             0, 0 },
-    { "camerasprite",           USERDEFS_CAMERASPRITE,           0, 0 },
-    { "last_camsprite",         USERDEFS_LAST_CAMSPRITE,         0, 0 },
-    { "last_level",             USERDEFS_LAST_LEVEL,             0, 0 },
-    { "secretlevel",            USERDEFS_SECRETLEVEL,            0, 0 },
-    { "const_visibility",       USERDEFS_CONST_VISIBILITY,       0, 0 },
-    { "uw_framerate",           USERDEFS_UW_FRAMERATE,           0, 0 },
-    { "camera_time",            USERDEFS_CAMERA_TIME,            0, 0 },
-    { "folfvel",                USERDEFS_FOLFVEL,                0, 0 },
-    { "folavel",                USERDEFS_FOLAVEL,                0, 0 },
-    { "folx",                   USERDEFS_FOLX,                   0, 0 },
-    { "foly",                   USERDEFS_FOLY,                   0, 0 },
-    { "fola",                   USERDEFS_FOLA,                   0, 0 },
-    { "reccnt",                 USERDEFS_RECCNT,                 0, 0 },
-    { "entered_name",           USERDEFS_ENTERED_NAME,           0, 0 },
-    { "screen_tilting",         USERDEFS_SCREEN_TILTING,         0, 0 },
-    { "shadows",                USERDEFS_SHADOWS,                0, 0 },
-    { "fta_on",                 USERDEFS_FTA_ON,                 0, 0 },
-    { "executions",             USERDEFS_EXECUTIONS,             0, 0 },
-    { "auto_run",               USERDEFS_AUTO_RUN,               0, 0 },
-    { "coords",                 USERDEFS_COORDS,                 0, 0 },
-    { "tickrate",               USERDEFS_TICKRATE,               0, 0 },
-    { "m_coop",                 USERDEFS_M_COOP,                 0, 0 },
-    { "coop",                   USERDEFS_COOP,                   0, 0 },
-    { "screen_size",            USERDEFS_SCREEN_SIZE,            0, 0 },
-    { "lockout",                USERDEFS_LOCKOUT,                0, 0 },
-    { "crosshair",              USERDEFS_CROSSHAIR,              0, 0 },
-    { "playerai",               USERDEFS_PLAYERAI,               0, 0 },
-    { "respawn_monsters",       USERDEFS_RESPAWN_MONSTERS,       0, 0 },
-    { "respawn_items",          USERDEFS_RESPAWN_ITEMS,          0, 0 },
-    { "respawn_inventory",      USERDEFS_RESPAWN_INVENTORY,      0, 0 },
-    { "recstat",                USERDEFS_RECSTAT,                0, 0 },
-    { "monsters_off",           USERDEFS_MONSTERS_OFF,           0, 0 },
-    { "brightness",             USERDEFS_BRIGHTNESS,             0, 0 },
-    { "m_respawn_items",        USERDEFS_M_RESPAWN_ITEMS,        0, 0 },
-    { "m_respawn_monsters",     USERDEFS_M_RESPAWN_MONSTERS,     0, 0 },
-    { "m_respawn_inventory",    USERDEFS_M_RESPAWN_INVENTORY,    0, 0 },
-    { "m_recstat",              USERDEFS_M_RECSTAT,              0, 0 },
-    { "m_monsters_off",         USERDEFS_M_MONSTERS_OFF,         0, 0 },
-    { "detail",                 USERDEFS_DETAIL,                 0, 0 },
-    { "m_ffire",                USERDEFS_M_FFIRE,                0, 0 },
-    { "ffire",                  USERDEFS_FFIRE,                  0, 0 },
-    { "m_player_skill",         USERDEFS_M_PLAYER_SKILL,         0, 0 },
-    { "m_level_number",         USERDEFS_M_LEVEL_NUMBER,         0, 0 },
-    { "m_volume_number",        USERDEFS_M_VOLUME_NUMBER,        0, 0 },
-    { "multimode",              USERDEFS_MULTIMODE,              0, 0 },
-    { "player_skill",           USERDEFS_PLAYER_SKILL,           0, 0 },
-    { "level_number",           USERDEFS_LEVEL_NUMBER,           0, 0 },
-    { "volume_number",          USERDEFS_VOLUME_NUMBER,          0, 0 },
-    { "m_marker",               USERDEFS_M_MARKER,               0, 0 },
-    { "marker",                 USERDEFS_MARKER,                 0, 0 },
-    { "mouseflip",              USERDEFS_MOUSEFLIP,              0, 0 },
-    { "statusbarscale",         USERDEFS_STATUSBARSCALE,         0, 0 },
-    { "drawweapon",             USERDEFS_DRAWWEAPON,             0, 0 },
-    { "mouseaiming",            USERDEFS_MOUSEAIMING,            0, 0 },
-    { "weaponswitch",           USERDEFS_WEAPONSWITCH,           0, 0 },
-    { "democams",               USERDEFS_DEMOCAMS,               0, 0 },
-    { "color",                  USERDEFS_COLOR,                  0, 0 },
-    { "msgdisptime",            USERDEFS_MSGDISPTIME,            0, 0 },
-    { "statusbarmode",          USERDEFS_STATUSBARMODE,          0, 0 },
-    { "m_noexits",              USERDEFS_M_NOEXITS,              0, 0 },
-    { "noexits",                USERDEFS_NOEXITS,                0, 0 },
-    { "autovote",               USERDEFS_AUTOVOTE,               0, 0 },
-    { "automsg",                USERDEFS_AUTOMSG,                0, 0 },
-    { "idplayers",              USERDEFS_IDPLAYERS,              0, 0 },
-    { "team",                   USERDEFS_TEAM,                   0, 0 },
-    { "viewbob",                USERDEFS_VIEWBOB,                0, 0 },
-    { "weaponsway",             USERDEFS_WEAPONSWAY,             0, 0 },
-    { "angleinterpolation",     USERDEFS_ANGLEINTERPOLATION,     0, 0 },
-    { "obituaries",             USERDEFS_OBITUARIES,             0, 0 },
-    { "levelstats",             USERDEFS_LEVELSTATS,             0, 0 },
-    { "crosshairscale",         USERDEFS_CROSSHAIRSCALE,         0, 0 },
-    { "althud",                 USERDEFS_ALTHUD,                 0, 0 },
-    { "display_bonus_screen",   USERDEFS_DISPLAY_BONUS_SCREEN,   0, 0 },
-    { "show_level_text",        USERDEFS_SHOW_LEVEL_TEXT,        0, 0 },
-    { "weaponscale",            USERDEFS_WEAPONSCALE,            0, 0 },
-    { "textscale",              USERDEFS_TEXTSCALE,              0, 0 },
-    { "runkey_mode",            USERDEFS_RUNKEY_MODE,            0, 0 },
-    { "m_origin_x",             USERDEFS_M_ORIGIN_X,             0, 0 },
-    { "m_origin_y",             USERDEFS_M_ORIGIN_Y,             0, 0 },
-    { "playerbest",             USERDEFS_PLAYERBEST,             0, 0 },
-    { "musictoggle",            USERDEFS_MUSICTOGGLE,            0, 0 },
-    { "usevoxels",              USERDEFS_USEVOXELS,              0, 0 },
-    { "usehightile",            USERDEFS_USEHIGHTILE,            0, 0 },
-    { "usemodels",              USERDEFS_USEMODELS,              0, 0 },
-    { "gametypeflags",          USERDEFS_GAMETYPEFLAGS,          0, 0 },
-    { "m_gametypeflags",        USERDEFS_M_GAMETYPEFLAGS,        0, 0 },
-    { "globalflags",            USERDEFS_GLOBALFLAGS,            0, 0 },
-    { "globalgameflags",        USERDEFS_GLOBALGAMEFLAGS,        0, 0 },
-    { "vm_player",              USERDEFS_VM_PLAYER,              0, 0 },
-    { "vm_sprite",              USERDEFS_VM_SPRITE,              0, 0 },
-    { "vm_distance",            USERDEFS_VM_DISTANCE,            0, 0 },
-    { "soundtoggle",            USERDEFS_SOUNDTOGGLE,            0, 0 },
-    { "gametext_tracking",      USERDEFS_GAMETEXT_TRACKING,      0, 0 },
-    { "mgametext_tracking",     USERDEFS_MGAMETEXT_TRACKING,     0, 0 },
-    { "menutext_tracking",      USERDEFS_MENUTEXT_TRACKING,      0, 0 },
-    { "maxspritesonscreen",     USERDEFS_MAXSPRITESONSCREEN,     0, 0 },
-    { "screenarea_x1",          USERDEFS_SCREENAREA_X1,          0, 0 },
-    { "screenarea_y1",          USERDEFS_SCREENAREA_Y1,          0, 0 },
-    { "screenarea_x2",          USERDEFS_SCREENAREA_X2,          0, 0 },
-    { "screenarea_y2",          USERDEFS_SCREENAREA_Y2,          0, 0 },
-    { "screenfade",             USERDEFS_SCREENFADE,             0, 0 },
-    { "menubackground",         USERDEFS_MENUBACKGROUND,         0, 0 },
-    { "statusbarflags",         USERDEFS_STATUSBARFLAGS,         0, 0 },
-    { "statusbarrange",         USERDEFS_STATUSBARRANGE,         0, 0 },
-    { "statusbarcustom",        USERDEFS_STATUSBARCUSTOM,        0, 0 },
-    { "hudontop",               USERDEFS_HUDONTOP,               0, 0 },
-    { "menu_slidebarz",         USERDEFS_MENU_SLIDEBARZ,         0, 0 },
-    { "menu_slidebarmargin",    USERDEFS_MENU_SLIDEBARMARGIN,    0, 0 },
-    { "menu_slidecursorz",      USERDEFS_MENU_SLIDECURSORZ,      0, 0 },
-    { "global_r",               USERDEFS_GLOBAL_R,               0, 0 },
-    { "global_g",               USERDEFS_GLOBAL_G,               0, 0 },
-    { "global_b",               USERDEFS_GLOBAL_B,               0, 0 },
-    { "default_volume",         USERDEFS_DEFAULT_VOLUME,         0, 0 },
-    { "default_skill",          USERDEFS_DEFAULT_SKILL,          0, 0 },
-    { "menu_shadedeselected",   USERDEFS_MENU_SHADEDESELECTED,   0, 0 },
-    { "menu_shadedisabled",     USERDEFS_MENU_SHADEDISABLED,     0, 0 },
-    { "menutext_zoom",          USERDEFS_MENUTEXT_ZOOM,          0, 0 },
-    { "menutext_xspace",        USERDEFS_MENUTEXT_XSPACE,        0, 0 },
-    { "menutext_pal",           USERDEFS_MENUTEXT_PAL,           0, 0 },
-    { "menutext_palselected",   USERDEFS_MENUTEXT_PALSELECTED,   0, 0 },
-    { "menutext_paldeselected", USERDEFS_MENUTEXT_PALDESELECTED, 0, 0 },
-    { "menutext_paldisabled",   USERDEFS_MENUTEXT_PALDISABLED,   0, 0 },
-    { "menutext_palselected_right",   USERDEFS_MENUTEXT_PALSELECTED_RIGHT,   0, 0 },
-    { "menutext_paldeselected_right", USERDEFS_MENUTEXT_PALDESELECTED_RIGHT, 0, 0 },
-    { "menutext_paldisabled_right",   USERDEFS_MENUTEXT_PALDISABLED_RIGHT,   0, 0 },
-    { "gametext_zoom",          USERDEFS_GAMETEXT_ZOOM,          0, 0 },
-    { "gametext_xspace",        USERDEFS_GAMETEXT_XSPACE,        0, 0 },
-    { "gametext_pal",           USERDEFS_GAMETEXT_PAL,           0, 0 },
-    { "gametext_palselected",   USERDEFS_GAMETEXT_PALSELECTED,   0, 0 },
-    { "gametext_paldeselected", USERDEFS_GAMETEXT_PALDESELECTED, 0, 0 },
-    { "gametext_paldisabled",   USERDEFS_GAMETEXT_PALDISABLED,   0, 0 },
-    { "gametext_palselected_right",   USERDEFS_GAMETEXT_PALSELECTED_RIGHT,   0, 0 },
-    { "gametext_paldeselected_right", USERDEFS_GAMETEXT_PALDESELECTED_RIGHT, 0, 0 },
-    { "gametext_paldisabled_right",   USERDEFS_GAMETEXT_PALDISABLED_RIGHT,   0, 0 },
-    { "minitext_zoom",          USERDEFS_MINITEXT_ZOOM,          0, 0 },
-    { "minitext_xspace",        USERDEFS_MINITEXT_XSPACE,        0, 0 },
-    { "minitext_tracking",      USERDEFS_MINITEXT_TRACKING,      0, 0 },
-    { "minitext_pal",           USERDEFS_MINITEXT_PAL,           0, 0 },
-    { "minitext_palselected",   USERDEFS_MINITEXT_PALSELECTED,   0, 0 },
-    { "minitext_paldeselected", USERDEFS_MINITEXT_PALDESELECTED, 0, 0 },
-    { "minitext_paldisabled",   USERDEFS_MINITEXT_PALDISABLED,   0, 0 },
-    { "minitext_palselected_right",   USERDEFS_MINITEXT_PALSELECTED_RIGHT,   0, 0 },
-    { "minitext_paldeselected_right", USERDEFS_MINITEXT_PALDESELECTED_RIGHT, 0, 0 },
-    { "minitext_paldisabled_right",   USERDEFS_MINITEXT_PALDISABLED_RIGHT,   0, 0 },
-    { "menutitle_pal",          USERDEFS_MENUTITLE_PAL,          0, 0 },
-    { "slidebar_palselected",   USERDEFS_SLIDEBAR_PALSELECTED,   0, 0 },
-    { "slidebar_paldisabled",   USERDEFS_SLIDEBAR_PALDISABLED,   0, 0 },
-    { "user_map",               USERDEFS_USER_MAP,               0, 0 },
-    { "m_user_map",             USERDEFS_M_USER_MAP,             0, 0 },
-    { "music_episode",          USERDEFS_MUSIC_EPISODE,          0, 0 },
-    { "music_level",            USERDEFS_MUSIC_LEVEL,            0, 0 },
-    { "shadow_pal",             USERDEFS_SHADOW_PAL,             0, 0 },
-    { "menu_scrollbartilenum",  USERDEFS_MENU_SCROLLBARTILENUM,  0, 0 },
-    { "menu_scrollbarz",        USERDEFS_MENU_SCROLLBARZ,        0, 0 },
-    { "menu_scrollcursorz",     USERDEFS_MENU_SCROLLCURSORZ,     0, 0 },
-    { "return",                 USERDEFS_RETURN,                 LABEL_HASPARM2, MAX_RETURN_VALUES },
-    { "userbyteversion",        USERDEFS_USERBYTEVERSION,        0, 0 },
-    { "autosave",               USERDEFS_AUTOSAVE,               0, 0 },
-    { NULL,                     -1,                              0, 0  } // END OF LIST
-};
-
-const memberlabel_t InputLabels[]=
-{
-    { "avel",    INPUT_AVEL,    0, 0 },
-    { "q16avel", INPUT_Q16AVEL, 0, 0 },
-    { "horz",    INPUT_HORZ,    0, 0 },
-    { "q16horz", INPUT_Q16HORZ, 0, 0 },
-    { "fvel",    INPUT_FVEL,    0, 0 },
-    { "svel",    INPUT_SVEL,    0, 0 },
-    { "bits",    INPUT_BITS,    0, 0 },
-    { "extbits", INPUT_EXTBITS, 0, 0 },
-    { NULL,      -1,            0, 0  }     // END OF LIST
-};
-
-const memberlabel_t TileDataLabels[]=
-{
-    // tilesiz[]
-    { "xsize",      TILEDATA_XSIZE,      0, 0 },
-    { "ysize",      TILEDATA_YSIZE,      0, 0 },
-
-    // picanm[]
-    { "animframes", TILEDATA_ANIMFRAMES, 0, 0 },
-    { "xoffset",    TILEDATA_XOFFSET,    0, 0 },
-    { "yoffset",    TILEDATA_YOFFSET,    0, 0 },
-    { "animspeed",  TILEDATA_ANIMSPEED,  0, 0 },
-    { "animtype",   TILEDATA_ANIMTYPE,   0, 0 },
-
-    // g_tile[]
-    { "gameflags",  TILEDATA_GAMEFLAGS,  0, 0 },
-
-    { NULL,         -1,                  0, 0  }     // END OF LIST
-};
-
-const memberlabel_t PalDataLabels[]=
-{
-    // g_noFloorPal[]
-    { "nofloorpal", PALDATA_NOFLOORPAL, 0, 0 },
-
-    { NULL,         -1,                 0, 0  }     // END OF LIST
-};
-
-const tokenmap_t iter_tokens [] =
-{
-    { "allsprites",      ITER_ALLSPRITES },
-    { "allspritesbystat",ITER_ALLSPRITESBYSTAT },
-    { "allspritesbysect",ITER_ALLSPRITESBYSECT },
-    { "allsectors",      ITER_ALLSECTORS },
-    { "allwalls",        ITER_ALLWALLS },
-    { "activelights",    ITER_ACTIVELIGHTS },
-    { "drawnsprites",    ITER_DRAWNSPRITES },
-    { "spritesofsector", ITER_SPRITESOFSECTOR },
-    { "spritesofstatus", ITER_SPRITESOFSTATUS },
-    { "loopofwall",      ITER_LOOPOFWALL },
-    { "wallsofsector",   ITER_WALLSOFSECTOR },
-    { "range",           ITER_RANGE },
-    // vvv alternatives go here vvv
-    { "lights",          ITER_ACTIVELIGHTS },
-    { "sprofsec",        ITER_SPRITESOFSECTOR },
-    { "sprofstat",       ITER_SPRITESOFSTATUS },
-    { "walofsec",        ITER_WALLSOFSECTOR },
-    { NULL,              -1 }     // END OF LIST
-};
-
-#endif
-
-char *bitptr; // pointer to bitmap of which bytecode positions contain pointers
-#define BITPTR_SET(x) (bitptr[(x)>>3] |= (1<<((x)&7)))
-#define BITPTR_CLEAR(x) (bitptr[(x)>>3] &= ~(1<<((x)&7)))
-#define BITPTR_IS_POINTER(x) (bitptr[(x)>>3] & (1<<((x) &7)))
+#define BITPTR_SET(x) bitmap_set(bitptr, x)
+#define BITPTR_CLEAR(x) bitmap_clear(bitptr, x)
+#define BITPTR_IS_POINTER(x) bitmap_test(bitptr, x)
 
 #if !defined LUNATIC
-hashtable_t h_gamevars    = { MAXGAMEVARS>>1, NULL };
-hashtable_t h_arrays      = { MAXGAMEARRAYS>>1, NULL };
-hashtable_t h_labels      = { 11264>>1, NULL };
+hashtable_t h_arrays   = { MAXGAMEARRAYS >> 1, NULL };
+hashtable_t h_gamevars = { MAXGAMEVARS >> 1, NULL };
+hashtable_t h_labels   = { 11264 >> 1, NULL };
 
-static hashtable_t h_keywords   = { CON_END>>1, NULL };
-static hashtable_t h_iter       = { ITER_END>>1, NULL };
-
-static hashtable_t h_sector     = { SECTOR_END>>1, NULL };
-static hashtable_t h_wall       = { WALL_END>>1, NULL };
-static hashtable_t h_userdef    = { USERDEFS_END>>1, NULL };
-
-static hashtable_t h_projectile = { PROJ_END>>1, NULL };
-static hashtable_t h_player     = { PLAYER_END>>1, NULL };
-static hashtable_t h_input      = { INPUT_END>>1, NULL };
-static hashtable_t h_actor      = { ACTOR_END>>1, NULL };
-static hashtable_t h_tsprite    = { ACTOR_END>>1, NULL };
-
-static hashtable_t h_tiledata   = { TILEDATA_END>>1, NULL };
-static hashtable_t h_paldata    = { PALDATA_END>>1, NULL };
-
-static hashtable_t * const tables[] = {
-    &h_gamevars,   &h_arrays, &h_labels, &h_keywords, &h_sector,  &h_wall,     &h_userdef,
-    &h_projectile, &h_player, &h_input,  &h_actor,    &h_tsprite, &h_tiledata, &h_paldata,
-    &h_iter
-};
-
-static hashtable_t * const tables_free [] = {
-    &h_labels, &h_keywords, &h_sector,  &h_wall,     &h_userdef,
-    &h_projectile, &h_player, &h_input,  &h_actor,    &h_tsprite, &h_tiledata, &h_paldata,
-    &h_iter
-};
-
-#define STRUCT_HASH_SETUP(table, labels) do { for (i=0; labels[i].lId >= 0; i++) hash_add(&table, labels[i].name, i, 0); } while (0)
-
-void C_InitHashes()
+static void C_SetScriptSize(int32_t newsize)
 {
-    uint32_t i;
-
-    for (i=0; i < ARRAY_SIZE(tables); i++)
-        hash_init(tables[i]);
-
-    inithashnames();
-    initsoundhashnames();
-
-    for (tokenmap_t const & keyword : vm_keywords)
-        hash_add(&h_keywords, keyword.token, keyword.val, 0);
-
-    STRUCT_HASH_SETUP(h_sector, SectorLabels);
-    STRUCT_HASH_SETUP(h_wall, WallLabels);
-    STRUCT_HASH_SETUP(h_userdef, UserdefsLabels);
-    STRUCT_HASH_SETUP(h_projectile, ProjectileLabels);
-    STRUCT_HASH_SETUP(h_player, PlayerLabels);
-    STRUCT_HASH_SETUP(h_input, InputLabels);
-    STRUCT_HASH_SETUP(h_actor, ActorLabels);
-    STRUCT_HASH_SETUP(h_tsprite, TsprLabels);
-    STRUCT_HASH_SETUP(h_tiledata, TileDataLabels);
-    STRUCT_HASH_SETUP(h_paldata, PalDataLabels);
-
-    for (i=0; iter_tokens[i].val >=0; i++)
-        hash_add(&h_iter, iter_tokens[i].token, iter_tokens[i].val, 0);
-}
-
-#undef STRUCT_HASH_SETUP
-
-// "magic" number for { and }, overrides line number in compiled code for later detection
-#define IFELSE_MAGIC 31337
-static int32_t g_ifElseAborted;
-
-static int32_t C_SetScriptSize(int32_t newsize)
-{
-    intptr_t const oscript = (intptr_t)apScript;
-    intptr_t *newscript;
-    intptr_t i, j;
-    int32_t osize = g_scriptSize;
-    char *scriptptrs;
-    char *newbitptr;
-
-    scriptptrs = (char *)Xcalloc(1, g_scriptSize * sizeof(uint8_t));
-
-    for (i=g_scriptSize-1; i>=0; i--)
+    for (int i = 0; i < g_scriptSize - 1; ++i)
     {
         if (BITPTR_IS_POINTER(i))
         {
-            if (EDUKE32_PREDICT_FALSE((intptr_t)apScript[i] < (intptr_t)&apScript[0] || (intptr_t)apScript[i] >= (intptr_t)&apScript[g_scriptSize]))
+            if (EDUKE32_PREDICT_FALSE(apScript[i] < (intptr_t)apScript || apScript[i] >= (intptr_t)g_scriptPtr))
             {
                 g_errorCnt++;
                 buildprint("Internal compiler error at ", i, " (0x", hex(i), ")\n");
                 VM_ScriptInfo(&apScript[i], 16);
             }
-
-            scriptptrs[i] = 1;
-            apScript[i] -= (intptr_t)&apScript[0];
+            else
+                apScript[i] -= (intptr_t)apScript;
         }
-        else scriptptrs[i] = 0;
     }
 
     G_Util_PtrToIdx2(&g_tile[0].execPtr, MAXTILES, sizeof(tiledata_t), apScript, P2I_FWD_NON0);
     G_Util_PtrToIdx2(&g_tile[0].loadPtr, MAXTILES, sizeof(tiledata_t), apScript, P2I_FWD_NON0);
 
-    newscript = (intptr_t *)Xrealloc(apScript, newsize * sizeof(intptr_t));
-    newbitptr = (char *)Xcalloc(1,(((newsize+7)>>3)+1) * sizeof(uint8_t));
+    auto newscript = (intptr_t *)Xrealloc(apScript, newsize * sizeof(intptr_t));
+    bitptr = (uint8_t *)Xrealloc(bitptr, (((newsize + 7) >> 3) + 1) * sizeof(uint8_t));
 
-    if (newsize >= osize)
-    {
-        Bmemset(&newscript[0]+osize,0,(newsize-osize) * sizeof(uint8_t));
-        Bmemcpy(newbitptr,bitptr,sizeof(uint8_t) *((osize+7)>>3));
-    }
-    else
-        Bmemcpy(newbitptr,bitptr,sizeof(uint8_t) *((newsize+7)>>3));
+    if (newsize > g_scriptSize)
+        Bmemset(&newscript[g_scriptSize], 0, (newsize - g_scriptSize) * sizeof(intptr_t));
 
-    Bfree(bitptr);
-    bitptr = newbitptr;
     if (apScript != newscript)
     {
-        buildprint("Relocating compiled code from to 0x", hex((intptr_t)apScript), " to 0x", hex((intptr_t)newscript), "\n");
-        apScript = newscript;
+        buildprint("Relocated compiled code from 0x", hex((intptr_t)apScript), " to 0x", hex((intptr_t)newscript), "\n");
+        g_scriptPtr = g_scriptPtr - apScript + newscript;
+        apScript    = newscript;
+    }
+
+    int const smallestSize = min(g_scriptSize, newsize);
+
+    for (int i = 0; i < smallestSize - 1; ++i)
+    {
+        if (BITPTR_IS_POINTER(i))
+            apScript[i] += (intptr_t)apScript;
     }
 
     g_scriptSize = newsize;
-    g_scriptPtr = apScript + (intptr_t)g_scriptPtr - oscript;
-
-    if (g_caseScriptPtr)
-        g_caseScriptPtr = apScript + (intptr_t)g_caseScriptPtr - oscript;
-
-    for (i=(((newsize>=osize)?osize:newsize))-1; i>=0; i--)
-        if (scriptptrs[i])
-        {
-            j = (intptr_t)apScript[i]+(intptr_t)&apScript[0];
-            apScript[i] = j;
-        }
 
     G_Util_PtrToIdx2(&g_tile[0].execPtr, MAXTILES, sizeof(tiledata_t), apScript, P2I_BACK_NON0);
     G_Util_PtrToIdx2(&g_tile[0].loadPtr, MAXTILES, sizeof(tiledata_t), apScript, P2I_BACK_NON0);
-
-    Bfree(scriptptrs);
-    return 0;
 }
 
-static inline int32_t ispecial(const char c)
+static inline bool ispecial(const char c)
 {
     return (c == ' ' || c == 0x0d || c == '(' || c == ')' ||
         c == ',' || c == ';' || (c == 0x0a /*&& ++g_lineNumber*/));
 }
 
-static inline void C_NextLine(void)
+static inline void scriptSkipLine(void)
 {
     while (*textptr != 0x0a && *textptr != 0x0d && *textptr != 0)
         textptr++;
 }
 
-static inline void C_SkipSpace(void)
+static inline void scriptSkipSpaces(void)
 {
     while (*textptr == ' ' || *textptr == '\t')
         textptr++;
 }
 
-static int32_t C_SkipComments(void)
+static void C_SkipComments(void)
 {
     do
     {
@@ -1569,12 +1117,12 @@ static int32_t C_SkipComments(void)
             switch (textptr[1])
             {
             case '/': // C++ style comment
-                if (!(g_errorCnt || g_warningCnt) && g_scriptDebug > 1)
+                if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
                     initprintf("%s:%d: debug: got comment.\n",g_scriptFileName,g_lineNumber);
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             case '*': // beginning of a C style comment
-                if (!(g_errorCnt || g_warningCnt) && g_scriptDebug > 1)
+                if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
                     initprintf("%s:%d: debug: got start of comment block.\n",g_scriptFileName,g_lineNumber);
                 do
                 {
@@ -1590,12 +1138,12 @@ static int32_t C_SkipComments(void)
                         initprintf("%s:%d: debug: EOF in comment!\n",g_scriptFileName,g_lineNumber);
                     C_ReportError(-1);
                     initprintf("%s:%d: error: found `/*' with no `*/'.\n",g_scriptFileName,g_lineNumber);
-                    g_parsingActorPtr = g_processingState = g_numBraces = 0;
+                    g_scriptActorOffset = g_numBraces = g_processingState = 0;
                     g_errorCnt++;
                     continue;
                 }
 
-                if (!(g_errorCnt || g_warningCnt) && g_scriptDebug > 1)
+                if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
                     initprintf("%s:%d: debug: got end of comment block.\n",g_scriptFileName,g_lineNumber);
 
                 textptr+=2;
@@ -1603,7 +1151,7 @@ static int32_t C_SkipComments(void)
             default:
                 C_ReportError(-1);
                 initprintf("%s:%d: error: malformed comment.\n", g_scriptFileName, g_lineNumber);
-                C_NextLine();
+                scriptSkipLine();
                 g_errorCnt++;
                 continue;
             }
@@ -1617,32 +1165,33 @@ static int32_t C_SkipComments(void)
             }
             fallthrough__;
         case 0: // EOF
-            return ((g_scriptPtr-apScript) > (g_scriptSize-32)) ? C_SetScriptSize(g_scriptSize<<1) : 0;
+            return;
         }
     }
     while (1);
 }
 
-#define GetDefID(szGameLabel) hash_find(&h_gamevars,szGameLabel)
-#define GetADefID(szGameLabel) hash_find(&h_arrays,szGameLabel)
+static inline int GetDefID(char const *label) { return hash_find(&h_gamevars, label); }
+static inline int GetADefID(char const *label) { return hash_find(&h_arrays, label); }
 
-static inline int32_t isaltok(const char c)
+#define LAST_LABEL (label+(g_labelCnt<<6))
+static inline bool isaltok(const char c)
 {
     return (isalnum(c) || c == '{' || c == '}' || c == '/' || c == '\\' || c == '*' || c == '-' || c == '_' ||
             c == '.');
 }
 
-static inline int32_t C_IsLabelChar(const char c, int32_t const i)
+static inline bool C_IsLabelChar(const char c, int32_t const i)
 {
-    return (isalnum(c) || c == '_' || c == '*' || c == '?' || (i > 0 && (c == '+' || c == '-' || c == '.')));
+    return (isalnum(c) || c == '_' || c == '*' || c == '?' || (i > 0 && (c == '+' || c == '-')));
 }
 
-static inline int32_t C_GetLabelNameID(const memberlabel_t *pLabel, hashtable_t const * const table, const char *psz)
+static inline int32_t C_GetLabelNameID(memberlabel_t const *pLabel, hashtable_t const * const table, const char *psz)
 {
     // find the label psz in the table pLabel.
     // returns the ID for the label, or -1
 
-    int32_t l = hash_findcase(table, psz);
+    int const l = hash_findcase(table, psz);
     return (l >= 0) ? pLabel[l].lId : -1;
 }
 
@@ -1662,22 +1211,57 @@ static void C_GetNextLabelName(void)
 
 //    while (ispecial(*textptr) == 0 && *textptr!='['&& *textptr!=']' && *textptr!='\t' && *textptr!='\n' && *textptr!='\r')
     while (C_IsLabelChar(*textptr, i))
-        label[(g_labelCnt<<6)+(i++)] = *(textptr++);
+    {
+        if (i < (1<<6)-1)
+            label[(g_labelCnt<<6) + (i++)] = *textptr;
+        textptr++;
+    }
 
     label[(g_labelCnt<<6)+i] = 0;
 
     if (!(g_errorCnt|g_warningCnt) && g_scriptDebug > 1)
-        initprintf("%s:%d: debug: label `%s'.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: debug: label `%s'.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
 }
 
-static int32_t C_GetKeyword(void)
+static inline void scriptWriteValue(int32_t const value)
 {
-    int32_t i;
-    char *temptextptr;
+    BITPTR_CLEAR(g_scriptPtr-apScript);
+    *g_scriptPtr++ = value;
+}
 
+// addresses passed to these functions must be within the block of memory pointed to by apScript
+static inline void scriptWriteAtOffset(int32_t const value, intptr_t * const addr)
+{
+    BITPTR_CLEAR(addr-apScript);
+    *(addr) = value;
+}
+
+static inline void scriptWritePointer(intptr_t const value, intptr_t * const addr)
+{
+    BITPTR_SET(addr-apScript);
+    *(addr) = value;
+}
+
+static int32_t C_GetNextGameArrayName(void)
+{
+    C_GetNextLabelName();
+    int32_t const i = GetADefID(LAST_LABEL);
+    if (EDUKE32_PREDICT_FALSE(i < 0))
+    {
+        g_errorCnt++;
+        C_ReportError(ERROR_NOTAGAMEARRAY);
+        return -1;
+    }
+
+    scriptWriteValue(i);
+    return i;
+}
+
+static int C_GetKeyword(void)
+{
     C_SkipComments();
 
-    temptextptr = textptr;
+    char *temptextptr = textptr;
 
     if (*temptextptr == 0) // EOF
         return -2;
@@ -1689,7 +1273,8 @@ static int32_t C_GetKeyword(void)
             return 0;
     }
 
-    i = 0;
+    int i = 0;
+
     while (isaltok(*temptextptr))
         tempbuf[i++] = *(temptextptr++);
     tempbuf[i] = 0;
@@ -1697,16 +1282,14 @@ static int32_t C_GetKeyword(void)
     return hash_find(&h_keywords,tempbuf);
 }
 
-static int32_t C_GetNextKeyword(void) //Returns its code #
+static int C_GetNextKeyword(void) //Returns its code #
 {
-    int32_t i, l;
-
     C_SkipComments();
 
     if (*textptr == 0) // EOF
         return -2;
 
-    l = 0;
+    int l = 0;
     while (isaltok(*(textptr+l)))
     {
         tempbuf[l] = textptr[l];
@@ -1714,16 +1297,14 @@ static int32_t C_GetNextKeyword(void) //Returns its code #
     }
     tempbuf[l] = 0;
 
+    int i;
     if (EDUKE32_PREDICT_TRUE((i = hash_find(&h_keywords,tempbuf)) >= 0))
     {
         if (i == CON_LEFTBRACE || i == CON_RIGHTBRACE || i == CON_NULLOP)
-            *g_scriptPtr = i + (IFELSE_MAGIC<<12);
-        else *g_scriptPtr = i + (g_lineNumber<<12);
+            scriptWriteValue(i | (VM_IFELSE_MAGIC<<12));
+        else scriptWriteValue(i | LINE_NUMBER);
 
-        BITPTR_CLEAR(g_scriptPtr-apScript);
         textptr += l;
-        g_scriptPtr++;
-
         if (!(g_errorCnt || g_warningCnt) && g_scriptDebug)
             initprintf("%s:%d: debug: keyword `%s'.\n", g_scriptFileName, g_lineNumber, tempbuf);
         return i;
@@ -1776,7 +1357,7 @@ static int32_t parse_decimal_number(void)  // (textptr)
 
 static int32_t parse_hex_constant(const char *hexnum)
 {
-    int64_t x;
+    uint64_t x;
     sscanf(hexnum, "%" PRIx64 "", &x);
 
     if (EDUKE32_PREDICT_FALSE(x > UINT32_MAX))
@@ -1790,27 +1371,24 @@ static int32_t parse_hex_constant(const char *hexnum)
 
 static void C_GetNextVarType(int32_t type)
 {
-    int32_t i=0,f=0;
+    int32_t id    = 0;
+    int32_t flags = 0;
+
+    auto varptr = g_scriptPtr;
 
     C_SkipComments();
 
     if (!type && !g_labelsOnly && (isdigit(*textptr) || ((*textptr == '-') && (isdigit(*(textptr+1))))))
     {
-        BITPTR_CLEAR(g_scriptPtr-apScript);
-
-        *g_scriptPtr++ = MAXGAMEVARS;
+        scriptWriteValue(GV_FLAG_CONSTANT);
 
         if (tolower(textptr[1])=='x')  // hex constants
-            *g_scriptPtr = parse_hex_constant(textptr+2);
+            scriptWriteValue(parse_hex_constant(textptr+2));
         else
-            *g_scriptPtr = parse_decimal_number();
+            scriptWriteValue(parse_decimal_number());
 
         if (!(g_errorCnt || g_warningCnt) && g_scriptDebug)
-            initprintf("%s:%d: debug: constant %ld in place of gamevar.\n",
-                       g_scriptFileName,g_lineNumber,(long)*g_scriptPtr);
-
-        BITPTR_CLEAR(g_scriptPtr-apScript);
-        g_scriptPtr++;
+            initprintf("%s:%d: debug: constant %ld in place of gamevar.\n", g_scriptFileName, g_lineNumber, (long)(g_scriptPtr[-1]));
 #if 1
         while (!ispecial(*textptr) && *textptr != ']') textptr++;
 #else
@@ -1830,69 +1408,66 @@ static void C_GetNextVarType(int32_t type)
 
         if (!(g_errorCnt || g_warningCnt) && g_scriptDebug)
             initprintf("%s:%d: debug: flagging gamevar as negative.\n", g_scriptFileName, g_lineNumber); //,Batol(textptr));
-        f = (MAXGAMEVARS<<1);
 
+        flags = GV_FLAG_NEGATIVE;
         textptr++;
     }
 
     C_GetNextLabelName();
 
-    if (EDUKE32_PREDICT_FALSE(!g_skipKeywordCheck && hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
+    if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
     {
         g_errorCnt++;
         C_ReportError(ERROR_ISAKEYWORD);
         return;
     }
 
-    C_SkipComments(); //skip comments and whitespace
-    if (*textptr == '[')     //read of array as a gamevar
+    C_SkipComments();
+
+    if (*textptr == '[' || *textptr == '.')     //read of array as a gamevar
     {
-        int32_t labelNum = -1;
+        flags |= GV_FLAG_ARRAY;
+        if (*textptr != '.') textptr++;
+        id=GetADefID(LAST_LABEL);
 
-        f |= (MAXGAMEVARS<<2);
-        textptr++;
-        i=GetADefID(label+(g_labelCnt<<6));
-        if (i < 0)
+        if (id < 0)
         {
-            i=GetDefID(label+(g_labelCnt<<6));
-            if ((unsigned) (i - g_structVarIDs) >= NUMQUICKSTRUCTS)
-                i = -1;
+            id=GetDefID(LAST_LABEL);
+            if ((unsigned) (id - g_structVarIDs) >= NUMQUICKSTRUCTS)
+                id = -1;
 
-            if (EDUKE32_PREDICT_FALSE(i < 0))
+            if (EDUKE32_PREDICT_FALSE(id < 0))
             {
                 g_errorCnt++;
                 C_ReportError(ERROR_NOTAGAMEARRAY);
                 return;
             }
-            f &= ~(MAXGAMEVARS<<2); // not an array
-            f |= (MAXGAMEVARS<<3);
+
+            flags &= ~GV_FLAG_ARRAY; // not an array
+            flags |= GV_FLAG_STRUCT;
         }
 
-        BITPTR_CLEAR(g_scriptPtr-apScript);
-        *g_scriptPtr++=(i|f);
+        scriptWriteValue(id|flags);
 
-        if ((f & (MAXGAMEVARS<<3)) && i - g_structVarIDs == STRUCT_USERDEF)
+        if ((flags & GV_FLAG_STRUCT) && id - g_structVarIDs == STRUCT_USERDEF)
         {
             // userdef doesn't really have an array index
-            while (*textptr != ']')
+            while (*textptr != '.')
             {
-                if (*textptr == 0xa)
-                    break;
-                if (!*textptr)
+                if (*textptr == 0xa || *textptr == 0)
                     break;
 
                 textptr++;
             }
 
-            BITPTR_CLEAR(g_scriptPtr-apScript);
-            *g_scriptPtr++ = 0; // help out the VM by inserting a dummy index
+            scriptWriteValue(0); // help out the VM by inserting a dummy index
         }
         else
         {
-            if (*textptr == ']')
+            // allow "[]" or "." but not "[."
+            if (*textptr == ']' || (*textptr == '.' && textptr[-1] != '['))
             {
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++ = g_thisActorVarID;
+                scriptWriteValue(g_thisActorVarID);
             }
             else
                 C_GetNextVarType(0);
@@ -1900,13 +1475,14 @@ static void C_GetNextVarType(int32_t type)
             C_SkipComments();
         }
 
-        if (EDUKE32_PREDICT_FALSE(*textptr != ']'))
+        if (EDUKE32_PREDICT_FALSE(*textptr != ']' && *textptr != '.'))
         {
             g_errorCnt++;
             C_ReportError(ERROR_GAMEARRAYBNC);
             return;
         }
-        textptr++;
+
+        if (*textptr != '.') textptr++;
 
         //writing arrays in this way is not supported because it would require too many changes to other code
 
@@ -1917,13 +1493,11 @@ static void C_GetNextVarType(int32_t type)
             return;
         }
 
-        if (f & (MAXGAMEVARS<<3))
+        if (flags & GV_FLAG_STRUCT)
         {
             while (*textptr != '.')
             {
-                if (*textptr == 0xa)
-                    break;
-                if (!*textptr)
+                if (*textptr == 0xa || !*textptr)
                     break;
 
                 textptr++;
@@ -1940,162 +1514,149 @@ static void C_GetNextVarType(int32_t type)
             C_GetNextLabelName();
             /*initprintf("found xxx label of \"%s\"\n",   label+(g_numLabels<<6));*/
 
-            switch (i - g_structVarIDs)
+            int32_t labelNum = -1;
+
+            switch (id - g_structVarIDs)
             {
-            case STRUCT_SPRITE:
-                labelNum=C_GetLabelNameOffset(&h_actor,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_SECTOR:
-                labelNum=C_GetLabelNameOffset(&h_sector,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_WALL:
-                labelNum=C_GetLabelNameOffset(&h_wall,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_PLAYER:
-                labelNum=C_GetLabelNameOffset(&h_player,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_ACTORVAR:
-            case STRUCT_PLAYERVAR:
-                labelNum=GetDefID(label+(g_labelCnt<<6));
-                break;
-            case STRUCT_TSPR:
-                labelNum=C_GetLabelNameOffset(&h_tsprite,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_PROJECTILE:
-            case STRUCT_THISPROJECTILE:
-                labelNum=C_GetLabelNameOffset(&h_projectile,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_USERDEF:
-                labelNum=C_GetLabelNameOffset(&h_userdef,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_INPUT:
-                labelNum=C_GetLabelNameOffset(&h_input,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_TILEDATA:
-                labelNum=C_GetLabelNameOffset(&h_tiledata,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
-            case STRUCT_PALDATA:
-                labelNum=C_GetLabelNameOffset(&h_paldata,Bstrtolower(label+(g_labelCnt<<6)));
-                break;
+                case STRUCT_SPRITE:         labelNum = C_GetLabelNameOffset(&h_actor,      Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_SECTOR:         labelNum = C_GetLabelNameOffset(&h_sector,     Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_WALL:           labelNum = C_GetLabelNameOffset(&h_wall,       Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_PLAYER:         labelNum = C_GetLabelNameOffset(&h_player,     Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_TSPR:           labelNum = C_GetLabelNameOffset(&h_tsprite,    Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_PROJECTILE:
+                case STRUCT_THISPROJECTILE: labelNum = C_GetLabelNameOffset(&h_projectile, Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_USERDEF:        labelNum = C_GetLabelNameOffset(&h_userdef,    Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_INPUT:          labelNum = C_GetLabelNameOffset(&h_input,      Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_TILEDATA:       labelNum = C_GetLabelNameOffset(&h_tiledata,   Bstrtolower(LAST_LABEL)); break;
+                case STRUCT_PALDATA:        labelNum = C_GetLabelNameOffset(&h_paldata,    Bstrtolower(LAST_LABEL)); break;
+
+                case STRUCT_ACTORVAR:
+                case STRUCT_PLAYERVAR:      labelNum = GetDefID(LAST_LABEL); break;
             }
 
-            if (EDUKE32_PREDICT_FALSE(labelNum == -1))
+            if (labelNum == -1)
             {
                 g_errorCnt++;
                 C_ReportError(ERROR_NOTAMEMBER);
                 return;
             }
 
-            BITPTR_CLEAR(g_scriptPtr-apScript);
-
-            switch (i - g_structVarIDs)
+            switch (id - g_structVarIDs)
             {
             case STRUCT_SPRITE:
-                *g_scriptPtr++=ActorLabels[labelNum].lId;
+                {
+                    auto const &label = ActorLabels[labelNum];
 
-                if (ActorLabels[labelNum].flags & LABEL_HASPARM2)
-                    C_GetNextVarType(0);
+                    scriptWriteValue(label.lId);
+
+                    Bassert((*varptr & (MAXGAMEVARS-1)) == g_structVarIDs + STRUCT_SPRITE);
+
+                    if (label.flags & LABEL_HASPARM2)
+                        C_GetNextVarType(0);
+                    else if (label.offset != -1 && (label.flags & LABEL_READFUNC) == 0)
+                    {
+                        if (labelNum >= ACTOR_SPRITEEXT_BEGIN)
+                            *varptr = (*varptr & ~(MAXGAMEVARS-1)) + g_structVarIDs + STRUCT_SPRITEEXT_INTERNAL__;
+                        else if (labelNum >= ACTOR_STRUCT_BEGIN)
+                            *varptr = (*varptr & ~(MAXGAMEVARS-1)) + g_structVarIDs + STRUCT_ACTOR_INTERNAL__;
+                        else
+                            *varptr = (*varptr & ~(MAXGAMEVARS-1)) + g_structVarIDs + STRUCT_SPRITE_INTERNAL__;
+                    }
+                }
+
                 break;
             case STRUCT_SECTOR:
-                *g_scriptPtr++=SectorLabels[labelNum].lId;
+                scriptWriteValue(SectorLabels[labelNum].lId);
                 break;
             case STRUCT_WALL:
-                *g_scriptPtr++=WallLabels[labelNum].lId;
+                scriptWriteValue(WallLabels[labelNum].lId);
                 break;
             case STRUCT_PLAYER:
-                *g_scriptPtr++=PlayerLabels[labelNum].lId;
+                scriptWriteValue(PlayerLabels[labelNum].lId);
 
                 if (PlayerLabels[labelNum].flags & LABEL_HASPARM2)
                     C_GetNextVarType(0);
                 break;
             case STRUCT_ACTORVAR:
             case STRUCT_PLAYERVAR:
-                *g_scriptPtr++=labelNum;
+                scriptWriteValue(labelNum);
                 break;
             case STRUCT_TSPR:
-                *g_scriptPtr++=TsprLabels[labelNum].lId;
+                scriptWriteValue(TsprLabels[labelNum].lId);
                 break;
             case STRUCT_PROJECTILE:
             case STRUCT_THISPROJECTILE:
-                *g_scriptPtr++=ProjectileLabels[labelNum].lId;
+                scriptWriteValue(ProjectileLabels[labelNum].lId);
                 break;
             case STRUCT_USERDEF:
-                *g_scriptPtr++=UserdefsLabels[labelNum].lId;
+                scriptWriteValue(UserdefsLabels[labelNum].lId);
 
                 if (UserdefsLabels[labelNum].flags & LABEL_HASPARM2)
                     C_GetNextVarType(0);
                 break;
             case STRUCT_INPUT:
-                *g_scriptPtr++=InputLabels[labelNum].lId;
+                scriptWriteValue(InputLabels[labelNum].lId);
                 break;
             case STRUCT_TILEDATA:
-                *g_scriptPtr++=TileDataLabels[labelNum].lId;
+                scriptWriteValue(TileDataLabels[labelNum].lId);
                 break;
             case STRUCT_PALDATA:
-                *g_scriptPtr++=PalDataLabels[labelNum].lId;
+                scriptWriteValue(PalDataLabels[labelNum].lId);
                 break;
             }
         }
         return;
     }
-//    initprintf("not an array");
-    i=GetDefID(label+(g_labelCnt<<6));
-    if (i<0)   //gamevar not found
+
+    id=GetDefID(LAST_LABEL);
+    if (id<0)   //gamevar not found
     {
-        if (!type && !g_labelsOnly)
+        if (EDUKE32_PREDICT_TRUE(!type && !g_labelsOnly))
         {
             //try looking for a define instead
-            Bstrcpy(tempbuf,label+(g_labelCnt<<6));
-            i = hash_find(&h_labels,tempbuf);
-            if (EDUKE32_PREDICT_TRUE(i>=0))
+            Bstrcpy(tempbuf,LAST_LABEL);
+            id = hash_find(&h_labels,tempbuf);
+
+            if (EDUKE32_PREDICT_TRUE(id>=0 && labeltype[id] & LABEL_DEFINE))
             {
-                if (EDUKE32_PREDICT_TRUE(labeltype[i] & LABEL_DEFINE))
-                {
-                    if (!(g_errorCnt || g_warningCnt) && g_scriptDebug)
-                        initprintf("%s:%d: debug: label `%s' in place of gamevar.\n",g_scriptFileName,g_lineNumber,label+(i<<6));
-                    BITPTR_CLEAR(g_scriptPtr-apScript);
-                    *g_scriptPtr++ = MAXGAMEVARS;
-                    BITPTR_CLEAR(g_scriptPtr-apScript);
-                    *g_scriptPtr++ = labelcode[i];
-                    return;
-                }
+                if (!(g_errorCnt || g_warningCnt) && g_scriptDebug)
+                    initprintf("%s:%d: debug: label `%s' in place of gamevar.\n",g_scriptFileName,g_lineNumber,label+(id<<6));
+
+                scriptWriteValue(GV_FLAG_CONSTANT);
+                scriptWriteValue(labelcode[id]);
+                return;
             }
-            g_errorCnt++;
-            C_ReportError(ERROR_NOTAGAMEVAR);
-            return;
         }
+
         g_errorCnt++;
         C_ReportError(ERROR_NOTAGAMEVAR);
-        textptr++;
         return;
-
     }
-    if (EDUKE32_PREDICT_FALSE(type == GAMEVAR_READONLY && aGameVars[i].flags & GAMEVAR_READONLY))
+
+    if (EDUKE32_PREDICT_FALSE(type == GAMEVAR_READONLY && aGameVars[id].flags & GAMEVAR_READONLY))
     {
         g_errorCnt++;
         C_ReportError(ERROR_VARREADONLY);
         return;
     }
-    else if (EDUKE32_PREDICT_FALSE(aGameVars[i].flags & type))
+    else if (EDUKE32_PREDICT_FALSE(aGameVars[id].flags & type))
     {
         g_errorCnt++;
         C_ReportError(ERROR_VARTYPEMISMATCH);
         return;
     }
 
-    if (!(g_errorCnt || g_warningCnt) && g_scriptDebug > 1)
-        initprintf("%s:%d: debug: gamevar `%s'.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+    if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
+        initprintf("%s:%d: debug: gamevar `%s'.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
 
-    BITPTR_CLEAR(g_scriptPtr-apScript);
-    *g_scriptPtr++=(i|f);
+    scriptWriteValue(id|flags);
 }
 
 #define C_GetNextVar() C_GetNextVarType(0)
 
-static inline void C_GetManyVarsType(int32_t type, int32_t num)
+static FORCE_INLINE void C_GetManyVarsType(int32_t type, int num)
 {
-    int32_t i;
-    for (i=num-1; i>=0; i--)
+    for (; num>0; --num)
         C_GetNextVarType(type);
 }
 
@@ -2123,7 +1684,7 @@ static int32_t C_GetNextValue(int32_t type)
     }
     tempbuf[l] = 0;
 
-    if (EDUKE32_PREDICT_FALSE(!g_skipKeywordCheck && hash_find(&h_keywords,tempbuf /*label+(g_numLabels<<6)*/)>=0))
+    if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,tempbuf /*label+(g_numLabels<<6)*/)>=0))
     {
         g_errorCnt++;
         C_ReportError(ERROR_ISAKEYWORD);
@@ -2136,30 +1697,28 @@ static int32_t C_GetNextValue(int32_t type)
     {
         if (EDUKE32_PREDICT_TRUE(labeltype[i] & type))
         {
-            if (!(g_errorCnt || g_warningCnt) && g_scriptDebug > 1)
+            if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
             {
                 char *gl = C_GetLabelType(labeltype[i]);
                 initprintf("%s:%d: debug: %s label `%s'.\n",g_scriptFileName,g_lineNumber,gl,label+(i<<6));
-                Bfree(gl);
+                Xfree(gl);
             }
 
-            BITPTR_CLEAR(g_scriptPtr-apScript);
-            *(g_scriptPtr++) = labelcode[i];
+            scriptWriteValue(labelcode[i]);
 
             textptr += l;
             return labeltype[i];
         }
 
-        BITPTR_CLEAR(g_scriptPtr-apScript);
-        *(g_scriptPtr++) = 0;
+        scriptWriteValue(0);
         textptr += l;
-        char *el = C_GetLabelType(type);
-        char *gl = C_GetLabelType(labeltype[i]);
+        char * const el = C_GetLabelType(type);
+        char * const gl = C_GetLabelType(labeltype[i]);
         C_ReportError(-1);
         initprintf("%s:%d: warning: expected %s, found %s.\n",g_scriptFileName,g_lineNumber,el,gl);
         g_warningCnt++;
-        Bfree(el);
-        Bfree(gl);
+        Xfree(el);
+        Xfree(gl);
         return -1;  // valid label name, but wrong type
     }
 
@@ -2167,9 +1726,7 @@ static int32_t C_GetNextValue(int32_t type)
     {
         C_ReportError(ERROR_PARAMUNDEFINED);
         g_errorCnt++;
-        BITPTR_CLEAR(g_scriptPtr-apScript);
-        *g_scriptPtr = 0;
-        g_scriptPtr++;
+        scriptWriteValue(0);
         textptr+=l;
         if (!l) textptr++;
         return -1; // error!
@@ -2196,41 +1753,37 @@ static int32_t C_GetNextValue(int32_t type)
     }
     while (i > 0);
 
-    BITPTR_CLEAR(g_scriptPtr-apScript);
-
     if (textptr[0] == '0' && tolower(textptr[1])=='x')
-        *g_scriptPtr = parse_hex_constant(textptr+2);
+        scriptWriteValue(parse_hex_constant(textptr+2));
     else
-        *g_scriptPtr = parse_decimal_number();
+        scriptWriteValue(parse_decimal_number());
 
-    if (!(g_errorCnt || g_warningCnt) && g_scriptDebug > 1)
-        initprintf("%s:%d: debug: constant %ld.\n",
-                   g_scriptFileName,g_lineNumber,(long)*g_scriptPtr);
-
-    g_scriptPtr++;
+    if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
+        initprintf("%s:%d: debug: constant %ld.\n", g_scriptFileName, g_lineNumber, (long)g_scriptPtr[-1]);
 
     textptr += l;
 
     return 0;   // literal value
 }
 
-static int32_t C_GetStructureIndexes(int32_t const labelsonly, hashtable_t const * const table)
+static int C_GetStructureIndexes(bool const labelsonly, hashtable_t const * const table)
 {
     C_SkipComments();
 
-    if (EDUKE32_PREDICT_FALSE(*textptr++ != '['))
+    if (EDUKE32_PREDICT_FALSE(*textptr != '[' && *textptr != '.'))
     {
         g_errorCnt++;
         C_ReportError(ERROR_SYNTAXERROR);
         return -1;
     }
 
+    if (*textptr != '.') textptr++;
+
     C_SkipComments();
 
-    if (*textptr == ']')
+    if (*textptr == ']' || *textptr == '.')
     {
-        BITPTR_CLEAR(g_scriptPtr-apScript);
-        *g_scriptPtr++ = g_thisActorVarID;
+        scriptWriteValue(g_thisActorVarID);
     }
     else
     {
@@ -2239,7 +1792,7 @@ static int32_t C_GetStructureIndexes(int32_t const labelsonly, hashtable_t const
         g_labelsOnly = 0;
     }
 
-    textptr++;
+    if (*textptr != '.') textptr++;
 
     C_SkipComments();
 
@@ -2259,7 +1812,7 @@ static int32_t C_GetStructureIndexes(int32_t const labelsonly, hashtable_t const
 
     C_GetNextLabelName();
 
-    int32_t const labelNum = C_GetLabelNameOffset(table, Bstrtolower(label + (g_labelCnt << 6)));
+    int const labelNum = C_GetLabelNameOffset(table, Bstrtolower(LAST_LABEL));
 
     if (EDUKE32_PREDICT_FALSE(labelNum == -1))
     {
@@ -2271,26 +1824,26 @@ static int32_t C_GetStructureIndexes(int32_t const labelsonly, hashtable_t const
     return labelNum;
 }
 
-static inline int32_t C_IntPow2(int32_t const v)
+#ifdef CURRENTLY_UNUSED
+static FORCE_INLINE bool C_IntPow2(int32_t const v)
 {
     return ((v!=0) && (v&(v-1))==0);
 }
 
 static inline uint32_t C_Pow2IntLogBase2(int32_t const v)
 {
-    static const uint32_t b[] = {0xAAAAAAAA, 0xCCCCCCCC, 0xF0F0F0F0,
-                                 0xFF00FF00, 0xFFFF0000
-                                };
+    static constexpr uint32_t b[] = { 0xAAAAAAAA, 0xCCCCCCCC, 0xF0F0F0F0, 0xFF00FF00, 0xFFFF0000 };
 
     uint32_t r = (v & b[0]) != 0;
 
-    for (bssize_t i = 4; i > 0; i--)
+    for (int i = 0; i < ARRAY_SSIZE(b); ++i)
         r |= ((v & b[i]) != 0) << i;
 
     return r;
 }
+#endif
 
-static int32_t C_CheckMalformedBranch(intptr_t lastScriptPtr)
+static bool C_CheckMalformedBranch(intptr_t lastScriptPtr)
 {
     switch (C_GetKeyword())
     {
@@ -2299,112 +1852,112 @@ static int32_t C_CheckMalformedBranch(intptr_t lastScriptPtr)
     case CON_ENDEVENT:
     case CON_ENDS:
     case CON_ELSE:
-        g_scriptPtr = lastScriptPtr + &apScript[0];
-        g_ifElseAborted = 1;
+        g_scriptPtr = lastScriptPtr + apScript;
+        g_skipBranch = true;
         C_ReportError(-1);
         g_warningCnt++;
         initprintf("%s:%d: warning: malformed `%s' branch\n",g_scriptFileName,g_lineNumber,
                    VM_GetKeywordForID(*(g_scriptPtr) & VM_INSTMASK));
-        return 1;
+        return true;
     }
-    return 0;
+    return false;
 }
 
-static int32_t C_CheckEmptyBranch(int32_t tw, intptr_t lastScriptPtr)
+static bool C_CheckEmptyBranch(int tw, intptr_t lastScriptPtr)
 {
     // ifrnd and the others actually do something when the condition is executed
     if ((Bstrncmp(VM_GetKeywordForID(tw), "if", 2) && tw != CON_ELSE) ||
             tw == CON_IFRND || tw == CON_IFHITWEAPON || tw == CON_IFCANSEE || tw == CON_IFCANSEETARGET ||
             tw == CON_IFPDISTL || tw == CON_IFPDISTG || tw == CON_IFGOTWEAPONCE)
     {
-        g_ifElseAborted = 0;
-        return 0;
+        g_skipBranch = false;
+        return false;
     }
 
-    if ((*(g_scriptPtr) & VM_INSTMASK) != CON_NULLOP || *(g_scriptPtr)>>12 != IFELSE_MAGIC)
-        g_ifElseAborted = 0;
+    if ((*(g_scriptPtr) & VM_INSTMASK) != CON_NULLOP || *(g_scriptPtr)>>12 != VM_IFELSE_MAGIC)
+        g_skipBranch = false;
 
-    if (EDUKE32_PREDICT_FALSE(g_ifElseAborted))
+    if (EDUKE32_PREDICT_FALSE(g_skipBranch))
     {
         C_ReportError(-1);
         g_warningCnt++;
-        g_scriptPtr = lastScriptPtr + &apScript[0];
+        g_scriptPtr = lastScriptPtr + apScript;
         initprintf("%s:%d: warning: empty `%s' branch\n",g_scriptFileName,g_lineNumber,
                    VM_GetKeywordForID(*(g_scriptPtr) & VM_INSTMASK));
-        *(g_scriptPtr) = (CON_NULLOP + (IFELSE_MAGIC<<12));
-        return 1;
+        scriptWriteAtOffset(CON_NULLOP | (VM_IFELSE_MAGIC<<12), g_scriptPtr);
+        return true;
     }
-    return 0;
+
+    return false;
 }
 
-static int32_t C_CountCaseStatements()
+static int C_CountCaseStatements()
 {
-    char *temptextptr = textptr;
-    int32_t temp_ScriptLineNumber = g_lineNumber;
-    intptr_t scriptoffset = (unsigned)(g_scriptPtr-apScript);
-    intptr_t caseoffset = (unsigned)(g_caseScriptPtr-apScript);
-//    int32_t i;
+    char *const    temptextptr      = textptr;
+    int const      backupLineNumber = g_lineNumber;
+    int const      backupNumCases   = g_numCases;
+    intptr_t const casePtrOffset    = g_caseTablePtr - apScript;
+    intptr_t const scriptPtrOffset  = g_scriptPtr - apScript;
 
-    g_numCases=0;
-    g_caseScriptPtr=NULL;
-    //Bsprintf(g_szBuf,"CSS: %.12s",textptr);
-    //AddLog(g_szBuf);
-    C_ParseCommand(1);
+    g_numCases = 0;
+    g_caseTablePtr = NULL;
+    C_ParseCommand(true);
+
     // since we processed the endswitch, we need to re-increment g_checkingSwitch
     g_checkingSwitch++;
 
-    textptr=temptextptr;
-    g_scriptPtr = (intptr_t *)(apScript+scriptoffset);
+    int const numCases = g_numCases;
 
-    g_lineNumber = temp_ScriptLineNumber;
+    textptr        = temptextptr;
+    g_lineNumber   = backupLineNumber;
+    g_numCases     = backupNumCases;
+    g_caseTablePtr = apScript + casePtrOffset;
+    g_scriptPtr    = apScript + scriptPtrOffset;
 
-    int32_t const lCount=g_numCases;
-    g_numCases=0;
-    g_caseScriptPtr = (intptr_t *)(apScript+caseoffset);
-    g_numCases = 0;
-    return lCount;
+    return numCases;
 }
 
 static void C_Include(const char *confile)
 {
-    int32_t fp = kopen4loadfrommod(confile,g_loadFromGroupOnly);
+    buildvfs_kfd fp = kopen4loadfrommod(confile, g_loadFromGroupOnly);
 
-    if (EDUKE32_PREDICT_FALSE(fp < 0))
+    if (EDUKE32_PREDICT_FALSE(fp == buildvfs_kfd_invalid))
     {
         g_errorCnt++;
         initprintf("%s:%d: error: could not find file `%s'.\n",g_scriptFileName,g_lineNumber,confile);
         return;
     }
 
-    int32_t j = kfilelength(fp);
+    int32_t const len = kfilelength(fp);
+    char *mptr = (char *)Xmalloc(len+1);
 
-    char *mptr = (char *)Xmalloc(j+1);
+    initprintf("Including: %s (%d bytes)\n",confile, len);
 
-    initprintf("Including: %s (%d bytes)\n",confile, j);
-
-    kread(fp, mptr, j);
+    kread(fp, mptr, len);
     kclose(fp);
-    mptr[j] = 0;
+
+    mptr[len] = 0;
+    g_scriptcrc = Bcrc32(mptr, len, g_scriptcrc);
 
     if (*textptr == '"') // skip past the closing quote if it's there so we don't screw up the next line
         textptr++;
 
-    char *origtptr = textptr;
-    char parentScriptFileName[255];
+    char * const origtptr = textptr;
+    char parentScriptFileName[BMAX_PATH];
 
     Bstrcpy(parentScriptFileName, g_scriptFileName);
     Bstrcpy(g_scriptFileName, confile);
 
-    int32_t temp_ScriptLineNumber = g_lineNumber;
+    int const temp_ScriptLineNumber = g_lineNumber;
     g_lineNumber = 1;
 
-    int32_t temp_ifelse_check = g_checkingIfElse;
+    int const temp_ifelse_check = g_checkingIfElse;
     g_checkingIfElse = 0;
 
     textptr = mptr;
 
     C_SkipComments();
-    C_ParseCommand(1);
+    C_ParseCommand(true);
 
     Bstrcpy(g_scriptFileName, parentScriptFileName);
 
@@ -2414,16 +1967,25 @@ static void C_Include(const char *confile)
 
     textptr = origtptr;
 
-    Bfree(mptr);
+    Xfree(mptr);
 }
 #endif  // !defined LUNATIC
 
 #ifdef _WIN32
 static void check_filename_case(const char *fn)
 {
-    int32_t fp;
-    if ((fp = kopen4loadfrommod(fn, g_loadFromGroupOnly)) >= 0)
-        kclose(fp);
+        static char buf[BMAX_PATH];
+
+        // .zip isn't case sensitive, and calling kopen4load on files in .zips is slow
+        Bstrcpy(buf, fn);
+        kzfindfilestart(buf);
+
+        if (!kzfindfile(buf))
+        {
+            buildvfs_kfd fp;
+            if ((fp = kopen4loadfrommod(fn, g_loadFromGroupOnly)) != buildvfs_kfd_invalid)
+                kclose(fp);
+        }
 }
 #else
 static void check_filename_case(const char *fn) { UNREFERENCED_PARAMETER(fn); }
@@ -2431,16 +1993,19 @@ static void check_filename_case(const char *fn) { UNREFERENCED_PARAMETER(fn); }
 
 void G_DoGameStartup(const int32_t *params)
 {
+    auto &p0 = *g_player[0].ps;
     int j = 0;
 
-    ud.const_visibility               = params[j++];
-    g_impactDamage                    = params[j++];
-    g_player[0].ps->max_shield_amount = params[j++];
-    g_player[0].ps->max_player_health = g_player[0].ps->max_shield_amount;
-    g_maxPlayerHealth                 = g_player[0].ps->max_player_health;
-    g_startArmorAmount                = params[j++];
-    g_actorRespawnTime                = params[j++];
-    g_itemRespawnTime                 = (g_scriptVersion >= 11) ? params[j++] : g_actorRespawnTime;
+    ud.const_visibility  = params[j++];
+    g_impactDamage       = params[j++];
+
+    p0.max_shield_amount = params[j];
+    p0.max_player_health = params[j];
+    g_maxPlayerHealth    = params[j++];
+
+    g_startArmorAmount   = params[j++];
+    g_actorRespawnTime   = params[j++];
+    g_itemRespawnTime    = (g_scriptVersion >= 11) ? params[j++] : g_actorRespawnTime;
 
     if (g_scriptVersion >= 11)
         g_playerFriction = params[j++];
@@ -2459,21 +2024,21 @@ void G_DoGameStartup(const int32_t *params)
         g_seenineRadius    = params[j++];
     }
 
-    g_player[0].ps->max_ammo_amount[PISTOL_WEAPON]     = params[j++];
-    g_player[0].ps->max_ammo_amount[SHOTGUN_WEAPON]    = params[j++];
-    g_player[0].ps->max_ammo_amount[CHAINGUN_WEAPON]   = params[j++];
-    g_player[0].ps->max_ammo_amount[RPG_WEAPON]        = params[j++];
-    g_player[0].ps->max_ammo_amount[HANDBOMB_WEAPON]   = params[j++];
-    g_player[0].ps->max_ammo_amount[SHRINKER_WEAPON]   = params[j++];
-    g_player[0].ps->max_ammo_amount[DEVISTATOR_WEAPON] = params[j++];
-    g_player[0].ps->max_ammo_amount[TRIPBOMB_WEAPON]   = params[j++];
+    p0.max_ammo_amount[PISTOL_WEAPON]     = params[j++];
+    p0.max_ammo_amount[SHOTGUN_WEAPON]    = params[j++];
+    p0.max_ammo_amount[CHAINGUN_WEAPON]   = params[j++];
+    p0.max_ammo_amount[RPG_WEAPON]        = params[j++];
+    p0.max_ammo_amount[HANDBOMB_WEAPON]   = params[j++];
+    p0.max_ammo_amount[SHRINKER_WEAPON]   = params[j++];
+    p0.max_ammo_amount[DEVISTATOR_WEAPON] = params[j++];
+    p0.max_ammo_amount[TRIPBOMB_WEAPON]   = params[j++];
 
     if (g_scriptVersion >= 13)
     {
-        g_player[0].ps->max_ammo_amount[FREEZE_WEAPON] = params[j++];
+        p0.max_ammo_amount[FREEZE_WEAPON] = params[j++];
 
         if (g_scriptVersion >= 14)
-            g_player[0].ps->max_ammo_amount[GROW_WEAPON] = params[j++];
+            p0.max_ammo_amount[GROW_WEAPON] = params[j++];
 
         g_damageCameras     = params[j++];
         g_numFreezeBounces  = params[j++];
@@ -2481,9 +2046,12 @@ void G_DoGameStartup(const int32_t *params)
 
         if (g_scriptVersion >= 14)
         {
-            g_deleteQueueSize   = clamp(params[j++], 0, 1024);
+            g_deleteQueueSize   = clamp(params[j++], 0, ARRAY_SSIZE(SpriteDeletionQueue));
             g_tripbombLaserMode = params[j++];
         }
+
+        if (g_scriptVersion >= 16)
+            p0.max_ammo_amount[FLAMETHROWER_WEAPON] = params[j++];
     }
 }
 
@@ -2492,9 +2060,12 @@ void C_DefineMusic(int volumeNum, int levelNum, const char *fileName)
     Bassert((unsigned)volumeNum < MAXVOLUMES+1);
     Bassert((unsigned)levelNum < MAXLEVELS);
 
+    if (strcmp(fileName, "/.") == 0)
+        return;
+
     map_t *const pMapInfo = &g_mapInfo[(MAXLEVELS*volumeNum)+levelNum];
 
-    Bfree(pMapInfo->musicfn);
+    Xfree(pMapInfo->musicfn);
     pMapInfo->musicfn = dup_filename(fileName);
     check_filename_case(pMapInfo->musicfn);
 }
@@ -2507,7 +2078,7 @@ void C_DefineSound(int32_t sndidx, const char *fn, int32_t args[5])
     {
         sound_t *const snd = &g_sounds[sndidx];
 
-        Bfree(snd->filename);
+        Xfree(snd->filename);
         snd->filename = dup_filename(fn);
         check_filename_case(snd->filename);
 
@@ -2554,11 +2125,11 @@ void C_DefineLevelName(int32_t vol, int32_t lev, const char *fn,
     {
         map_t *const map = &g_mapInfo[(MAXLEVELS*vol)+lev];
 
-        Bfree(map->filename);
+        Xfree(map->filename);
         map->filename = dup_filename(fn);
 
         // TODO: truncate to 32 chars?
-        Bfree(map->name);
+        Xfree(map->name);
         map->name = Xstrdup(levelname);
 
         map->partime = REALGAMETICSPERSEC * partime;
@@ -2652,13 +2223,12 @@ LUNATIC_EXTERN int32_t C_SetDefName(const char *name)
 }
 
 defaultprojectile_t DefaultProjectile;
-int32_t g_numProjectiles = 0;
 
 EDUKE32_STATIC_ASSERT(sizeof(projectile_t) == sizeof(DefaultProjectile));
 
 void C_AllocProjectile(int32_t j)
 {
-    g_tile[j].proj = (projectile_t *)Xmalloc(2 * sizeof(projectile_t));
+    g_tile[j].proj = (projectile_t *)Xrealloc(g_tile[j].proj, 2 * sizeof(projectile_t));
     g_tile[j].defproj = g_tile[j].proj + 1;
 }
 
@@ -2675,74 +2245,43 @@ LUNATIC_EXTERN void C_DefineProjectile(int32_t j, int32_t what, int32_t val)
     {
         C_AllocProjectile(j);
         *g_tile[j].proj = DefaultProjectile;
-        g_numProjectiles += 2;
     }
 
     projectile_t * const proj = g_tile[j].proj;
 
     switch (what)
     {
-    case PROJ_WORKSLIKE:
-        proj->workslike = val; break;
-    case PROJ_SPAWNS:
-        proj->spawns = val; break;
-    case PROJ_SXREPEAT:
-        proj->sxrepeat = val; break;
-    case PROJ_SYREPEAT:
-        proj->syrepeat = val; break;
-    case PROJ_SOUND:
-        proj->sound = val; break;
-    case PROJ_ISOUND:
-        proj->isound = val; break;
-    case PROJ_VEL:
-        proj->vel = val; break;
-    case PROJ_EXTRA:
-        proj->extra = val; break;
-    case PROJ_DECAL:
-        proj->decal = val; break;
-    case PROJ_TRAIL:
-        proj->trail = val; break;
-    case PROJ_TXREPEAT:
-        proj->txrepeat = val; break;
-    case PROJ_TYREPEAT:
-        proj->tyrepeat = val; break;
-    case PROJ_TOFFSET:
-        proj->toffset = val; break;
-    case PROJ_TNUM:
-        proj->tnum = val; break;
-    case PROJ_DROP:
-        proj->drop = val; break;
-    case PROJ_CSTAT:
-        proj->cstat = val; break;
-    case PROJ_CLIPDIST:
-        proj->clipdist = val; break;
-    case PROJ_SHADE:
-        proj->shade = val; break;
-    case PROJ_XREPEAT:
-        proj->xrepeat = val; break;
-    case PROJ_YREPEAT:
-        proj->yrepeat = val; break;
-    case PROJ_PAL:
-        proj->pal = val; break;
-    case PROJ_EXTRA_RAND:
-        proj->extra_rand = val; break;
-    case PROJ_HITRADIUS:
-        proj->hitradius = val; break;
-    case PROJ_MOVECNT:
-        proj->movecnt = val; break;
-    case PROJ_OFFSET:
-        proj->offset = val; break;
-    case PROJ_BOUNCES:
-        proj->bounces = val; break;
-    case PROJ_BSOUND:
-        proj->bsound = val; break;
-    case PROJ_RANGE:
-        proj->range = val; break;
-    case PROJ_FLASH_COLOR:
-        proj->flashcolor = val; break;
-    case PROJ_USERDATA:
-        proj->userdata = val; break;
-    default: break;
+        case PROJ_WORKSLIKE:   proj->workslike  = val; break;
+        case PROJ_SPAWNS:      proj->spawns     = val; break;
+        case PROJ_SXREPEAT:    proj->sxrepeat   = val; break;
+        case PROJ_SYREPEAT:    proj->syrepeat   = val; break;
+        case PROJ_SOUND:       proj->sound      = val; break;
+        case PROJ_ISOUND:      proj->isound     = val; break;
+        case PROJ_VEL:         proj->vel        = val; break;
+        case PROJ_EXTRA:       proj->extra      = val; break;
+        case PROJ_DECAL:       proj->decal      = val; break;
+        case PROJ_TRAIL:       proj->trail      = val; break;
+        case PROJ_TXREPEAT:    proj->txrepeat   = val; break;
+        case PROJ_TYREPEAT:    proj->tyrepeat   = val; break;
+        case PROJ_TOFFSET:     proj->toffset    = val; break;
+        case PROJ_TNUM:        proj->tnum       = val; break;
+        case PROJ_DROP:        proj->drop       = val; break;
+        case PROJ_CSTAT:       proj->cstat      = val; break;
+        case PROJ_CLIPDIST:    proj->clipdist   = val; break;
+        case PROJ_SHADE:       proj->shade      = val; break;
+        case PROJ_XREPEAT:     proj->xrepeat    = val; break;
+        case PROJ_YREPEAT:     proj->yrepeat    = val; break;
+        case PROJ_PAL:         proj->pal        = val; break;
+        case PROJ_EXTRA_RAND:  proj->extra_rand = val; break;
+        case PROJ_HITRADIUS:   proj->hitradius  = val; break;
+        case PROJ_MOVECNT:     proj->movecnt    = val; break;
+        case PROJ_OFFSET:      proj->offset     = val; break;
+        case PROJ_BOUNCES:     proj->bounces    = val; break;
+        case PROJ_BSOUND:      proj->bsound     = val; break;
+        case PROJ_RANGE:       proj->range      = val; break;
+        case PROJ_FLASH_COLOR: proj->flashcolor = val; break;
+        case PROJ_USERDATA:    proj->userdata   = val; break;
+        default: break;
     }
 
     *g_tile[j].defproj = *proj;
@@ -2783,7 +2322,7 @@ static void C_ReplaceQuoteSubstring(const size_t q, char const * const query, ch
 
 void C_InitQuotes(void)
 {
-    for (bssize_t i = 0; i < 128; i++) C_AllocQuote(i);
+    for (int i = 0; i < 128; i++) C_AllocQuote(i);
 
 #ifdef EDUKE32_TOUCH_DEVICES
     apStrings[QUOTE_DEAD] = 0;
@@ -2880,44 +2419,28 @@ LUNATIC_EXTERN void C_SetCfgName(const char *cfgname)
     if (Bstrcmp(g_setupFileName, cfgname) == 0) // no need to do anything if name is the same
         return;
 
-    char temp[BMAX_PATH];
-    struct Bstat st;
-
-    int32_t fullscreen = ud.config.ScreenMode;
-    int32_t xdim = ud.config.ScreenWidth, ydim = ud.config.ScreenHeight, bpp = ud.config.ScreenBPP;
-    int32_t usemouse = ud.config.UseMouse, usejoy = ud.config.UseJoystick;
-#ifdef USE_OPENGL
-    int32_t glrm = glrendmode;
-#endif
-
     if (Bstrcmp(g_setupFileName, SETUPFILENAME) != 0) // set to something else via -cfg
         return;
 
-    if (Bstat(g_modDir, &st) < 0)
+    ud_setup_t const config = ud.setup;
+#ifdef POLYMER
+    int const renderMode = glrendmode;
+#endif
+
+    if (!buildvfs_isdir(g_modDir))
     {
-        if (errno == ENOENT)     // path doesn't exist
+        if (buildvfs_mkdir(g_modDir, S_IRWXU) != 0)
         {
-            if (Bmkdir(g_modDir, S_IRWXU) < 0)
-            {
-                OSD_Printf("Failed to create configuration file directory %s\n", g_modDir);
-                return;
-            }
-            else OSD_Printf("Created configuration file directory %s\n", g_modDir);
-        }
-        else
-        {
-            // another type of failure
+            OSD_Printf("Failed to create directory \"%s\"!\n", g_modDir);
             return;
         }
-    }
-    else if ((st.st_mode & S_IFDIR) != S_IFDIR)
-    {
-        // directory isn't a directory
-        return;
+        else
+            OSD_Printf("Created configuration file directory %s\n", g_modDir);
     }
 
     // XXX: Back up 'cfgname' as it may be the global 'tempbuf'.
-    Bstrncpyz(temp, cfgname, sizeof(temp));
+    char *temp = Xstrdup(cfgname);
+
     CONFIG_WriteSetup(1);
 
     if (g_modDir[0] != '/')
@@ -2925,18 +2448,15 @@ LUNATIC_EXTERN void C_SetCfgName(const char *cfgname)
     else
         Bstrncpyz(g_setupFileName, temp, sizeof(g_setupFileName));
 
+    DO_FREE_AND_NULL(temp);
+
     initprintf("Using config file \"%s\".\n", g_setupFileName);
 
     CONFIG_ReadSetup();
 
-    ud.config.ScreenMode = fullscreen;
-    ud.config.ScreenWidth = xdim;
-    ud.config.ScreenHeight = ydim;
-    ud.config.ScreenBPP = bpp;
-    ud.config.UseMouse = usemouse;
-    ud.config.UseJoystick = usejoy;
-#ifdef USE_OPENGL
-    glrendmode = glrm;
+    ud.setup = config;
+#ifdef POLYMER
+    glrendmode = renderMode;
 #endif
 }
 
@@ -2950,8 +2470,7 @@ static inline void C_BitOrNextValue(int32_t *valptr)
 
 static inline void C_FinishBitOr(int32_t value)
 {
-    BITPTR_CLEAR(g_scriptPtr-apScript);
-    *g_scriptPtr++ = value;
+    scriptWriteValue(value);
 }
 
 static void C_FillEventBreakStackWithJump(intptr_t *breakPtr, intptr_t destination)
@@ -2960,25 +2479,63 @@ static void C_FillEventBreakStackWithJump(intptr_t *breakPtr, intptr_t destinati
     {
         breakPtr = apScript + (intptr_t)breakPtr;
         intptr_t const tempPtr = *breakPtr;
-        BITPTR_CLEAR(breakPtr-apScript);
-        *breakPtr = destination;
+        scriptWriteAtOffset(destination, breakPtr);
         breakPtr = (intptr_t *)tempPtr;
     }
 }
 
-static int32_t C_ParseCommand(int32_t loop)
+static void scriptUpdateOpcodeForVariableType(intptr_t *ins)
+{
+    int opcode = -1;
+
+#ifdef CON_DISCRETE_VAR_ACCESS
+    if (ins[1] < MAXGAMEVARS)
+    {
+        switch (aGameVars[ins[1] & (MAXGAMEVARS - 1)].flags & (GAMEVAR_USER_MASK | GAMEVAR_PTR_MASK))
+        {
+            case 0:
+                opcode = inthash_find(&h_globalvar, *ins & VM_INSTMASK);
+                break;
+            case GAMEVAR_PERACTOR:
+                opcode = inthash_find(&h_actorvar, *ins & VM_INSTMASK);
+                break;
+            case GAMEVAR_PERPLAYER:
+                opcode = inthash_find(&h_playervar, *ins & VM_INSTMASK);
+                break;
+        }
+    }
+#endif
+
+    if (opcode != -1)
+    {
+        if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
+        {
+            initprintf("%s:%d: %s -> %s for var %s\n", g_scriptFileName, g_lineNumber,
+                        VM_GetKeywordForID(*ins & VM_INSTMASK), VM_GetKeywordForID(opcode), aGameVars[ins[1] & (MAXGAMEVARS-1)].szLabel);
+        }
+
+        scriptWriteAtOffset(opcode | LINE_NUMBER, ins);
+    }
+}
+
+static bool C_ParseCommand(bool loop /*= false*/)
 {
     int32_t i, j=0, k=0, tw;
 
     do
     {
-        if (EDUKE32_PREDICT_FALSE(g_errorCnt > 63 || (*textptr == '\0') || (*(textptr+1) == '\0') || C_SkipComments()))
+        if (EDUKE32_PREDICT_FALSE(g_errorCnt > 63 || (*textptr == '\0') || (*(textptr+1) == '\0')))
             return 1;
+
+        if ((g_scriptPtr - apScript) > (g_scriptSize - 4096) && g_caseTablePtr == NULL)
+            C_SetScriptSize(g_scriptSize << 1);
 
         if (EDUKE32_PREDICT_FALSE(g_scriptDebug))
             C_ReportError(-1);
 
-        int32_t const otw = g_lastKeyword;
+        int const otw = g_lastKeyword;
+
+        C_SkipComments();
 
         switch ((g_lastKeyword = tw = C_GetNextKeyword()))
         {
@@ -2987,7 +2544,7 @@ static int32_t C_ParseCommand(int32_t loop)
         case -2:
             return 1; //End
         case CON_DEFSTATE:
-            if (EDUKE32_PREDICT_FALSE(g_processingState || g_parsingActorPtr))
+            if (EDUKE32_PREDICT_FALSE(g_processingState || g_scriptActorOffset))
             {
                 C_ReportError(ERROR_FOUNDWITHIN);
                 g_errorCnt++;
@@ -2995,7 +2552,7 @@ static int32_t C_ParseCommand(int32_t loop)
             }
             goto DO_DEFSTATE;
         case CON_STATE:
-            if (!g_parsingActorPtr && g_processingState == 0)
+            if (!g_scriptActorOffset && g_processingState == 0)
             {
 DO_DEFSTATE:
                 C_GetNextLabelName();
@@ -3004,32 +2561,32 @@ DO_DEFSTATE:
                 labeltype[g_labelCnt] = LABEL_STATE;
 
                 g_processingState = 1;
-                Bsprintf(g_szCurrentBlockName,"%s",label+(g_labelCnt<<6));
+                Bsprintf(g_szCurrentBlockName,"%s",LAST_LABEL);
 
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
                 {
                     g_errorCnt++;
                     C_ReportError(ERROR_ISAKEYWORD);
                     continue;
                 }
 
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_gamevars,label+(g_labelCnt<<6))>=0))
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_gamevars,LAST_LABEL)>=0))
                 {
                     g_warningCnt++;
                     C_ReportError(WARNING_NAMEMATCHESVAR);
                 }
 
-                hash_add(&h_labels,label+(g_labelCnt<<6),g_labelCnt,0);
+                hash_add(&h_labels,LAST_LABEL,g_labelCnt,0);
                 g_labelCnt++;
                 continue;
             }
 
             C_GetNextLabelName();
 
-            if (EDUKE32_PREDICT_FALSE((j = hash_find(&h_labels,label+(g_labelCnt<<6))) < 0))
+            if (EDUKE32_PREDICT_FALSE((j = hash_find(&h_labels,LAST_LABEL)) < 0))
             {
                 C_ReportError(-1);
-                initprintf("%s:%d: error: state `%s' not found.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+                initprintf("%s:%d: error: state `%s' not found.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
                 g_errorCnt++;
                 g_scriptPtr++;
                 continue;
@@ -3041,20 +2598,16 @@ DO_DEFSTATE:
                 C_ReportError(-1);
                 initprintf("%s:%d: warning: expected state, found %s.\n", g_scriptFileName, g_lineNumber, gl);
                 g_warningCnt++;
-                Bfree(gl);
-                *(g_scriptPtr-1) = CON_NULLOP; // get rid of the state, leaving a nullop to satisfy if conditions
-                BITPTR_CLEAR(g_scriptPtr-apScript-1);
+                Xfree(gl);
+                scriptWriteAtOffset(CON_NULLOP, &g_scriptPtr[-1]); // get rid of the state, leaving a nullop to satisfy if conditions
                 continue;  // valid label name, but wrong type
             }
 
-            if (!(g_errorCnt || g_warningCnt) && g_scriptDebug > 1)
+            if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
                 initprintf("%s:%d: debug: state label `%s'.\n", g_scriptFileName, g_lineNumber, label+(j<<6));
-            *g_scriptPtr = (intptr_t) (apScript+labelcode[j]);
 
             // 'state' type labels are always script addresses, as far as I can see
-            BITPTR_SET(g_scriptPtr-apScript);
-
-            g_scriptPtr++;
+            scriptWritePointer((intptr_t)(apScript+labelcode[j]), g_scriptPtr++);
             continue;
 
         case CON_ENDS:
@@ -3064,44 +2617,36 @@ DO_DEFSTATE:
                 initprintf("%s:%d: error: found `ends' without open `state'.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
             }
-            //            else
+
+            if (EDUKE32_PREDICT_FALSE(g_numBraces > 0))
             {
-                if (EDUKE32_PREDICT_FALSE(g_numBraces > 0))
-                {
-                    C_ReportError(ERROR_OPENBRACKET);
-                    g_errorCnt++;
-                }
-                else if (EDUKE32_PREDICT_FALSE(g_numBraces < 0))
-                {
-                    C_ReportError(ERROR_CLOSEBRACKET);
-                    g_errorCnt++;
-                }
-
-                if (EDUKE32_PREDICT_FALSE(g_checkingSwitch > 0))
-                {
-                    C_ReportError(ERROR_NOENDSWITCH);
-                    g_errorCnt++;
-
-                    g_checkingSwitch = 0; // can't be checking anymore...
-                }
-
-                g_processingState = 0;
-                Bsprintf(g_szCurrentBlockName,"(none)");
+                C_ReportError(ERROR_NOTTOPLEVEL);
+                g_errorCnt++;
             }
+
+            if (EDUKE32_PREDICT_FALSE(g_checkingSwitch > 0))
+            {
+                C_ReportError(ERROR_NOENDSWITCH);
+                g_errorCnt++;
+
+                g_checkingSwitch = 0; // can't be checking anymore...
+            }
+
+            g_processingState = 0;
+            Bsprintf(g_szCurrentBlockName,"(none)");
             continue;
 
-        case CON_SETTHISPROJECTILE:
-        case CON_SETPROJECTILE:
-        case CON_GETTHISPROJECTILE:
         case CON_GETPROJECTILE:
+        case CON_GETTHISPROJECTILE:
+        case CON_SETPROJECTILE:
+        case CON_SETTHISPROJECTILE:
             {
-                int32_t const labelNum = C_GetStructureIndexes(tw == CON_SETTHISPROJECTILE || tw == CON_GETTHISPROJECTILE, &h_projectile);
+                int const labelNum = C_GetStructureIndexes(tw == CON_SETTHISPROJECTILE || tw == CON_GETTHISPROJECTILE, &h_projectile);
 
                 if (labelNum == -1)
                     continue;
 
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=ProjectileLabels[labelNum].lId;
+                scriptWriteValue(ProjectileLabels[labelNum].lId);
 
                 switch (tw)
                 {
@@ -3125,15 +2670,9 @@ DO_DEFSTATE:
 
             if (EDUKE32_PREDICT_FALSE(isdigit(*textptr) || (*textptr == '-')))
             {
-                C_GetNextLabelName();
                 g_errorCnt++;
                 C_ReportError(ERROR_SYNTAXERROR);
-                C_GetNextValue(LABEL_DEFINE);
-                j = 0;
-                while (C_GetKeyword() == -1)
-                    C_BitOrNextValue(&j);
-                C_FinishBitOr(j);
-                g_scriptPtr -= 3; // we complete the process anyways just to skip past the fucked up section
+                scriptSkipLine();
                 continue;
             }
 
@@ -3141,11 +2680,11 @@ DO_DEFSTATE:
 
             C_GetNextLabelName();
 
-            if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords, label+(g_labelCnt<<6))>=0))
+            if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords, LAST_LABEL)>=0))
             {
                 g_warningCnt++;
                 C_ReportError(WARNING_VARMASKSKEYWORD);
-                hash_delete(&h_keywords, label+(g_labelCnt<<6));
+                hash_delete(&h_keywords, LAST_LABEL);
             }
 
             int32_t defaultValue = 0;
@@ -3172,7 +2711,7 @@ DO_DEFSTATE:
                 }
             }
 
-            Gv_NewVar(label+(g_labelCnt<<6), defaultValue, varFlags);
+            Gv_NewVar(LAST_LABEL, defaultValue, varFlags);
             continue;
         }
 
@@ -3180,24 +2719,21 @@ DO_DEFSTATE:
         {
             if (EDUKE32_PREDICT_FALSE(isdigit(*textptr) || (*textptr == '-')))
             {
-                C_GetNextLabelName();
                 g_errorCnt++;
                 C_ReportError(ERROR_SYNTAXERROR);
-                C_GetNextValue(LABEL_DEFINE);
-                C_GetNextValue(LABEL_DEFINE);
-                g_scriptPtr -= 2; // we complete the process anyways just to skip past the fucked up section
+                scriptSkipLine();
                 continue;
             }
             C_GetNextLabelName();
 
-            if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
+            if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
             {
                 g_warningCnt++;
                 C_ReportError(WARNING_ARRAYMASKSKEYWORD);
-                hash_delete(&h_keywords, label+(g_labelCnt<<6));
+                hash_delete(&h_keywords, LAST_LABEL);
             }
 
-            i = hash_find(&h_gamevars,label+(g_labelCnt<<6));
+            i = hash_find(&h_gamevars,LAST_LABEL);
             if (EDUKE32_PREDICT_FALSE(i>=0))
             {
                 g_warningCnt++;
@@ -3206,7 +2742,7 @@ DO_DEFSTATE:
 
             C_GetNextValue(LABEL_DEFINE);
 
-            char const * const arrayName = label+(g_labelCnt<<6);
+            char const * const arrayName = LAST_LABEL;
             int32_t arrayFlags = 0;
 
             while (C_GetKeyword() == -1)
@@ -3214,10 +2750,10 @@ DO_DEFSTATE:
 
             C_FinishBitOr(arrayFlags);
 
-            arrayFlags = *(g_scriptPtr-1);
+            arrayFlags = g_scriptPtr[-1];
             g_scriptPtr--;
 
-            Gv_NewArray(arrayName, NULL, *(g_scriptPtr-1), arrayFlags);
+            Gv_NewArray(arrayName, NULL, g_scriptPtr[-1], arrayFlags);
 
             g_scriptPtr -= 2; // no need to save in script...
             continue;
@@ -3227,14 +2763,14 @@ DO_DEFSTATE:
             {
                 C_GetNextLabelName();
 
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
                 {
                     g_errorCnt++;
                     C_ReportError(ERROR_ISAKEYWORD);
                     continue;
                 }
 
-                i = hash_find(&h_gamevars,label+(g_labelCnt<<6));
+                i = hash_find(&h_gamevars,LAST_LABEL);
                 if (EDUKE32_PREDICT_FALSE(i>=0))
                 {
                     g_warningCnt++;
@@ -3243,25 +2779,25 @@ DO_DEFSTATE:
 
                 C_GetNextValue(LABEL_DEFINE);
 
-                i = hash_find(&h_labels,label+(g_labelCnt<<6));
+                i = hash_find(&h_labels,LAST_LABEL);
                 if (i>=0)
                 {
                     // if (i >= g_numDefaultLabels)
 
-                    if (EDUKE32_PREDICT_FALSE(labelcode[i] != *(g_scriptPtr-1)))
+                    if (EDUKE32_PREDICT_FALSE(labelcode[i] != g_scriptPtr[-1]))
                     {
                         g_warningCnt++;
                         initprintf("%s:%d: warning: ignored redefinition of `%s' to %d (old: %d).\n",g_scriptFileName,
-                                   g_lineNumber,label+(g_labelCnt<<6), (int32_t)(*(g_scriptPtr-1)), labelcode[i]);
+                                   g_lineNumber,LAST_LABEL, (int32_t)(g_scriptPtr[-1]), labelcode[i]);
                     }
                 }
                 else
                 {
-                    hash_add(&h_labels,label+(g_labelCnt<<6),g_labelCnt,0);
+                    hash_add(&h_labels,LAST_LABEL,g_labelCnt,0);
                     labeltype[g_labelCnt] = LABEL_DEFINE;
-                    labelcode[g_labelCnt++] = *(g_scriptPtr-1);
-                    if (*(g_scriptPtr-1) >= 0 && *(g_scriptPtr-1) < MAXTILES && g_dynamicTileMapping)
-                        G_ProcessDynamicTileMapping(label+((g_labelCnt-1)<<6),*(g_scriptPtr-1));
+                    labelcode[g_labelCnt++] = g_scriptPtr[-1];
+                    if (g_scriptPtr[-1] >= 0 && g_scriptPtr[-1] < MAXTILES && g_dynamicTileMapping)
+                        G_ProcessDynamicTileMapping(label+((g_labelCnt-1)<<6),g_scriptPtr[-1]);
                 }
                 g_scriptPtr -= 2;
                 continue;
@@ -3277,20 +2813,18 @@ DO_DEFSTATE:
 
             while (j>-1)
             {
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++ = 0;
+                scriptWriteValue(0);
                 j--;
             }
             continue;
 
         case CON_MOVE:
-            if (g_parsingActorPtr || g_processingState)
+            if (g_scriptActorOffset || g_processingState)
             {
-                if (EDUKE32_PREDICT_FALSE((C_GetNextValue(LABEL_MOVE|LABEL_DEFINE) == 0) && (*(g_scriptPtr-1) != 0) && (*(g_scriptPtr-1) != 1)))
+                if (EDUKE32_PREDICT_FALSE((C_GetNextValue(LABEL_MOVE|LABEL_DEFINE) == 0) && (g_scriptPtr[-1] != 0) && (g_scriptPtr[-1] != 1)))
                 {
                     C_ReportError(-1);
-                    BITPTR_CLEAR(g_scriptPtr-apScript-1);
-                    *(g_scriptPtr-1) = 0;
+                    scriptWriteAtOffset(0, &g_scriptPtr[-1]);
                     initprintf("%s:%d: warning: expected a move, found a constant.\n",g_scriptFileName,g_lineNumber);
                     g_warningCnt++;
                 }
@@ -3307,27 +2841,27 @@ DO_DEFSTATE:
                 C_GetNextLabelName();
                 // Check to see it's already defined
 
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
                 {
                     g_errorCnt++;
                     C_ReportError(ERROR_ISAKEYWORD);
                     continue;
                 }
 
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_gamevars,label+(g_labelCnt<<6))>=0))
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_gamevars,LAST_LABEL)>=0))
                 {
                     g_warningCnt++;
                     C_ReportError(WARNING_NAMEMATCHESVAR);
                 }
 
-                if (EDUKE32_PREDICT_FALSE((i = hash_find(&h_labels,label+(g_labelCnt<<6))) >= 0))
+                if (EDUKE32_PREDICT_FALSE((i = hash_find(&h_labels,LAST_LABEL)) >= 0))
                 {
                     g_warningCnt++;
-                    initprintf("%s:%d: warning: duplicate move `%s' ignored.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+                    initprintf("%s:%d: warning: duplicate move `%s' ignored.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
                 }
                 else
                 {
-                    hash_add(&h_labels,label+(g_labelCnt<<6),g_labelCnt,0);
+                    hash_add(&h_labels,LAST_LABEL,g_labelCnt,0);
                     labeltype[g_labelCnt] = LABEL_MOVE;
                     labelcode[g_labelCnt++] = g_scriptPtr-apScript;
                 }
@@ -3340,9 +2874,7 @@ DO_DEFSTATE:
 
                 for (k=j; k>=0; k--)
                 {
-                    BITPTR_CLEAR(g_scriptPtr-apScript);
-                    *g_scriptPtr = 0;
-                    g_scriptPtr++;
+                    scriptWriteValue(0);
                 }
             }
             continue;
@@ -3419,7 +2951,7 @@ DO_DEFSTATE:
             continue;
 
         case CON_AI:
-            if (g_parsingActorPtr || g_processingState)
+            if (g_scriptActorOffset || g_processingState)
             {
                 C_GetNextValue(LABEL_AI);
             }
@@ -3428,30 +2960,30 @@ DO_DEFSTATE:
                 g_scriptPtr--;
                 C_GetNextLabelName();
 
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
                 {
                     g_errorCnt++;
                     C_ReportError(ERROR_ISAKEYWORD);
                     continue;
                 }
 
-                i = hash_find(&h_gamevars,label+(g_labelCnt<<6));
+                i = hash_find(&h_gamevars,LAST_LABEL);
                 if (EDUKE32_PREDICT_FALSE(i>=0))
                 {
                     g_warningCnt++;
                     C_ReportError(WARNING_NAMEMATCHESVAR);
                 }
 
-                i = hash_find(&h_labels,label+(g_labelCnt<<6));
+                i = hash_find(&h_labels,LAST_LABEL);
                 if (EDUKE32_PREDICT_FALSE(i>=0))
                 {
                     g_warningCnt++;
-                    initprintf("%s:%d: warning: duplicate ai `%s' ignored.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+                    initprintf("%s:%d: warning: duplicate ai `%s' ignored.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
                 }
                 else
                 {
                     labeltype[g_labelCnt] = LABEL_AI;
-                    hash_add(&h_labels,label+(g_labelCnt<<6),g_labelCnt,0);
+                    hash_add(&h_labels,LAST_LABEL,g_labelCnt,0);
                     labelcode[g_labelCnt++] = g_scriptPtr-apScript;
                 }
 
@@ -3463,11 +2995,10 @@ DO_DEFSTATE:
                     else if (j == 2)
                     {
                         if (EDUKE32_PREDICT_FALSE((C_GetNextValue(LABEL_MOVE|LABEL_DEFINE) == 0) &&
-                            (*(g_scriptPtr-1) != 0) && (*(g_scriptPtr-1) != 1)))
+                            (g_scriptPtr[-1] != 0) && (g_scriptPtr[-1] != 1)))
                         {
                             C_ReportError(-1);
-                            BITPTR_CLEAR(g_scriptPtr-apScript-1);
-                            *(g_scriptPtr-1) = 0;
+                            scriptWriteAtOffset(0, &g_scriptPtr[-1]);
                             initprintf("%s:%d: warning: expected a move, found a constant.\n",g_scriptFileName,g_lineNumber);
                             g_warningCnt++;
                         }
@@ -3487,15 +3018,13 @@ DO_DEFSTATE:
 
                 for (k=j; k<3; k++)
                 {
-                    BITPTR_CLEAR(g_scriptPtr-apScript);
-                    *g_scriptPtr = 0;
-                    g_scriptPtr++;
+                    scriptWriteValue(0);
                 }
             }
             continue;
 
         case CON_ACTION:
-            if (g_parsingActorPtr || g_processingState)
+            if (g_scriptActorOffset || g_processingState)
             {
                 C_GetNextValue(LABEL_ACTION);
             }
@@ -3505,31 +3034,31 @@ DO_DEFSTATE:
                 C_GetNextLabelName();
                 // Check to see it's already defined
 
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
                 {
                     g_errorCnt++;
                     C_ReportError(ERROR_ISAKEYWORD);
                     continue;
                 }
 
-                i = hash_find(&h_gamevars,label+(g_labelCnt<<6));
+                i = hash_find(&h_gamevars,LAST_LABEL);
                 if (EDUKE32_PREDICT_FALSE(i>=0))
                 {
                     g_warningCnt++;
                     C_ReportError(WARNING_NAMEMATCHESVAR);
                 }
 
-                i = hash_find(&h_labels,label+(g_labelCnt<<6));
+                i = hash_find(&h_labels,LAST_LABEL);
                 if (EDUKE32_PREDICT_FALSE(i>=0))
                 {
                     g_warningCnt++;
-                    initprintf("%s:%d: warning: duplicate action `%s' ignored.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+                    initprintf("%s:%d: warning: duplicate action `%s' ignored.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
                 }
                 else
                 {
                     labeltype[g_labelCnt] = LABEL_ACTION;
                     labelcode[g_labelCnt] = g_scriptPtr-apScript;
-                    hash_add(&h_labels,label+(g_labelCnt<<6),g_labelCnt,0);
+                    hash_add(&h_labels,LAST_LABEL,g_labelCnt,0);
                     g_labelCnt++;
                 }
 
@@ -3540,8 +3069,7 @@ DO_DEFSTATE:
                 }
                 for (k=j; k>=0; k--)
                 {
-                    BITPTR_CLEAR(g_scriptPtr-apScript);
-                    *(g_scriptPtr++) = 0;
+                    scriptWriteValue(0);
                 }
             }
             continue;
@@ -3549,7 +3077,7 @@ DO_DEFSTATE:
         case CON_ACTOR:
         case CON_USERACTOR:
         case CON_EVENTLOADACTOR:
-            if (EDUKE32_PREDICT_FALSE(g_processingState || g_parsingActorPtr))
+            if (EDUKE32_PREDICT_FALSE(g_processingState || g_scriptActorOffset))
             {
                 C_ReportError(ERROR_FOUNDWITHIN);
                 g_errorCnt++;
@@ -3557,7 +3085,7 @@ DO_DEFSTATE:
 
             g_numBraces = 0;
             g_scriptPtr--;
-            g_parsingActorPtr = g_scriptPtr - apScript;
+            g_scriptActorOffset = g_scriptPtr - apScript;
 
             if (tw == CON_USERACTOR)
             {
@@ -3607,29 +3135,23 @@ DO_DEFSTATE:
 
             if (tw == CON_EVENTLOADACTOR)
             {
-                g_tile[*g_scriptPtr].loadPtr = apScript + g_parsingActorPtr;
+                g_tile[*g_scriptPtr].loadPtr = apScript + g_scriptActorOffset;
                 g_checkingIfElse = 0;
                 continue;
             }
 
-            g_tile[*g_scriptPtr].execPtr = apScript + g_parsingActorPtr;
+            g_tile[*g_scriptPtr].execPtr = apScript + g_scriptActorOffset;
 
             if (tw == CON_USERACTOR)
             {
-                if (j & 1)
-                    g_tile[*g_scriptPtr].flags |= SFLAG_BADGUY;
-
-                if (j & 2)
-                    g_tile[*g_scriptPtr].flags |= (SFLAG_BADGUY|SFLAG_BADGUYSTAYPUT);
-
-                if (j & 4)
-                    g_tile[*g_scriptPtr].flags |= SFLAG_ROTFIXED;
+                if (j & 1) g_tile[*g_scriptPtr].flags |= SFLAG_BADGUY;
+                if (j & 2) g_tile[*g_scriptPtr].flags |= (SFLAG_BADGUY|SFLAG_BADGUYSTAYPUT);
+                if (j & 4) g_tile[*g_scriptPtr].flags |= SFLAG_ROTFIXED;
             }
 
             for (j=0; j<4; j++)
             {
-                BITPTR_CLEAR(g_parsingActorPtr+j);
-                *((apScript+j)+g_parsingActorPtr) = 0;
+                scriptWriteAtOffset(0, apScript+g_scriptActorOffset+j);
                 if (j == 3)
                 {
                     j = 0;
@@ -3645,8 +3167,7 @@ DO_DEFSTATE:
                     {
                         for (i=4-j; i; i--)
                         {
-                            BITPTR_CLEAR(g_scriptPtr-apScript);
-                            *(g_scriptPtr++) = 0;
+                            scriptWriteValue(0);
                         }
                         break;
                     }
@@ -3661,20 +3182,20 @@ DO_DEFSTATE:
                     case 2:
                         // XXX: LABEL_MOVE|LABEL_DEFINE, what is this shit? compatibility?
                         // yep, it sure is :(
-                        if (EDUKE32_PREDICT_FALSE((C_GetNextValue(LABEL_MOVE|LABEL_DEFINE) == 0) && (*(g_scriptPtr-1) != 0) && (*(g_scriptPtr-1) != 1)))
+                        if (EDUKE32_PREDICT_FALSE((C_GetNextValue(LABEL_MOVE|LABEL_DEFINE) == 0) && (g_scriptPtr[-1] != 0) && (g_scriptPtr[-1] != 1)))
                         {
                             C_ReportError(-1);
-                            BITPTR_CLEAR(g_scriptPtr-apScript-1);
-                            *(g_scriptPtr-1) = 0;
+                            scriptWriteAtOffset(0, &g_scriptPtr[-1]);
                             initprintf("%s:%d: warning: expected a move, found a constant.\n",g_scriptFileName,g_lineNumber);
                             g_warningCnt++;
                         }
                         break;
                     }
-                    if (*(g_scriptPtr-1) >= (intptr_t)&apScript[0] && *(g_scriptPtr-1) < (intptr_t)&apScript[g_scriptSize])
-                        BITPTR_SET(g_parsingActorPtr+j);
-                    else BITPTR_CLEAR(g_parsingActorPtr+j);
-                    *((apScript+j)+g_parsingActorPtr) = *(g_scriptPtr-1);
+
+                    if (g_scriptPtr[-1] >= (intptr_t)apScript && g_scriptPtr[-1] < (intptr_t)&apScript[g_scriptSize])
+                        scriptWritePointer(g_scriptPtr[-1], apScript + g_scriptActorOffset + j);
+                    else
+                        scriptWriteAtOffset(g_scriptPtr[-1], apScript + g_scriptActorOffset + j);
                 }
             }
             g_checkingIfElse = 0;
@@ -3682,7 +3203,7 @@ DO_DEFSTATE:
 
         case CON_ONEVENT:
         case CON_APPENDEVENT:
-            if (EDUKE32_PREDICT_FALSE(g_processingState || g_parsingActorPtr))
+            if (EDUKE32_PREDICT_FALSE(g_processingState || g_scriptActorOffset))
             {
                 C_ReportError(ERROR_FOUNDWITHIN);
                 g_errorCnt++;
@@ -3690,7 +3211,7 @@ DO_DEFSTATE:
 
             g_numBraces = 0;
             g_scriptPtr--;
-            g_parsingEventPtr = g_parsingActorPtr = g_scriptPtr - apScript;
+            g_scriptEventOffset = g_scriptActorOffset = g_scriptPtr - apScript;
 
             C_SkipComments();
             j = 0;
@@ -3717,23 +3238,20 @@ DO_DEFSTATE:
             // if event has already been declared then store previous script location
             if (!apScriptEvents[j])
             {
-                apScriptEvents[j] = g_parsingEventPtr;
+                apScriptEvents[j] = g_scriptEventOffset;
             }
             else if (tw == CON_ONEVENT)
             {
-                previous_event = apScriptEvents[j];
-                apScriptEvents[j] = g_parsingEventPtr;
+                g_scriptEventChainOffset = apScriptEvents[j];
+                apScriptEvents[j] = g_scriptEventOffset;
             }
             else // if (tw == CON_APPENDEVENT)
             {
-                intptr_t *previous_event_end = apScript + apScriptGameEventEnd[j];
-                BITPTR_CLEAR(previous_event_end-apScript);
-                *(previous_event_end++) = CON_JUMP | (g_lineNumber << 12);
-                BITPTR_CLEAR(previous_event_end-apScript);
-                *(previous_event_end++) = MAXGAMEVARS;
-                C_FillEventBreakStackWithJump((intptr_t *)*previous_event_end, g_parsingEventPtr);
-                BITPTR_CLEAR(previous_event_end-apScript);
-                *(previous_event_end++) = g_parsingEventPtr;
+                auto previous_event_end = apScript + apScriptGameEventEnd[j];
+                scriptWriteAtOffset(CON_JUMP | LINE_NUMBER, previous_event_end++);
+                scriptWriteAtOffset(GV_FLAG_CONSTANT, previous_event_end++);
+                C_FillEventBreakStackWithJump((intptr_t *)*previous_event_end, g_scriptEventOffset);
+                scriptWriteAtOffset(g_scriptEventOffset, previous_event_end++);
             }
 
             g_checkingIfElse = 0;
@@ -3748,25 +3266,25 @@ DO_DEFSTATE:
             while (C_GetKeyword() == -1 && j < 32)
                 C_GetNextVar(), j++;
 
-            *g_scriptPtr++ = CON_NULLOP + (g_lineNumber<<12);
+            scriptWriteValue(CON_NULLOP | LINE_NUMBER);
             continue;
 
         case CON_CSTAT:
             C_GetNextValue(LABEL_DEFINE);
 
-            if (EDUKE32_PREDICT_FALSE(*(g_scriptPtr-1) == 32767))
+            if (EDUKE32_PREDICT_FALSE(g_scriptPtr[-1] == 32767))
             {
-                *(g_scriptPtr-1) = 32768;
+                g_scriptPtr[-1] = 32768;
                 C_ReportError(-1);
                 initprintf("%s:%d: warning: tried to set cstat 32767, using 32768 instead.\n",g_scriptFileName,g_lineNumber);
                 g_warningCnt++;
             }
-            else if (EDUKE32_PREDICT_FALSE((*(g_scriptPtr-1) & 48) == 48))
+            else if (EDUKE32_PREDICT_FALSE((g_scriptPtr[-1] & 48) == 48))
             {
-                i = *(g_scriptPtr-1);
-                *(g_scriptPtr-1) ^= 48;
+                i = g_scriptPtr[-1];
+                g_scriptPtr[-1] ^= 48;
                 C_ReportError(-1);
-                initprintf("%s:%d: warning: tried to set cstat %d, using %d instead.\n",g_scriptFileName,g_lineNumber,i,(int32_t)(*(g_scriptPtr-1)));
+                initprintf("%s:%d: warning: tried to set cstat %d, using %d instead.\n",g_scriptFileName,g_lineNumber,i,(int32_t)(g_scriptPtr[-1]));
                 g_warningCnt++;
             }
             continue;
@@ -3775,7 +3293,7 @@ DO_DEFSTATE:
             C_GetManyVars(4);
             continue;
 
-        case CON_HITRADIUSVAR:
+        case CON_HITRADIUS:
         case CON_DRAWLINE256:
             C_GetManyVars(5);
             continue;
@@ -3784,47 +3302,45 @@ DO_DEFSTATE:
             C_GetManyVars(6);
             continue;
 
-        case CON_HITRADIUS:
-            C_GetNextValue(LABEL_DEFINE);
-            C_GetNextValue(LABEL_DEFINE);
-            C_GetNextValue(LABEL_DEFINE);
-            fallthrough__;
         case CON_ADDAMMO:
-        case CON_ADDWEAPON:
-        case CON_SIZETO:
-        case CON_SIZEAT:
-        case CON_DEBRIS:
         case CON_ADDINVENTORY:
+        case CON_DEBRIS:
         case CON_GUTS:
+        case CON_SIZEAT:
+        case CON_SIZETO:
             C_GetNextValue(LABEL_DEFINE);
             fallthrough__;
-        case CON_STRENGTH:
+        case CON_ADDKILLS:
         case CON_ADDPHEALTH:
-        case CON_SPAWN:
+        case CON_ADDSTRENGTH:
+        case CON_CACTOR:
+        case CON_CLIPDIST:
         case CON_COUNT:
+        case CON_CSTATOR:
+        case CON_DEBUG:
         case CON_ENDOFGAME:
         case CON_ENDOFLEVEL:
-        case CON_SPRITEPAL:
-        case CON_CACTOR:
-        case CON_MONEY:
-        case CON_ADDKILLS:
-        case CON_DEBUG:
-        case CON_ADDSTRENGTH:
-        case CON_CSTATOR:
-        case CON_MAIL:
-        case CON_PAPER:
-        case CON_SLEEPTIME:
-        case CON_CLIPDIST:
         case CON_LOTSOFGLASS:
-        case CON_SAVENN:
+        case CON_MAIL:
+        case CON_MONEY:
+        case CON_PAPER:
         case CON_SAVE:
-        case CON_ANGOFF:
-        case CON_QUOTE:
-        case CON_SOUND:
-        case CON_GLOBALSOUND:
-        case CON_SOUNDONCE:
-        case CON_STOPSOUND:
+        case CON_SAVENN:
+        case CON_SLEEPTIME:
+        case CON_SPAWN:
+        case CON_SPRITEPAL:
+        case CON_STRENGTH:
             C_GetNextValue(LABEL_DEFINE);
+            continue;
+
+        case CON_QUOTE:
+            C_GetNextValue(LABEL_DEFINE);
+            if (EDUKE32_PREDICT_FALSE(((unsigned)g_scriptPtr[-1] >= MAXQUOTES) || apStrings[g_scriptPtr[-1]] == NULL))
+            {
+                g_errorCnt++;
+                C_ReportError(-1);
+                initprintf("%s:%d: error: invalid quote\n", g_scriptFileName, g_lineNumber);
+            }
             continue;
 
         case CON_ELSE:
@@ -3832,29 +3348,29 @@ DO_DEFSTATE:
                 if (EDUKE32_PREDICT_FALSE(!g_checkingIfElse))
                 {
                     g_scriptPtr--;
-                    intptr_t *tempscrptr = g_scriptPtr;
+                    auto const tempscrptr = g_scriptPtr;
                     g_warningCnt++;
                     C_ReportError(-1);
 
-                    initprintf("%s:%d: warning: found `else' with no `if'.\n", g_scriptFileName, g_lineNumber);
+                    initprintf("%s:%d: warning: found `else' with no `if'\n", g_scriptFileName, g_lineNumber);
 
                     if (C_GetKeyword() == CON_LEFTBRACE)
                     {
                         C_GetNextKeyword();
                         g_numBraces++;
 
-                        C_ParseCommand(1);
+                        C_ParseCommand(true);
                     }
-                    else C_ParseCommand(0);
+                    else C_ParseCommand();
 
                     g_scriptPtr = tempscrptr;
 
                     continue;
                 }
 
-                intptr_t const lastScriptPtr = g_scriptPtr - apScript - 1;
+                intptr_t const lastScriptPtr = &g_scriptPtr[-1] - apScript;
 
-                g_ifElseAborted = 0;
+                g_skipBranch = false;
                 g_checkingIfElse--;
 
                 if (C_CheckMalformedBranch(lastScriptPtr))
@@ -3864,14 +3380,13 @@ DO_DEFSTATE:
 
                 g_scriptPtr++; //Leave a spot for the fail location
 
-                C_ParseCommand(0);
+                C_ParseCommand();
 
                 if (C_CheckEmptyBranch(tw, lastScriptPtr))
                     continue;
 
-                intptr_t *tempscrptr = (intptr_t *) apScript+offset;
-                *tempscrptr = (intptr_t) g_scriptPtr;
-                BITPTR_SET(tempscrptr-apScript);
+                auto const tempscrptr = (intptr_t *) apScript+offset;
+                scriptWritePointer((intptr_t)g_scriptPtr, tempscrptr);
 
                 continue;
             }
@@ -3879,24 +3394,23 @@ DO_DEFSTATE:
         case CON_SETSECTOR:
         case CON_GETSECTOR:
             {
-                int32_t const labelNum = C_GetStructureIndexes(1, &h_sector);
+                int const labelNum = C_GetStructureIndexes(1, &h_sector);
 
                 if (labelNum == -1)
                     continue;
 
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=SectorLabels[labelNum].lId;
+                scriptWriteValue(SectorLabels[labelNum].lId);
 
                 C_GetNextVarType((tw == CON_GETSECTOR) ? GAMEVAR_READONLY : 0);
                 continue;
             }
 
-        case CON_FINDNEARACTORVAR:
-        case CON_FINDNEARACTOR3DVAR:
-        case CON_FINDNEARSPRITEVAR:
-        case CON_FINDNEARSPRITE3DVAR:
-        case CON_FINDNEARACTORZVAR:
-        case CON_FINDNEARSPRITEZVAR:
+        case CON_FINDNEARACTOR3D:
+        case CON_FINDNEARACTOR:
+        case CON_FINDNEARACTORZ:
+        case CON_FINDNEARSPRITE3D:
+        case CON_FINDNEARSPRITE:
+        case CON_FINDNEARSPRITEZ:
             {
                 C_GetNextValue(LABEL_DEFINE); // get <type>
 
@@ -3904,8 +3418,8 @@ DO_DEFSTATE:
                 C_GetNextVar();
                 switch (tw)
                 {
-                case CON_FINDNEARACTORZVAR:
-                case CON_FINDNEARSPRITEZVAR:
+                case CON_FINDNEARACTORZ:
+                case CON_FINDNEARSPRITEZ:
                     C_GetNextVar();
                 default:
                     break;
@@ -3919,13 +3433,12 @@ DO_DEFSTATE:
         case CON_SETWALL:
         case CON_GETWALL:
             {
-                int32_t const labelNum = C_GetStructureIndexes(1, &h_wall);
+                int const labelNum = C_GetStructureIndexes(1, &h_wall);
 
                 if (labelNum == -1)
                     continue;
 
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=WallLabels[labelNum].lId;
+                scriptWriteValue(WallLabels[labelNum].lId);
 
                 C_GetNextVarType((tw == CON_GETWALL) ? GAMEVAR_READONLY : 0);
                 continue;
@@ -3934,13 +3447,12 @@ DO_DEFSTATE:
         case CON_SETPLAYER:
         case CON_GETPLAYER:
             {
-                int32_t const labelNum = C_GetStructureIndexes(1, &h_player);
+                int const labelNum = C_GetStructureIndexes(1, &h_player);
 
                 if (labelNum == -1)
                     continue;
 
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=PlayerLabels[labelNum].lId;
+                scriptWriteValue(PlayerLabels[labelNum].lId);
 
                 if (PlayerLabels[labelNum].flags & LABEL_HASPARM2)
                     C_GetNextVar();
@@ -3952,13 +3464,12 @@ DO_DEFSTATE:
         case CON_SETINPUT:
         case CON_GETINPUT:
             {
-                int32_t const labelNum = C_GetStructureIndexes(1, &h_input);
+                int const labelNum = C_GetStructureIndexes(1, &h_input);
 
                 if (labelNum == -1)
                     continue;
 
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=InputLabels[labelNum].lId;
+                scriptWriteValue(InputLabels[labelNum].lId);
 
                 C_GetNextVarType(tw == CON_GETINPUT ? GAMEVAR_READONLY : 0);
                 continue;
@@ -3967,13 +3478,12 @@ DO_DEFSTATE:
         case CON_SETTILEDATA:
         case CON_GETTILEDATA:
         {
-            int32_t const labelNum = C_GetStructureIndexes(0, &h_tiledata);
+            int const labelNum = C_GetStructureIndexes(0, &h_tiledata);
 
             if (labelNum == -1)
                 continue;
 
-            BITPTR_CLEAR(g_scriptPtr - apScript);
-            *g_scriptPtr++ = TileDataLabels[labelNum].lId;
+            scriptWriteValue(TileDataLabels[labelNum].lId);
 
             C_GetNextVarType((tw == CON_GETTILEDATA) ? GAMEVAR_READONLY : 0);
             continue;
@@ -4000,7 +3510,7 @@ DO_DEFSTATE:
                 textptr++;
                 C_GetNextLabelName();
 
-                int32_t const labelNum=C_GetLabelNameID(UserdefsLabels,&h_userdef,Bstrtolower(label+(g_labelCnt<<6)));
+                int const labelNum=C_GetLabelNameID(UserdefsLabels,&h_userdef,Bstrtolower(LAST_LABEL));
 
                 if (EDUKE32_PREDICT_FALSE(labelNum == -1))
                 {
@@ -4008,8 +3518,7 @@ DO_DEFSTATE:
                     C_ReportError(ERROR_NOTAMEMBER);
                     continue;
                 }
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=labelNum;
+                scriptWriteValue(labelNum);
 
                 if (UserdefsLabels[labelNum].flags & LABEL_HASPARM2)
                     C_GetNextVar();
@@ -4018,116 +3527,65 @@ DO_DEFSTATE:
                 continue;
             }
 
-        case CON_SETACTORVAR:
-        case CON_SETPLAYERVAR:
-        case CON_GETACTORVAR:
-        case CON_GETPLAYERVAR:
-            {
-                // syntax [gs]etactorvar[<var>].<varx> <VAR>
-                // gets the value of the per-actor variable varx into VAR
-
-                if (C_GetStructureIndexes(1, NULL) == -1)
-                    continue;
-
-                if (g_scriptPtr[-1] == g_thisActorVarID) // convert to "setvarvar"
-                {
-                    g_scriptPtr--;
-                    g_scriptPtr[-1]=CON_SETVARVAR;
-                    if (tw == CON_SETACTORVAR || tw == CON_SETPLAYERVAR)
-                    {
-                        C_GetNextVarType(GAMEVAR_READONLY);
-                        C_GetNextVar();
-                    }
-                    else
-                    {
-                        g_scriptPtr++;
-                        C_GetNextVar();
-                        g_scriptPtr-=2;
-                        C_GetNextVarType(GAMEVAR_READONLY);
-                        g_scriptPtr++;
-                    }
-                    continue;
-                }
-
-                /// now pointing at 'xxx'
-
-                C_GetNextLabelName();
-
-                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,label+(g_labelCnt<<6))>=0))
-                {
-                    g_errorCnt++;
-                    C_ReportError(ERROR_ISAKEYWORD);
-                    continue;
-                }
-
-                i=GetDefID(label+(g_labelCnt<<6));
-
-                if (EDUKE32_PREDICT_FALSE(i<0))
-                {
-                    g_errorCnt++;
-                    C_ReportError(ERROR_NOTAGAMEVAR);
-                    continue;
-                }
-                if (EDUKE32_PREDICT_FALSE(aGameVars[i].flags & GAMEVAR_READONLY))
-                {
-                    g_errorCnt++;
-                    C_ReportError(ERROR_VARREADONLY);
-                    continue;
-                }
-
-                switch (tw)
-                {
-                case CON_SETACTORVAR:
-                        if (EDUKE32_PREDICT_FALSE(!(aGameVars[i].flags & GAMEVAR_PERACTOR)))
-                        {
-                            g_errorCnt++;
-                            C_ReportError(-1);
-                            initprintf("%s:%d: error: variable `%s' is not per-actor.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
-                            continue;
-                        }
-                        break;
-                case CON_SETPLAYERVAR:
-                        if (EDUKE32_PREDICT_FALSE(!(aGameVars[i].flags & GAMEVAR_PERPLAYER)))
-                        {
-                            g_errorCnt++;
-                            C_ReportError(-1);
-                            initprintf("%s:%d: error: variable `%s' is not per-player.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
-                            continue;
-                        }
-                        break;
-                }
-
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=i; // the ID of the DEF (offset into array...)
-
-                switch (tw)
-                {
-                case CON_GETACTORVAR:
-                case CON_GETPLAYERVAR:
-                    C_GetNextVarType(GAMEVAR_READONLY);
-                    break;
-                default:
-                    C_GetNextVar();
-                    break;
-                }
-                continue;
-            }
-
         case CON_SETACTOR:
-        case CON_GETACTOR:
             {
-                int32_t const labelNum = C_GetStructureIndexes(1, &h_actor);
+                intptr_t * const ins = &g_scriptPtr[-1];
+                int const labelNum = C_GetStructureIndexes(1, &h_actor);
 
                 if (labelNum == -1)
                     continue;
 
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=ActorLabels[labelNum].lId;
+                Bassert((*ins & VM_INSTMASK) == CON_SETACTOR);
 
-                if (ActorLabels[labelNum].flags & LABEL_HASPARM2)
+                auto const &label = ActorLabels[labelNum];
+
+                if (label.offset != -1 && (label.flags & (LABEL_WRITEFUNC|LABEL_HASPARM2)) == 0)
+                {
+                    if (labelNum >= ACTOR_SPRITEEXT_BEGIN)
+                        *ins = CON_SETSPRITEEXT | LINE_NUMBER;
+                    else if (labelNum >= ACTOR_STRUCT_BEGIN)
+                        *ins = CON_SETACTORSTRUCT | LINE_NUMBER;
+                    else
+                        *ins = CON_SETSPRITESTRUCT | LINE_NUMBER;
+                }
+
+                scriptWriteValue(label.lId);
+
+                if (label.flags & LABEL_HASPARM2)
                     C_GetNextVar();
 
-                C_GetNextVarType((tw == CON_GETACTOR) ? GAMEVAR_READONLY : 0);
+                C_GetNextVar();
+                continue;
+            }
+
+        case CON_GETACTOR:
+            {
+                intptr_t * const ins = &g_scriptPtr[-1];
+                int const labelNum = C_GetStructureIndexes(1, &h_actor);
+
+                if (labelNum == -1)
+                    continue;
+
+                Bassert((*ins & VM_INSTMASK) == CON_GETACTOR);
+
+                auto const &label = ActorLabels[labelNum];
+
+                if (label.offset != -1 && (label.flags & (LABEL_READFUNC|LABEL_HASPARM2)) == 0)
+                {
+                    if (labelNum >= ACTOR_SPRITEEXT_BEGIN)
+                        *ins = CON_GETSPRITEEXT | LINE_NUMBER;
+                    else if (labelNum >= ACTOR_STRUCT_BEGIN)
+                        *ins = CON_GETACTORSTRUCT | LINE_NUMBER;
+                    else
+                        *ins = CON_GETSPRITESTRUCT | LINE_NUMBER;
+                }
+
+                scriptWriteValue(label.lId);
+
+                if (label.flags & LABEL_HASPARM2)
+                    C_GetNextVar();
+
+                C_GetNextVarType(GAMEVAR_READONLY);
                 continue;
             }
 
@@ -4142,127 +3600,120 @@ DO_DEFSTATE:
                     g_numCompilerWarnings++;
                 }
 #endif
-                int32_t const labelNum = C_GetStructureIndexes(1, &h_tsprite);
+                int const labelNum = C_GetStructureIndexes(1, &h_tsprite);
 
                 if (labelNum == -1)
                     continue;
 
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=TsprLabels[labelNum].lId;
+                scriptWriteValue(TsprLabels[labelNum].lId);
 
                 C_GetNextVarType((tw == CON_GETTSPR) ? GAMEVAR_READONLY : 0);
                 continue;
             }
+        case CON_ADDLOGVAR:
+            g_labelsOnly = 1;
+            C_GetNextVar();
+            g_labelsOnly = 0;
+            continue;
 
-        case CON_RANDVARVAR:
-        case CON_SETVARVAR:
-        case CON_ADDVARVAR:
-        case CON_SUBVARVAR:
-        case CON_MULVARVAR:
-        case CON_DIVVARVAR:
-        case CON_MODVARVAR:
-        case CON_ANDVARVAR:
-        case CON_ORVARVAR:
-        case CON_XORVARVAR:
-        case CON_SHIFTVARVARL:
-        case CON_SHIFTVARVARR:
-        case CON_DISPLAYRANDVARVAR:
-        case CON_SIN:
         case CON_COS:
-        case CON_QSTRLEN:
-        case CON_HEADSPRITESTAT:
-        case CON_PREVSPRITESTAT:
-        case CON_NEXTSPRITESTAT:
-        case CON_HEADSPRITESECT:
-        case CON_PREVSPRITESECT:
-        case CON_NEXTSPRITESECT:
-        case CON_SECTOROFWALL:
         case CON_DIVR:
         case CON_DIVRU:
+        case CON_HEADSPRITESECT:
+        case CON_HEADSPRITESTAT:
+        case CON_NEXTSPRITESECT:
+        case CON_NEXTSPRITESTAT:
+        case CON_PREVSPRITESECT:
+        case CON_PREVSPRITESTAT:
+        case CON_QSTRLEN:
+        case CON_SECTOROFWALL:
+        case CON_SIN:
             C_GetNextVarType(GAMEVAR_READONLY);
             fallthrough__;
-        case CON_ADDLOGVAR:
-        case CON_ESHOOTVAR:
-        case CON_ESPAWNVAR:
-        case CON_QSPAWNVAR:
-        case CON_EQSPAWNVAR:
-        case CON_OPERATERESPAWNS:
-        case CON_OPERATEMASTERSWITCHES:
-        case CON_CHECKACTIVATORMOTION:
-        case CON_TIME:
-        case CON_INITTIMER:
-        case CON_LOCKPLAYER:
-        case CON_SHOOTVAR:
-        case CON_QUAKE:
-        case CON_JUMP:
-        case CON_CMENU:
-        case CON_SOUNDVAR:
-        case CON_GLOBALSOUNDVAR:
-        case CON_STOPSOUNDVAR:
-        case CON_SCREENSOUND:
-        case CON_SOUNDONCEVAR:
-        case CON_ANGOFFVAR:
-        case CON_CHECKAVAILWEAPON:
-        case CON_CHECKAVAILINVEN:
-        case CON_GUNIQHUDID:
-        case CON_SAVEGAMEVAR:
-        case CON_USERQUOTE:
-        case CON_ECHO:
-        case CON_STARTTRACKVAR:
-        case CON_CLEARMAPSTATE:
         case CON_ACTIVATECHEAT:
-        case CON_SETGAMEPALETTE:
-        case CON_SECTSETINTERPOLATION:
-        case CON_SECTCLEARINTERPOLATION:
-        case CON_SETACTORANGLE:
-        case CON_SETPLAYERANGLE:
-        case CON_SETMUSICPOSITION:
-        case CON_STARTCUTSCENE:
-        case CON_RESETPLAYERFLAGS:
+        case CON_ANGOFF:
+        case CON_CAPIA:
+        case CON_CHECKACTIVATORMOTION:
+        case CON_CHECKAVAILINVEN:
+        case CON_CHECKAVAILWEAPON:
+        case CON_CLEARMAPSTATE:
+        case CON_CMENU:
+        case CON_ECHO:
+        case CON_EQSPAWN:
+        case CON_ESHOOT:
+        case CON_ESPAWN:
+        case CON_GLOBALSOUND:
+        case CON_GUNIQHUDID:
+        case CON_INITTIMER:
+        case CON_JUMP:
+        case CON_LOCKPLAYER:
         case CON_MOVESECTOR:
+        case CON_OPERATEMASTERSWITCHES:
+        case CON_OPERATERESPAWNS:
+        case CON_QSPAWN:
+        case CON_QUAKE:
+        case CON_RESETPLAYERFLAGS:
+        case CON_SAVEGAMEVAR:
+        case CON_SCREENSOUND:
+        case CON_SECTCLEARINTERPOLATION:
+        case CON_SECTSETINTERPOLATION:
+        case CON_SETACTORANGLE:
+        case CON_SETGAMEPALETTE:
+        case CON_SETMUSICPOSITION:
+        case CON_SETPLAYERANGLE:
+        case CON_SHOOT:
+        case CON_SOUNDONCE:
+        case CON_SOUND:
+        case CON_STARTCUTSCENE:
+        case CON_STARTTRACK:
+        case CON_STOPSOUND:
+        case CON_TIME:
+        case CON_USERQUOTE:
             C_GetNextVar();
             continue;
 
         case CON_SQRT:
             C_GetNextVar();
             fallthrough__;
-        case CON_FINDPLAYER:
-        case CON_FINDOTHERPLAYER:
         case CON_DISPLAYRAND:
-        case CON_READGAMEVAR:
-        case CON_GETANGLETOTARGET:
+        case CON_FINDOTHERPLAYER:
+        case CON_FINDPLAYER:
         case CON_GETACTORANGLE:
-        case CON_GETPLAYERANGLE:
-        case CON_GETTICKS:
+        case CON_GETANGLETOTARGET:
         case CON_GETCURRADDRESS:
         case CON_GETMUSICPOSITION:
-        case CON_KLABS:
+        case CON_GETPLAYERANGLE:
+        case CON_GETTICKS:
         case CON_INV:
+        case CON_KLABS:
+        case CON_READGAMEVAR:
             C_GetNextVarType(GAMEVAR_READONLY);
             continue;
 
+        case CON_CALCHYPOTENUSE:
         case CON_CLAMP:
         case CON_GETCLOSESTCOL:
-        case CON_CALCHYPOTENUSE:
             C_GetNextVarType(GAMEVAR_READONLY);
             fallthrough__;
-        case CON_CHANGESPRITESTAT:
+        case CON_ACTORSOUND:
+        case CON_CAPIS:
         case CON_CHANGESPRITESECT:
-        case CON_ZSHOOTVAR:
-        case CON_EZSHOOTVAR:
+        case CON_CHANGESPRITESTAT:
+        case CON_EZSHOOT:
         case CON_GETPNAME:
-        case CON_STARTLEVEL:
+        case CON_PRELOADTRACKSLOTFORSWAP:
+        case CON_QGETSYSSTR:
         case CON_QSTRCAT:
         case CON_QSTRCPY:
-        case CON_QGETSYSSTR:
-        case CON_ACTORSOUND:
-        case CON_STOPACTORSOUND:
-        case CON_STARTTRACKSLOT:
-        case CON_SWAPTRACKSLOT:
-        case CON_PRELOADTRACKSLOTFORSWAP:
+        case CON_SPAWNCEILINGGLASS:
         case CON_SPAWNWALLGLASS:
         case CON_SPAWNWALLSTAINEDGLASS:
-        case CON_SPAWNCEILINGGLASS:
+        case CON_STARTLEVEL:
+        case CON_STARTTRACKSLOT:
+        case CON_STOPACTORSOUND:
+        case CON_SWAPTRACKSLOT:
+        case CON_ZSHOOT:
+        case CON_GETGAMEFUNCBIND:
             C_GetManyVars(2);
             continue;
 
@@ -4308,7 +3759,9 @@ DO_DEFSTATE:
             }
             else
 #ifdef DYNSOUNDREMAP_ENABLE
+#ifdef DEBUGGINGAIDS
                 initprintf("Using dynamic sound remapping\n");
+#endif
 
             g_dynamicSoundMapping = 1;
 #else
@@ -4319,93 +3772,224 @@ DO_DEFSTATE:
 #endif
             continue;
 
-        case CON_RANDVAR:
-        case CON_SETVAR:
         case CON_ADDVAR:
-        case CON_SUBVAR:
+        case CON_ANDVAR:
         case CON_DISPLAYRANDVAR:
-        case CON_MULVAR:
         case CON_DIVVAR:
         case CON_MODVAR:
-        case CON_ANDVAR:
+        case CON_MULVAR:
         case CON_ORVAR:
-        case CON_XORVAR:
+        case CON_RANDVAR:
+        case CON_SETVAR:
         case CON_SHIFTVARL:
         case CON_SHIFTVARR:
+        case CON_SUBVAR:
+        case CON_XORVAR:
+setvar:
+        {
+            auto ins = &g_scriptPtr[-1];
 
+            C_GetNextVarType(GAMEVAR_READONLY);
+            C_GetNextValue(LABEL_DEFINE);
+
+            // replace divides and multiplies by 0 with an error asking if the user is stupid
+            if (ins[2] == 0 && (tw == CON_MODVAR || tw == CON_MULVAR || tw == CON_DIVVAR))
             {
-                intptr_t *inst = g_scriptPtr-1;
-                char *tptr = textptr;
-                // syntax: [rand|add|set]var    <var1> <const1>
-                // sets var1 to const1
-                // adds const1 to var1 (const1 can be negative...)
-                //printf("Found [add|set]var at line= %d\n",g_lineNumber);
-
-                C_GetNextVarType(GAMEVAR_READONLY);
-
-                C_GetNextValue(LABEL_DEFINE); // the number to check against...
-
-                if (tw == CON_DIVVAR || tw == CON_MULVAR)
+                g_errorCnt++;
+                C_ReportError(-1);
+                initprintf("%s:%d: error: divide or multiply by zero! What are you doing?\n", g_scriptFileName, g_lineNumber);
+                continue;
+            }
+            else if (tw == CON_DIVVAR || tw == CON_MULVAR)
+            {
+                auto const i = ins[2];
+                // replace multiplies or divides by 1 with nullop
+                if (i == 1)
                 {
-                    int32_t i = *(g_scriptPtr-1);
-                    j = klabs(i);
+                    int constexpr const opcode = CON_NULLOP;
 
-                    if (i == -1)
+                    if (!g_errorCnt && !g_warningCnt && g_scriptDebug > 1)
                     {
-                        *inst = CON_INV+(g_lineNumber<<12);
-                        g_scriptPtr--;
-                        continue;
+                        initprintf("%s:%d: %s -> %s\n", g_scriptFileName, g_lineNumber,
+                                   VM_GetKeywordForID(tw), VM_GetKeywordForID(opcode));
                     }
 
-                    if (C_IntPow2(j))
+                    scriptWriteAtOffset(opcode | LINE_NUMBER, ins);
+                    g_scriptPtr = &ins[1];
+                }
+                // replace multiplies or divides by -1 with inversion
+                else if (i == -1)
+                {
+                    int constexpr const opcode = CON_INV;
+
+                    if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
                     {
-                        *inst = ((tw == CON_DIVVAR) ? CON_SHIFTVARR : CON_SHIFTVARL)+(g_lineNumber<<12);
-                        *(g_scriptPtr-1) = C_Pow2IntLogBase2(j);
-                        //                    initprintf("%s:%d: replacing multiply/divide with shift\n",g_szScriptFileName,g_lineNumber);
-
-                        if (i == j)
-                            continue;
-
-                        *g_scriptPtr++ = CON_INV+(g_lineNumber<<12);
-                        textptr = tptr;
-                        C_GetNextVarType(GAMEVAR_READONLY);
-                        C_GetNextValue(LABEL_DEFINE);
-                        g_scriptPtr--;
-                        //                    initprintf("%s:%d: adding inversion\n",g_szScriptFileName,g_lineNumber);
+                        initprintf("%s:%d: %s -> %s\n", g_scriptFileName, g_lineNumber,
+                                   VM_GetKeywordForID(tw), VM_GetKeywordForID(opcode));
                     }
+
+                    scriptWriteAtOffset(opcode | LINE_NUMBER, ins);
+                    g_scriptPtr--;
                 }
             }
+            // replace instructions with special versions for specific var types
+            scriptUpdateOpcodeForVariableType(ins);
             continue;
+        }
+
+        case CON_ADDVARVAR:
+        case CON_ANDVARVAR:
+        case CON_DISPLAYRANDVARVAR:
+        case CON_DIVVARVAR:
+        case CON_MODVARVAR:
+        case CON_MULVARVAR:
+        case CON_ORVARVAR:
+        case CON_RANDVARVAR:
+        case CON_SETVARVAR:
+        case CON_SHIFTVARVARL:
+        case CON_SHIFTVARVARR:
+        case CON_SUBVARVAR:
+        case CON_XORVARVAR:
+            {
+setvarvar:
+                auto ins = &g_scriptPtr[-1];
+                auto tptr = textptr;
+                int const lnum = g_lineNumber;
+
+                C_GetNextVarType(GAMEVAR_READONLY);
+                C_GetNextVar();
+
+                int const opcode = inthash_find(&h_varvar, *ins & VM_INSTMASK);
+
+                if (ins[2] == GV_FLAG_CONSTANT && opcode != -1)
+                {
+                    if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
+                    {
+                        initprintf("%s:%d: %s -> %s\n", g_scriptFileName, g_lineNumber,
+                                    VM_GetKeywordForID(*ins & VM_INSTMASK), VM_GetKeywordForID(opcode));
+                    }
+
+                    tw = opcode;
+                    scriptWriteAtOffset(opcode | LINE_NUMBER, ins);
+                    g_scriptPtr = &ins[1];
+                    textptr = tptr;
+                    g_lineNumber = lnum;
+                    goto setvar;
+                }
+
+                continue;
+            }
+
+        case CON_GETACTORVAR:
+        case CON_GETPLAYERVAR:
+        case CON_SETACTORVAR:
+        case CON_SETPLAYERVAR:
+            {
+                // syntax [gs]etactorvar[<var>].<varx> <VAR>
+                // gets the value of the per-actor variable varx into VAR
+
+                if (C_GetStructureIndexes(1, NULL) == -1)
+                    continue;
+
+                if (g_scriptPtr[-1] == g_thisActorVarID) // convert to "setvarvar"
+                {
+                    g_scriptPtr--;
+                    g_scriptPtr[-1]=CON_SETVARVAR;
+                    if (tw == CON_SETACTORVAR || tw == CON_SETPLAYERVAR)
+                    {
+                        tw = inthash_find(&h_varvar, tw);
+                        goto setvarvar;
+                    }
+                    else
+                    {
+                        g_scriptPtr++;
+                        C_GetNextVar();
+                        g_scriptPtr-=2;
+                        C_GetNextVarType(GAMEVAR_READONLY);
+                        g_scriptPtr++;
+                    }
+                    continue;
+                }
+
+                /// now pointing at 'xxx'
+
+                C_GetNextLabelName();
+
+                if (EDUKE32_PREDICT_FALSE(hash_find(&h_keywords,LAST_LABEL)>=0))
+                {
+                    g_errorCnt++;
+                    C_ReportError(ERROR_ISAKEYWORD);
+                    continue;
+                }
+
+                i=GetDefID(LAST_LABEL);
+
+                if (EDUKE32_PREDICT_FALSE(i<0))
+                {
+                    g_errorCnt++;
+                    C_ReportError(ERROR_NOTAGAMEVAR);
+                    continue;
+                }
+                if (EDUKE32_PREDICT_FALSE(aGameVars[i].flags & GAMEVAR_READONLY))
+                {
+                    g_errorCnt++;
+                    C_ReportError(ERROR_VARREADONLY);
+                    continue;
+                }
+
+                switch (tw)
+                {
+                case CON_SETACTORVAR:
+                    if (EDUKE32_PREDICT_FALSE(!(aGameVars[i].flags & GAMEVAR_PERACTOR)))
+                    {
+                        g_errorCnt++;
+                        C_ReportError(-1);
+                        initprintf("%s:%d: error: variable `%s' is not per-actor.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
+                        continue;
+                    }
+                    break;
+                case CON_SETPLAYERVAR:
+                    if (EDUKE32_PREDICT_FALSE(!(aGameVars[i].flags & GAMEVAR_PERPLAYER)))
+                    {
+                        g_errorCnt++;
+                        C_ReportError(-1);
+                        initprintf("%s:%d: error: variable `%s' is not per-player.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
+                        continue;
+                    }
+                    break;
+                }
+
+                scriptWriteValue(i); // the ID of the DEF (offset into array...)
+
+                switch (tw)
+                {
+                case CON_GETACTORVAR:
+                case CON_GETPLAYERVAR:
+                    C_GetNextVarType(GAMEVAR_READONLY);
+                    break;
+                default:
+                    C_GetNextVar();
+                    break;
+                }
+                continue;
+            }
 
         case CON_WRITEARRAYTOFILE:
         case CON_READARRAYFROMFILE:
-            C_GetNextLabelName();
-            i=GetADefID(label+(g_labelCnt<<6));
+            i = C_GetNextGameArrayName();
             if (EDUKE32_PREDICT_FALSE(i < 0))
-            {
-                g_errorCnt++;
-                C_ReportError(ERROR_NOTAGAMEARRAY);
                 return 1;
-            }
-
-            BITPTR_CLEAR(g_scriptPtr-apScript);
-            *g_scriptPtr++=i;
 
             C_GetNextValue(LABEL_DEFINE);
             continue;
 
         case CON_COPY:
-            C_GetNextLabelName();
-            i=GetADefID(label+(g_labelCnt<<6));
+            i = C_GetNextGameArrayName();
             if (EDUKE32_PREDICT_FALSE(i < 0))
-            {
-                g_errorCnt++;
-                C_ReportError(ERROR_NOTAGAMEARRAY);
                 return 1;
-            }
-            BITPTR_CLEAR(g_scriptPtr-apScript);
-            *g_scriptPtr++=i;
-            C_SkipComments();// skip comments and whitespace
+
+            C_SkipComments();
+
             if (EDUKE32_PREDICT_FALSE(*textptr != '['))
             {
                 g_errorCnt++;
@@ -4414,7 +3998,7 @@ DO_DEFSTATE:
             }
             textptr++;
             C_GetNextVar();
-            C_SkipComments();// skip comments and whitespace
+            C_SkipComments();
             if (EDUKE32_PREDICT_FALSE(*textptr != ']'))
             {
                 g_errorCnt++;
@@ -4424,17 +4008,9 @@ DO_DEFSTATE:
             textptr++;
             fallthrough__;
         case CON_SETARRAY:
-            C_GetNextLabelName();
-            i=GetADefID(label+(g_labelCnt<<6));
+            i = C_GetNextGameArrayName();
             if (EDUKE32_PREDICT_FALSE(i < 0))
-            {
-                g_errorCnt++;
-                C_ReportError(ERROR_NOTAGAMEARRAY);
                 return 1;
-            }
-
-            BITPTR_CLEAR(g_scriptPtr-apScript);
-            *g_scriptPtr++=i;
 
             if (EDUKE32_PREDICT_FALSE(aGameArrays[i].flags & GAMEARRAY_READONLY))
             {
@@ -4443,7 +4019,7 @@ DO_DEFSTATE:
                 return 1;
             }
 
-            C_SkipComments();// skip comments and whitespace
+            C_SkipComments();
             if (EDUKE32_PREDICT_FALSE(*textptr != '['))
             {
                 g_errorCnt++;
@@ -4452,7 +4028,7 @@ DO_DEFSTATE:
             }
             textptr++;
             C_GetNextVar();
-            C_SkipComments();// skip comments and whitespace
+            C_SkipComments();
             if (EDUKE32_PREDICT_FALSE(*textptr != ']'))
             {
                 g_errorCnt++;
@@ -4464,53 +4040,113 @@ DO_DEFSTATE:
             continue;
 
         case CON_GETARRAYSIZE:
-        case CON_RESIZEARRAY:
-            C_GetNextLabelName();
-            i=GetADefID(label+(g_labelCnt<<6));
+            i = C_GetNextGameArrayName();
             if (EDUKE32_PREDICT_FALSE(i < 0))
-            {
-                g_errorCnt++;
-                C_ReportError(ERROR_NOTAGAMEARRAY);
                 return 1;
+            C_SkipComments();
+            C_GetNextVarType(GAMEVAR_READONLY);
+            continue;
+
+        case CON_GETARRAYSEQUENCE:
+        case CON_SETARRAYSEQUENCE:
+        {
+            i = C_GetNextGameArrayName();
+            if (EDUKE32_PREDICT_FALSE(i < 0))
+                return 1;
+            C_SkipComments();
+
+            auto pSize = g_scriptPtr++;
+
+            for (j = 0; j < MAX_ARRAYRANGE_VALUES; ++j)
+            {
+                if (C_GetKeyword() != -1)
+                    break;
+
+                C_GetNextVarType(tw == CON_GETARRAYSEQUENCE ? GAMEVAR_READONLY : 0);
             }
 
-            BITPTR_CLEAR(g_scriptPtr-apScript);
-            *g_scriptPtr++ = i;
-            if (tw==CON_RESIZEARRAY && (aGameArrays[i].flags & (GAMEARRAY_READONLY|GAMEARRAY_SYSTEM)))
+            scriptWriteAtOffset(j, pSize);
+            continue;
+        }
+
+        case CON_RESIZEARRAY:
+            i = C_GetNextGameArrayName();
+            if (EDUKE32_PREDICT_FALSE(i < 0))
+                return 1;
+
+            if (aGameArrays[i].flags & (GAMEARRAY_READONLY|GAMEARRAY_SYSTEM))
             {
+                g_errorCnt++;
                 C_ReportError(-1);
-                initprintf("can't resize system array `%s'.", label+(g_labelCnt<<6));
+                initprintf("%s:%d: error: can't resize system array `%s'.\n", g_scriptFileName, g_lineNumber, LAST_LABEL);
                 return 1;
             }
 
             C_SkipComments();
-            C_GetNextVarType(tw==CON_GETARRAYSIZE ? GAMEVAR_READONLY : 0);
+            C_GetNextVarType(0);
             continue;
 
-        case CON_SMAXAMMO:
-        case CON_ADDWEAPONVAR:
+        case CON_SWAPARRAYS:
+            i = C_GetNextGameArrayName();
+            if (EDUKE32_PREDICT_FALSE(i < 0))
+                return 1;
+
+            if (aGameArrays[i].flags & (GAMEARRAY_READONLY|GAMEARRAY_SYSTEM|GAMEARRAY_VARSIZE))
+            {
+                g_errorCnt++;
+                C_ReportError(-1);
+                initprintf("%s:%d: error: can't swap system array `%s'.\n", g_scriptFileName, g_lineNumber, LAST_LABEL);
+                return 1;
+            }
+
+            C_SkipComments();
+
+            tw = C_GetNextGameArrayName();
+            if (EDUKE32_PREDICT_FALSE(tw < 0))
+                return 1;
+
+            if (aGameArrays[tw].flags & (GAMEARRAY_READONLY|GAMEARRAY_SYSTEM|GAMEARRAY_VARSIZE))
+            {
+                g_errorCnt++;
+                C_ReportError(-1);
+                initprintf("%s:%d: error: can't swap system array `%s'.\n", g_scriptFileName, g_lineNumber, LAST_LABEL);
+                return 1;
+            }
+
+            if ((aGameArrays[i].flags & GAMEARRAY_STORAGE_MASK) != (aGameArrays[tw].flags & GAMEARRAY_STORAGE_MASK))
+            {
+                g_errorCnt++;
+                C_ReportError(-1);
+                initprintf("%s:%d: error: can't swap arrays of different storage classes.\n", g_scriptFileName, g_lineNumber);
+                return 1;
+            }
+
+            continue;
+
         case CON_ACTIVATEBYSECTOR:
-        case CON_OPERATESECTORS:
-        case CON_OPERATEACTIVATORS:
-        case CON_SSP:
-        case CON_GMAXAMMO:
+        case CON_ADDWEAPON:
         case CON_DIST:
-        case CON_LDIST:
-        case CON_GETINCANGLE:
-        case CON_GETANGLE:
-        case CON_MULSCALE:
         case CON_DIVSCALE:
+        case CON_GETANGLE:
+        case CON_GETINCANGLE:
+        case CON_GMAXAMMO:
+        case CON_LDIST:
+        case CON_MULSCALE:
+        case CON_OPERATEACTIVATORS:
+        case CON_OPERATESECTORS:
         case CON_SCALEVAR:
         case CON_SETASPECT:
+        case CON_SMAXAMMO:
+        case CON_SSP:
             // get the ID of the DEF
             switch (tw)
             {
             case CON_DIST:
-            case CON_LDIST:
+            case CON_DIVSCALE:
             case CON_GETANGLE:
             case CON_GETINCANGLE:
+            case CON_LDIST:
             case CON_MULSCALE:
-            case CON_DIVSCALE:
             case CON_SCALEVAR:
                 C_GetNextVarType(GAMEVAR_READONLY);
                 break;
@@ -4527,13 +4163,13 @@ DO_DEFSTATE:
             switch (tw)
             {
             case CON_DIST:
-            case CON_LDIST:
             case CON_GETANGLE:
             case CON_GETINCANGLE:
+            case CON_LDIST:
                 C_GetNextVar();
                 break;
-            case CON_MULSCALE:
             case CON_DIVSCALE:
+            case CON_MULSCALE:
             case CON_SCALEVAR:
                 C_GetManyVars(2);
                 break;
@@ -4555,14 +4191,15 @@ DO_DEFSTATE:
             continue;
 
         case CON_ACTIVATE:
-            *(g_scriptPtr-1) = CON_OPERATEACTIVATORS;
+            g_scriptPtr[-1] = CON_OPERATEACTIVATORS | LINE_NUMBER;
             C_GetNextValue(LABEL_DEFINE);
-            *g_scriptPtr++ = 0;
+            scriptWriteValue(0);
             continue;
 
         case CON_GETFLORZOFSLOPE:
         case CON_GETCEILZOFSLOPE:
         case CON_UPDATESECTORZ:
+        case CON_UPDATESECTORNEIGHBORZ:
             C_GetManyVars(3);
             C_GetNextVarType(GAMEVAR_READONLY);
             continue;
@@ -4571,7 +4208,7 @@ DO_DEFSTATE:
             {
                 int32_t y, z;
 
-                if (EDUKE32_PREDICT_FALSE(g_processingState || g_parsingActorPtr))
+                if (EDUKE32_PREDICT_FALSE(g_processingState || g_scriptActorOffset))
                 {
                     C_ReportError(ERROR_FOUNDWITHIN);
                     g_errorCnt++;
@@ -4580,12 +4217,16 @@ DO_DEFSTATE:
                 g_scriptPtr--;
 
                 C_GetNextValue(LABEL_DEFINE);
-                j = *(g_scriptPtr-1);
+                j = g_scriptPtr[-1];
+                g_scriptPtr--;
 
                 C_GetNextValue(LABEL_DEFINE);
-                y = *(g_scriptPtr-1);
+                y = g_scriptPtr[-1];
+                g_scriptPtr--;
+
                 C_GetNextValue(LABEL_DEFINE);
-                z = *(g_scriptPtr-1);
+                z = g_scriptPtr[-1];
+                g_scriptPtr--;
 
                 if (EDUKE32_PREDICT_FALSE((unsigned)j >= MAXTILES))
                 {
@@ -4600,7 +4241,7 @@ DO_DEFSTATE:
 
         case CON_DAMAGEEVENTTILE:
         {
-            if (EDUKE32_PREDICT_FALSE(g_processingState || g_parsingActorPtr))
+            if (EDUKE32_PREDICT_FALSE(g_processingState || g_scriptActorOffset))
             {
                 C_ReportError(ERROR_FOUNDWITHIN);
                 g_errorCnt++;
@@ -4609,7 +4250,8 @@ DO_DEFSTATE:
             g_scriptPtr--;
 
             C_GetNextValue(LABEL_DEFINE);
-            j = *(g_scriptPtr - 1);
+            j = g_scriptPtr[-1];
+            g_scriptPtr--;
 
             if (EDUKE32_PREDICT_FALSE((unsigned)j >= MAXTILES))
             {
@@ -4625,7 +4267,7 @@ DO_DEFSTATE:
 
         case CON_DAMAGEEVENTTILERANGE:
         {
-            if (EDUKE32_PREDICT_FALSE(g_processingState || g_parsingActorPtr))
+            if (EDUKE32_PREDICT_FALSE(g_processingState || g_scriptActorOffset))
             {
                 C_ReportError(ERROR_FOUNDWITHIN);
                 g_errorCnt++;
@@ -4634,9 +4276,12 @@ DO_DEFSTATE:
             g_scriptPtr--;
 
             C_GetNextValue(LABEL_DEFINE);
-            i = *(g_scriptPtr - 1);
+            i = g_scriptPtr[-1];
+            g_scriptPtr--;
+
             C_GetNextValue(LABEL_DEFINE);
-            j = *(g_scriptPtr - 1);
+            j = g_scriptPtr[-1];
+            g_scriptPtr--;
 
             if (EDUKE32_PREDICT_FALSE((unsigned)i >= MAXTILES || (unsigned)j >= MAXTILES))
             {
@@ -4652,18 +4297,20 @@ DO_DEFSTATE:
         }
 
         case CON_SPRITEFLAGS:
-            if (!g_parsingActorPtr && g_processingState == 0)
+            if (!g_scriptActorOffset && g_processingState == 0)
             {
                 g_scriptPtr--;
+                auto tmpscrptr = g_scriptPtr;
 
                 C_GetNextValue(LABEL_DEFINE);
-                g_scriptPtr--;
-                j = *g_scriptPtr;
+                j = g_scriptPtr[-1];
 
                 int32_t flags = 0;
                 do
                     C_BitOrNextValue(&flags);
                 while (C_GetKeyword() == -1);
+
+                g_scriptPtr = tmpscrptr;
 
                 if (EDUKE32_PREDICT_FALSE((unsigned)j >= MAXTILES))
                 {
@@ -4673,21 +4320,21 @@ DO_DEFSTATE:
                 }
 
                 g_tile[j].flags = flags;
-
-                continue;
             }
-            C_GetNextVar();
+            else C_GetNextVar();
             continue;
 
-        case CON_SPRITESHADOW:
-        case CON_SPRITENVG:
-        case CON_SPRITENOSHADE:
-        case CON_SPRITENOPAL:
         case CON_PRECACHE:
-            if (EDUKE32_PREDICT_FALSE(g_processingState || g_parsingActorPtr))
+        case CON_SPRITENOPAL:
+        case CON_SPRITENOSHADE:
+        case CON_SPRITENVG:
+        case CON_SPRITESHADOW:
+            if (EDUKE32_PREDICT_FALSE(g_processingState || g_scriptActorOffset))
             {
                 C_ReportError(ERROR_FOUNDWITHIN);
                 g_errorCnt++;
+                scriptSkipLine();
+                continue;
             }
 
             g_scriptPtr--;
@@ -4700,6 +4347,7 @@ DO_DEFSTATE:
             {
                 C_ReportError(ERROR_EXCEEDSMAXTILES);
                 g_errorCnt++;
+                scriptSkipLine();
                 continue;
             }
 
@@ -4725,6 +4373,8 @@ DO_DEFSTATE:
                 {
                     C_ReportError(ERROR_EXCEEDSMAXTILES);
                     g_errorCnt++;
+                    scriptSkipLine();
+                    continue;
                 }
                 g_tile[j].cacherange = i;
 
@@ -4738,107 +4388,128 @@ DO_DEFSTATE:
             continue;
 
         case CON_IFACTORSOUND:
-        case CON_IFVARVARG:
-        case CON_IFVARVARL:
-        case CON_IFVARVARE:
-        case CON_IFVARVARLE:
-        case CON_IFVARVARGE:
         case CON_IFVARVARA:
-        case CON_IFVARVARB:
         case CON_IFVARVARAE:
+        case CON_IFVARVARAND:
+        case CON_IFVARVARB:
         case CON_IFVARVARBE:
         case CON_IFVARVARBOTH:
+        case CON_IFVARVARE:
+        case CON_IFVARVAREITHER:
+        case CON_IFVARVARG:
+        case CON_IFVARVARGE:
+        case CON_IFVARVARL:
+        case CON_IFVARVARLE:
         case CON_IFVARVARN:
-        case CON_IFVARVARAND:
         case CON_IFVARVAROR:
         case CON_IFVARVARXOR:
-        case CON_IFVARVAREITHER:
-        case CON_WHILEVARVARN:
         case CON_WHILEVARVARL:
+        case CON_WHILEVARVARN:
             {
-                intptr_t offset;
-                intptr_t lastScriptPtr = g_scriptPtr - &apScript[0] - 1;
+                auto const ins = &g_scriptPtr[-1];
+                auto const lastScriptPtr = &g_scriptPtr[-1] - apScript;
+                auto const lasttextptr = textptr;
+                int const lnum = g_lineNumber;
 
-                g_ifElseAborted = 0;
+                g_skipBranch = false;
 
-                C_GetManyVars(2);
+                C_GetNextVar();
+                auto const var = g_scriptPtr;
+                C_GetNextVar();
+
+                if (*var == GV_FLAG_CONSTANT)
+                {
+                    int const opcode = inthash_find(&h_varvar, tw);
+
+                    if (opcode != -1)
+                    {
+                        if (g_scriptDebug > 1 && !g_errorCnt && !g_warningCnt)
+                        {
+                            initprintf("%s:%d: replacing %s with %s\n", g_scriptFileName, g_lineNumber,
+                                       VM_GetKeywordForID(*ins & VM_INSTMASK), VM_GetKeywordForID(opcode));
+                        }
+
+                        scriptWriteAtOffset(opcode | LINE_NUMBER, ins);
+                        tw = opcode;
+                        g_scriptPtr = &ins[1];
+                        textptr = lasttextptr;
+                        g_lineNumber = lnum;
+                        goto ifvar;
+                    }
+                }
 
                 if (C_CheckMalformedBranch(lastScriptPtr))
                     continue;
 
-                offset = (unsigned)(g_scriptPtr-apScript);
+                auto const offset = g_scriptPtr - apScript;
                 g_scriptPtr++; // Leave a spot for the fail location
 
-                C_ParseCommand(0);
+                C_ParseCommand();
 
                 if (C_CheckEmptyBranch(tw, lastScriptPtr))
                     continue;
 
-                intptr_t *tempscrptr = (intptr_t *)apScript+offset;
-                *tempscrptr = (intptr_t) g_scriptPtr;
-                BITPTR_SET(tempscrptr-apScript);
+                auto const tempscrptr = apScript + offset;
+                scriptWritePointer((intptr_t)g_scriptPtr, tempscrptr);
 
-                if (tw != CON_WHILEVARVARN)
+                if (tw != CON_WHILEVARVARN && tw != CON_WHILEVARVARL)
                 {
                     j = C_GetKeyword();
 
-                    if (j == CON_ELSE || j == CON_LEFTBRACE)
+                    if (j == CON_ELSE)
                         g_checkingIfElse++;
                 }
                 continue;
             }
 
-        case CON_STARTTRACK:
-            // one parameter (track#)
-            C_GetNextValue(LABEL_DEFINE);
-            continue;
-
-        case CON_IFVARL:
-        case CON_IFVARLE:
-        case CON_IFVARG:
-        case CON_IFVARGE:
         case CON_IFVARA:
         case CON_IFVARAE:
+        case CON_IFVARAND:
         case CON_IFVARB:
         case CON_IFVARBE:
+        case CON_IFVARBOTH:
         case CON_IFVARE:
+        case CON_IFVAREITHER:
+        case CON_IFVARG:
+        case CON_IFVARGE:
+        case CON_IFVARL:
+        case CON_IFVARLE:
         case CON_IFVARN:
-        case CON_IFVARAND:
         case CON_IFVAROR:
         case CON_IFVARXOR:
-        case CON_IFVARBOTH:
-        case CON_IFVAREITHER:
-        case CON_WHILEVARN:
         case CON_WHILEVARL:
+        case CON_WHILEVARN:
             {
-                intptr_t lastScriptPtr = (g_scriptPtr-apScript-1);
+ifvar:
+                auto const ins = &g_scriptPtr[-1];
+                auto const lastScriptPtr = &g_scriptPtr[-1] - apScript;
 
-                g_ifElseAborted = 0;
-                // get the ID of the DEF
+                g_skipBranch = false;
+
                 C_GetNextVar();
-                C_GetNextValue(LABEL_DEFINE); // the number to check against...
+                C_GetNextValue(LABEL_DEFINE);
 
                 if (C_CheckMalformedBranch(lastScriptPtr))
                     continue;
 
-                intptr_t *tempscrptr = g_scriptPtr;
-                intptr_t offset = (unsigned)(tempscrptr-apScript);
+                scriptUpdateOpcodeForVariableType(ins);
+
+                auto const offset = g_scriptPtr - apScript;
                 g_scriptPtr++; //Leave a spot for the fail location
 
-                C_ParseCommand(0);
+                C_ParseCommand();
 
                 if (C_CheckEmptyBranch(tw, lastScriptPtr))
                     continue;
 
-                tempscrptr = (intptr_t *)apScript+offset;
-                *tempscrptr = (intptr_t) g_scriptPtr;
-                BITPTR_SET(tempscrptr-apScript);
+                auto const tempscrptr = apScript + offset;
+                scriptWritePointer((intptr_t)g_scriptPtr, tempscrptr);
 
                 if (tw != CON_WHILEVARN && tw != CON_WHILEVARL)
                 {
                     j = C_GetKeyword();
 
-                    if (j == CON_ELSE || j == CON_LEFTBRACE)
+                    if (j == CON_ELSE)
                         g_checkingIfElse++;
                 }
 
@@ -4848,34 +4519,35 @@ DO_DEFSTATE:
         case CON_FOR:  // special-purpose iteration
         {
             C_GetNextVarType(GAMEVAR_READONLY);
-
             C_GetNextLabelName();
 
-            int const iterType = hash_find(&h_iter, label + (g_labelCnt << 6));
+            int const iterType = hash_find(&h_iter, LAST_LABEL);
 
-            if (iterType < 0)
+            if (EDUKE32_PREDICT_FALSE(iterType < 0))
             {
-                C_CUSTOMERROR("unknown iteration type `%s'.", label + (g_labelCnt << 6));
+                C_CUSTOMERROR("unknown iteration type `%s'.", LAST_LABEL);
                 return 1;
             }
-            *g_scriptPtr++ = iterType;
+
+            scriptWriteValue(iterType);
 
             if (iterType >= ITER_SPRITESOFSECTOR)
                 C_GetNextVar();
 
-            intptr_t offset = g_scriptPtr-apScript;
+            intptr_t const offset = g_scriptPtr-apScript;
             g_scriptPtr++; //Leave a spot for the location to jump to after completion
 
-            C_ParseCommand(0);
+            C_ParseCommand();
 
-            intptr_t *tscrptr = (intptr_t *) apScript+offset;
-            *tscrptr = (g_scriptPtr-apScript)-offset;  // relative offset
+            // write relative offset
+            auto const tscrptr = (intptr_t *) apScript+offset;
+            scriptWriteAtOffset((g_scriptPtr-apScript)-offset, tscrptr);
             continue;
         }
 
         case CON_ROTATESPRITE16:
         case CON_ROTATESPRITE:
-            if (EDUKE32_PREDICT_FALSE(!g_parsingEventPtr && g_processingState == 0))
+            if (EDUKE32_PREDICT_FALSE(!g_scriptEventOffset && g_processingState == 0))
             {
                 C_ReportError(ERROR_EVENTONLY);
                 g_errorCnt++;
@@ -4891,7 +4563,7 @@ DO_DEFSTATE:
             continue;
 
         case CON_ROTATESPRITEA:
-            if (EDUKE32_PREDICT_FALSE(!g_parsingEventPtr && g_processingState == 0))
+            if (EDUKE32_PREDICT_FALSE(!g_scriptEventOffset && g_processingState == 0))
             {
                 C_ReportError(ERROR_EVENTONLY);
                 g_errorCnt++;
@@ -4904,7 +4576,7 @@ DO_DEFSTATE:
         case CON_SHOWVIEWUNBIASED:
         case CON_SHOWVIEWQ16:
         case CON_SHOWVIEWQ16UNBIASED:
-            if (EDUKE32_PREDICT_FALSE(!g_parsingEventPtr && g_processingState == 0))
+            if (EDUKE32_PREDICT_FALSE(!g_scriptEventOffset && g_processingState == 0))
             {
                 C_ReportError(ERROR_EVENTONLY);
                 g_errorCnt++;
@@ -4946,6 +4618,7 @@ DO_DEFSTATE:
 
         case CON_CANSEESPR:
         case CON_UPDATESECTOR:
+        case CON_UPDATESECTORNEIGHBOR:
         case CON_QSTRCMP:
             C_GetManyVars(2);
             C_GetNextVarType(GAMEVAR_READONLY);
@@ -4971,13 +4644,13 @@ DO_DEFSTATE:
             C_GetNextVarType(GAMEVAR_READONLY);
             continue;
 
-        case CON_MINITEXT:
-        case CON_GAMETEXT:
-        case CON_GAMETEXTZ:
         case CON_DIGITALNUMBER:
         case CON_DIGITALNUMBERZ:
+        case CON_GAMETEXT:
+        case CON_GAMETEXTZ:
+        case CON_MINITEXT:
         case CON_SCREENTEXT:
-            if (EDUKE32_PREDICT_FALSE(!g_parsingEventPtr && g_processingState == 0))
+            if (EDUKE32_PREDICT_FALSE(!g_scriptEventOffset && g_processingState == 0))
             {
                 C_ReportError(ERROR_EVENTONLY);
                 g_errorCnt++;
@@ -5006,7 +4679,7 @@ DO_DEFSTATE:
         case CON_MYOSPAL:
         case CON_MYOSX:
         case CON_MYOSPALX:
-            if (EDUKE32_PREDICT_FALSE(!g_parsingEventPtr && g_processingState == 0))
+            if (EDUKE32_PREDICT_FALSE(!g_scriptEventOffset && g_processingState == 0))
             {
                 C_ReportError(ERROR_EVENTONLY);
                 g_errorCnt++;
@@ -5028,20 +4701,20 @@ DO_DEFSTATE:
 
         case CON_SWITCH:
             {
-                intptr_t tempoffset;
-
                 g_checkingSwitch++; // allow nesting (if other things work)
                 C_GetNextVar();
 
-                intptr_t *tempscrptr= g_scriptPtr;
-                tempoffset = (unsigned)(tempscrptr-apScript);
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=0; // leave spot for end location (for after processing)
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=0; // count of case statements
-                g_caseScriptPtr=g_scriptPtr;        // the first case's pointer.
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=0; // leave spot for 'default' location (null if none)
+                intptr_t const tempoffset = (unsigned)(g_scriptPtr-apScript);
+
+                scriptWriteValue(0); // leave spot for end location (for after processing)
+                scriptWriteValue(0); // count of case statements
+
+                auto const backupCaseScriptPtr = g_caseTablePtr;
+                g_caseTablePtr=g_scriptPtr;        // the first case's pointer.
+
+                int const backupNumCases = g_numCases;
+
+                scriptWriteValue(0); // leave spot for 'default' location (null if none)
 
 //                temptextptr=textptr;
                 // probably does not allow nesting...
@@ -5051,7 +4724,7 @@ DO_DEFSTATE:
                 g_scriptPtr+=j*2;
                 C_SkipComments();
                 g_scriptPtr-=j*2; // allocate buffer for the table
-                tempscrptr = (intptr_t *)(apScript+tempoffset);
+                auto tempscrptr = (intptr_t *)(apScript+tempoffset);
 
                 //AddLog(g_szBuf);
 
@@ -5062,7 +4735,8 @@ DO_DEFSTATE:
 
                 if (tempscrptr)
                 {
-                    tempscrptr[1]=(intptr_t)j;  // save count of cases
+                    // save count of cases
+                    scriptWriteAtOffset(j, &tempscrptr[1]);
                 }
                 else
                 {
@@ -5073,15 +4747,14 @@ DO_DEFSTATE:
                 while (j--)
                 {
                     // leave room for statements
-                    BITPTR_CLEAR(g_scriptPtr-apScript);
-                    *g_scriptPtr++=0; // value check
-                    BITPTR_CLEAR(g_scriptPtr-apScript);
-                    *g_scriptPtr++=0; // code offset
+
+                    scriptWriteValue(0); // value check
+                    scriptWriteValue(0); // code offset
                     C_SkipComments();
                 }
 
                 g_numCases=0;
-                C_ParseCommand(1);
+                C_ParseCommand(true);
                 tempscrptr = (intptr_t *)(apScript+tempoffset);
 
                 //Bsprintf(g_szBuf,"SWITCHXX: '%.22s'",textptr);
@@ -5099,7 +4772,7 @@ DO_DEFSTATE:
                     for (i = 3; i < 3 + tempscrptr[1] * 2 - 2; i += 2)  // sort them
                     {
                         intptr_t t = tempscrptr[i];
-                        intptr_t n = i;
+                        int n = i;
 
                         for (j = i + 2; j < 3 + tempscrptr[1] * 2; j += 2)
                         {
@@ -5112,32 +4785,22 @@ DO_DEFSTATE:
 
                         if (n != i)
                         {
-                            t                 = tempscrptr[i];
-                            tempscrptr[i]     = tempscrptr[n];
-                            tempscrptr[n]     = t;
-                            t                 = tempscrptr[i + 1];
-                            tempscrptr[i + 1] = tempscrptr[n + 1];
-                            tempscrptr[n + 1] = t;
+                            swapptr(&tempscrptr[i],   &tempscrptr[n]);
+                            swapptr(&tempscrptr[i+1], &tempscrptr[n+1]);
                         }
                     }
                     //            for (j=3;j<3+tempscrptr[1]*2;j+=2)initprintf("%5d %8x\n",tempscrptr[j],tempscrptr[j+1]);
-                    tempscrptr[0]= (intptr_t)g_scriptPtr - (intptr_t)&apScript[0];    // save 'end' location
-                    //            BITPTR_POINTER_SET(tempscrptr-script);
+
+                    // save 'end' location
+                    scriptWriteAtOffset((intptr_t)g_scriptPtr - (intptr_t)apScript, tempscrptr);
                 }
                 else
                 {
                     //Bsprintf(g_szBuf,"ERROR::%s %d",__FILE__,__LINE__);
                     //AddLog(g_szBuf);
                 }
-                g_caseScriptPtr=NULL;
-                // decremented in endswitch.  Don't decrement here...
-                //                    g_checkingSwitch--; // allow nesting (maybe if other things work)
-                tempscrptr=NULL;
-                if (g_checkingSwitch)
-                {
-                    //Bsprintf(g_szBuf,"ERROR::%s %d: g_checkingSwitch=%d",__FILE__,__LINE__, g_checkingSwitch);
-                    //AddLog(g_szBuf);
-                }
+                g_caseTablePtr=backupCaseScriptPtr;
+                g_numCases=backupNumCases;
                 //AddLog("End of Switch statement");
             }
             continue;
@@ -5156,9 +4819,9 @@ DO_DEFSTATE:
                 }
 
                 intptr_t tempoffset = 0;
-                intptr_t *tempscrptr = NULL;
+                intptr_t *tempscrptr = g_scriptPtr;
 
-                g_checkingCase++;
+                g_checkingCase = true;
 repeatcase:
                 g_scriptPtr--;
 
@@ -5178,30 +4841,30 @@ repeatcase:
 
                 C_SkipComments();
 
-                if (g_caseScriptPtr)
+                if (g_caseTablePtr)
                 {
                     if (tw == CON_DEFAULT)
                     {
-                        if (EDUKE32_PREDICT_FALSE(g_caseScriptPtr && g_caseScriptPtr[0]!=0))
+                        if (EDUKE32_PREDICT_FALSE(g_caseTablePtr[0] != 0))
                         {
                             // duplicate default statement
                             g_errorCnt++;
                             C_ReportError(-1);
                             initprintf("%s:%d: error: multiple `default' statements found in switch\n", g_scriptFileName, g_lineNumber);
                         }
-                        g_caseScriptPtr[0]=(intptr_t) (g_scriptPtr-&apScript[0]);   // save offset
+                        g_caseTablePtr[0]=(intptr_t) (g_scriptPtr-apScript);   // save offset
                     }
                     else
                     {
                         for (i=(g_numCases/2)-1; i>=0; i--)
-                            if (EDUKE32_PREDICT_FALSE(g_caseScriptPtr[i*2+1]==j))
+                            if (EDUKE32_PREDICT_FALSE(g_caseTablePtr[i*2+1]==j))
                             {
                                 g_warningCnt++;
                                 C_ReportError(WARNING_DUPLICATECASE);
                                 break;
                             }
-                        g_caseScriptPtr[g_numCases++]=j;
-                        g_caseScriptPtr[g_numCases]=(intptr_t) ((intptr_t *) g_scriptPtr-&apScript[0]);
+                        g_caseTablePtr[g_numCases++]=j;
+                        g_caseTablePtr[g_numCases]=(intptr_t) ((intptr_t *) g_scriptPtr-apScript);
                     }
                 }
 
@@ -5217,7 +4880,7 @@ repeatcase:
 
                 tempoffset = (unsigned)(tempscrptr-apScript);
 
-                while (C_ParseCommand(0) == 0)
+                while (C_ParseCommand() == 0)
                 {
                     j = C_GetKeyword();
 
@@ -5235,7 +4898,7 @@ repeatcase:
 
         case CON_ENDSWITCH:
             //AddLog("End Switch");
-            if (g_caseScriptPtr)
+            if (g_caseTablePtr)
             {
                 if (EDUKE32_PREDICT_FALSE(g_checkingCase))
                 {
@@ -5253,9 +4916,9 @@ repeatcase:
             }
             return 1;      // end of block
 
-        case CON_QSTRNCAT:
         case CON_DRAGPOINT:
         case CON_GETKEYNAME:
+        case CON_QSTRNCAT:
         case CON_SETACTORSOUNDPITCH:
             C_GetManyVars(3);
             continue;
@@ -5271,35 +4934,34 @@ repeatcase:
             C_GetManyVars(4);
             continue;
 
-        case CON_IFRND:
-        case CON_IFPDISTL:
-        case CON_IFPDISTG:
-        case CON_IFWASWEAPON:
-        case CON_IFACTIONCOUNT:
-        case CON_IFCOUNT:
-        case CON_IFACTOR:
-        case CON_IFSTRENGTH:
-        case CON_IFSPAWNEDBY:
-        case CON_IFGAPZL:
-        case CON_IFFLOORDISTL:
-        case CON_IFCEILINGDISTL:
-        case CON_IFPHEALTHL:
-        case CON_IFSPRITEPAL:
-        case CON_IFGOTWEAPONCE:
-        case CON_IFANGDIFFL:
-        case CON_IFSOUND:
-        case CON_IFAI:
         case CON_IFACTION:
+        case CON_IFACTIONCOUNT:
+        case CON_IFACTOR:
+        case CON_IFAI:
+        case CON_IFANGDIFFL:
+        case CON_IFCEILINGDISTL:
+        case CON_IFCOUNT:
+        case CON_IFCUTSCENE:
+        case CON_IFFLOORDISTL:
+        case CON_IFGAPZL:
+        case CON_IFGOTWEAPONCE:
         case CON_IFMOVE:
         case CON_IFP:
+        case CON_IFPDISTG:
+        case CON_IFPDISTL:
+        case CON_IFPHEALTHL:
         case CON_IFPINVENTORY:
         case CON_IFPLAYERSL:
-        case CON_IFCUTSCENE:
+        case CON_IFRND:
+        case CON_IFSOUND:
+        case CON_IFSPAWNEDBY:
+        case CON_IFSPRITEPAL:
+        case CON_IFSTRENGTH:
+        case CON_IFWASWEAPON:
             {
-                intptr_t offset;
-                intptr_t lastScriptPtr = (g_scriptPtr-&apScript[0]-1);
+                auto const lastScriptPtr = &g_scriptPtr[-1] - apScript;
 
-                g_ifElseAborted = 0;
+                g_skipBranch = false;
 
                 switch (tw)
                 {
@@ -5313,10 +4975,10 @@ repeatcase:
                     C_GetNextValue(LABEL_ACTION);
                     break;
                 case CON_IFMOVE:
-                    if (EDUKE32_PREDICT_FALSE((C_GetNextValue(LABEL_MOVE|LABEL_DEFINE) == 0) && (*(g_scriptPtr-1) != 0) && (*(g_scriptPtr-1) != 1)))
+                    if (EDUKE32_PREDICT_FALSE((C_GetNextValue(LABEL_MOVE|LABEL_DEFINE) == 0) && (g_scriptPtr[-1] != 0) && (g_scriptPtr[-1] != 1)))
                     {
                         C_ReportError(-1);
-                        *(g_scriptPtr-1) = 0;
+                        g_scriptPtr[-1] = 0;
                         initprintf("%s:%d: warning: expected a move, found a constant.\n",g_scriptFileName,g_lineNumber);
                         g_warningCnt++;
                     }
@@ -5342,105 +5004,100 @@ repeatcase:
                 if (C_CheckMalformedBranch(lastScriptPtr))
                     continue;
 
-                intptr_t *tempscrptr = g_scriptPtr;
-                offset = (unsigned)(tempscrptr-apScript);
+                intptr_t const offset = (unsigned)(g_scriptPtr-apScript);
 
                 g_scriptPtr++; //Leave a spot for the fail location
 
-                C_ParseCommand(0);
+                C_ParseCommand();
 
                 if (C_CheckEmptyBranch(tw, lastScriptPtr))
                     continue;
 
-                tempscrptr = (intptr_t *)apScript+offset;
-                *tempscrptr = (intptr_t) g_scriptPtr;
-                BITPTR_SET(tempscrptr-apScript);
+                auto const tempscrptr = (intptr_t *)apScript+offset;
+                scriptWritePointer((intptr_t)g_scriptPtr, tempscrptr);
 
                 j = C_GetKeyword();
 
-                if (j == CON_ELSE || j == CON_LEFTBRACE)
+                if (j == CON_ELSE)
                     g_checkingIfElse++;
 
                 continue;
             }
 
-        case CON_IFCLIENT:
-        case CON_IFSERVER:
-        case CON_IFONWATER:
-        case CON_IFINWATER:
         case CON_IFACTORNOTSTAYPUT:
-        case CON_IFCANSEE:
-        case CON_IFHITWEAPON:
-        case CON_IFSQUISHED:
-        case CON_IFDEAD:
-        case CON_IFCANSHOOTTARGET:
-        case CON_IFHITSPACE:
-        case CON_IFOUTSIDE:
-        case CON_IFMULTIPLAYER:
-        case CON_IFINSPACE:
-        case CON_IFBULLETNEAR:
-        case CON_IFRESPAWN:
-        case CON_IFINOUTERSPACE:
-        case CON_IFNOTMOVING:
         case CON_IFAWAYFROMWALL:
+        case CON_IFBULLETNEAR:
+        case CON_IFCANSEE:
         case CON_IFCANSEETARGET:
+        case CON_IFCANSHOOTTARGET:
+        case CON_IFCLIENT:
+        case CON_IFDEAD:
+        case CON_IFHITSPACE:
+        case CON_IFHITWEAPON:
+        case CON_IFINOUTERSPACE:
+        case CON_IFINSPACE:
+        case CON_IFINWATER:
+        case CON_IFMULTIPLAYER:
         case CON_IFNOSOUNDS:
+        case CON_IFNOTMOVING:
+        case CON_IFONWATER:
+        case CON_IFOUTSIDE:
         case CON_IFPLAYBACKON:
+        case CON_IFRESPAWN:
+        case CON_IFSERVER:
+        case CON_IFSQUISHED:
             {
-                intptr_t offset;
-                intptr_t lastScriptPtr = (g_scriptPtr-&apScript[0]-1);
+                auto const lastScriptPtr = &g_scriptPtr[-1] - apScript;
 
-                g_ifElseAborted = 0;
+                g_skipBranch = false;
 
                 if (C_CheckMalformedBranch(lastScriptPtr))
                     continue;
 
-                intptr_t *tempscrptr = g_scriptPtr;
-                offset = (unsigned)(tempscrptr-apScript);
+                intptr_t const offset = (unsigned)(g_scriptPtr-apScript);
 
                 g_scriptPtr++; //Leave a spot for the fail location
 
-                C_ParseCommand(0);
+                C_ParseCommand();
 
                 if (C_CheckEmptyBranch(tw, lastScriptPtr))
                     continue;
 
-                tempscrptr = (intptr_t *)apScript+offset;
-                *tempscrptr = (intptr_t) g_scriptPtr;
-                BITPTR_SET(tempscrptr-apScript);
+                auto const tempscrptr = (intptr_t *)apScript+offset;
+                scriptWritePointer((intptr_t)g_scriptPtr, tempscrptr);
 
                 j = C_GetKeyword();
 
-                if (j == CON_ELSE || j == CON_LEFTBRACE)
+                if (j == CON_ELSE)
                     g_checkingIfElse++;
 
                 continue;
             }
 
         case CON_LEFTBRACE:
-            if (EDUKE32_PREDICT_FALSE(!(g_processingState || g_parsingActorPtr || g_parsingEventPtr)))
+            if (EDUKE32_PREDICT_FALSE(!(g_processingState || g_scriptActorOffset || g_scriptEventOffset)))
             {
                 g_errorCnt++;
                 C_ReportError(ERROR_SYNTAXERROR);
             }
             g_numBraces++;
 
-            C_ParseCommand(1);
+            C_ParseCommand(true);
             continue;
 
         case CON_RIGHTBRACE:
             g_numBraces--;
 
-            if ((*(g_scriptPtr-2)>>12) == (IFELSE_MAGIC) &&
-                ((*(g_scriptPtr-2) & VM_INSTMASK) == CON_LEFTBRACE)) // rewrite "{ }" into "nullop"
+            if ((g_scriptPtr[-2]>>12) == (VM_IFELSE_MAGIC) &&
+                ((g_scriptPtr[-2] & VM_INSTMASK) == CON_LEFTBRACE)) // rewrite "{ }" into "nullop"
             {
                 //            initprintf("%s:%d: rewriting empty braces '{ }' as 'nullop' from right\n",g_szScriptFileName,g_lineNumber);
-                *(g_scriptPtr-2) = CON_NULLOP + (IFELSE_MAGIC<<12);
+                g_scriptPtr[-2] = CON_NULLOP | (VM_IFELSE_MAGIC<<12);
                 g_scriptPtr -= 2;
 
-                if (C_GetKeyword() != CON_ELSE && (*(g_scriptPtr-2) & VM_INSTMASK) != CON_ELSE)
-                    g_ifElseAborted = 1;
-                else g_ifElseAborted = 0;
+                if (C_GetKeyword() != CON_ELSE && (g_scriptPtr[-2] & VM_INSTMASK) != CON_ELSE)
+                    g_skipBranch = true;
+                else g_skipBranch = false;
 
                 j = C_GetKeyword();
 
@@ -5470,7 +5127,7 @@ repeatcase:
         case CON_BETANAME:
             g_scriptPtr--;
             j = 0;
-            C_NextLine();
+            scriptSkipLine();
             continue;
 
 
@@ -5487,14 +5144,14 @@ repeatcase:
             {
                 initprintf("%s:%d: error: volume number exceeds maximum volume count.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
             if (EDUKE32_PREDICT_FALSE((unsigned)k > MAXLEVELS-1))
             {
                 initprintf("%s:%d: error: level number exceeds maximum number of levels per episode.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -5513,7 +5170,7 @@ repeatcase:
                 initprintf("%s:%d: error: skill number exceeds maximum skill count %d.\n",
                            g_scriptFileName,g_lineNumber, MAXSKILLS);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -5532,7 +5189,7 @@ repeatcase:
                 initprintf("%s:%d: error: volume number exceeds maximum volume count.\n",
                     g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -5546,14 +5203,14 @@ repeatcase:
             g_scriptPtr--;
             j = *g_scriptPtr;
 
-            C_SkipSpace();
+            scriptSkipSpaces();
 
             if (EDUKE32_PREDICT_FALSE((unsigned)j > MAXVOLUMES-1))
             {
                 initprintf("%s:%d: error: volume number exceeds maximum volume count.\n",
                     g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -5563,12 +5220,12 @@ repeatcase:
             {
                 g_volumeNames[j][i] = *textptr;
                 textptr++,i++;
-                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(g_volumeNames[j])-1))
+                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(g_volumeNames[j])))
                 {
                     initprintf("%s:%d: warning: truncating volume name to %d characters.\n",
                         g_scriptFileName,g_lineNumber,(int32_t)sizeof(g_volumeNames[j])-1);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
             }
@@ -5589,7 +5246,7 @@ repeatcase:
             {
                 initprintf("%s:%d: error: volume number exceeds maximum volume count.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -5602,18 +5259,20 @@ repeatcase:
             g_scriptPtr--;
             j = *g_scriptPtr;
 
-            C_SkipSpace();
+            scriptSkipSpaces();
 
             if (EDUKE32_PREDICT_FALSE((unsigned)j > NUMGAMEFUNCTIONS-1))
             {
                 initprintf("%s:%d: error: function number exceeds number of game functions.\n",
                     g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
             i = 0;
+
+            hash_delete(&h_gamefuncs, gamefunctions[j]);
 
             while (*textptr != 0x0a && *textptr != 0x0d && *textptr != 0)
             {
@@ -5624,25 +5283,20 @@ repeatcase:
                     initprintf("%s:%d: warning: invalid character in function name.\n",
                         g_scriptFileName,g_lineNumber);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
-                if (EDUKE32_PREDICT_FALSE(i >= MAXGAMEFUNCLEN-1))
+                if (EDUKE32_PREDICT_FALSE(i >= MAXGAMEFUNCLEN))
                 {
                     initprintf("%s:%d: warning: truncating function name to %d characters.\n",
-                        g_scriptFileName,g_lineNumber,MAXGAMEFUNCLEN);
+                        g_scriptFileName,g_lineNumber, MAXGAMEFUNCLEN-1);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
             }
             gamefunctions[j][i] = '\0';
             hash_add(&h_gamefuncs,gamefunctions[j],j,0);
-            {
-                char *str = Bstrtolower(Xstrdup(gamefunctions[j]));
-                hash_add(&h_gamefuncs,str,j,0);
-                Bfree(str);
-            }
 
             continue;
 
@@ -5657,9 +5311,11 @@ repeatcase:
                 initprintf("%s:%d: error: function number exceeds number of game functions.\n",
                     g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
+
+            hash_delete(&h_gamefuncs, gamefunctions[j]);
 
             gamefunctions[j][0] = '\0';
 
@@ -5672,14 +5328,14 @@ repeatcase:
             g_scriptPtr--;
             j = *g_scriptPtr;
 
-            C_SkipSpace();
+            scriptSkipSpaces();
 
             if (EDUKE32_PREDICT_FALSE((unsigned)j >= MAXSKILLS))
             {
                 initprintf("%s:%d: error: skill number exceeds maximum skill count %d.\n",
                            g_scriptFileName,g_lineNumber, MAXSKILLS);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -5689,12 +5345,12 @@ repeatcase:
             {
                 g_skillNames[j][i] = *textptr;
                 textptr++,i++;
-                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(g_skillNames[j])-1))
+                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(g_skillNames[j])))
                 {
                     initprintf("%s:%d: warning: truncating skill name to %d characters.\n",
                         g_scriptFileName,g_lineNumber,(int32_t)sizeof(g_skillNames[j])-1);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
             }
@@ -5721,12 +5377,12 @@ repeatcase:
                 {
                     gamename[i] = *textptr;
                     textptr++,i++;
-                    if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(gamename)-1))
+                    if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(gamename)))
                     {
                         initprintf("%s:%d: warning: truncating game name to %d characters.\n",
                             g_scriptFileName,g_lineNumber,(int32_t)sizeof(gamename)-1);
                         g_warningCnt++;
-                        C_NextLine();
+                        scriptSkipLine();
                         break;
                     }
                 }
@@ -5786,7 +5442,7 @@ repeatcase:
             {
                 initprintf("%s:%d: error: gametype number exceeds maximum gametype count.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
             g_gametypeCnt = j+1;
@@ -5797,12 +5453,12 @@ repeatcase:
             {
                 g_gametypeNames[j][i] = *textptr;
                 textptr++,i++;
-                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(g_gametypeNames[j])-1))
+                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(g_gametypeNames[j])))
                 {
                     initprintf("%s:%d: warning: truncating gametype name to %d characters.\n",
                         g_scriptFileName,g_lineNumber,(int32_t)sizeof(g_gametypeNames[j])-1);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
             }
@@ -5823,14 +5479,14 @@ repeatcase:
             {
                 initprintf("%s:%d: error: volume number exceeds maximum volume count.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
             if (EDUKE32_PREDICT_FALSE((unsigned)k > MAXLEVELS-1))
             {
                 initprintf("%s:%d: error: level number exceeds maximum number of levels per episode.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -5846,7 +5502,7 @@ repeatcase:
                 {
                     initprintf("%s:%d: error: level file name exceeds limit of %d characters.\n",g_scriptFileName,g_lineNumber,BMAX_PATH);
                     g_errorCnt++;
-                    C_SkipSpace();
+                    scriptSkipSpaces();
                     break;
                 }
             }
@@ -5868,7 +5524,7 @@ repeatcase:
                 (((*(textptr+3)-'0')*10+(*(textptr+4)-'0'))*REALGAMETICSPERSEC);
 
             textptr += 5;
-            C_SkipSpace();
+            scriptSkipSpaces();
 
             // cheap hack, 0.99 doesn't have the 3D Realms time
             if (*(textptr+2) == ':')
@@ -5878,7 +5534,7 @@ repeatcase:
                     (((*(textptr+3)-'0')*10+(*(textptr+4)-'0'))*REALGAMETICSPERSEC);
 
                 textptr += 5;
-                C_SkipSpace();
+                scriptSkipSpaces();
             }
             else if (g_scriptVersion == 10) g_scriptVersion = 9;
 
@@ -5891,9 +5547,9 @@ repeatcase:
                 if (EDUKE32_PREDICT_FALSE(i >= 32))
                 {
                     initprintf("%s:%d: warning: truncating level name to %d characters.\n",
-                        g_scriptFileName,g_lineNumber,32);
+                        g_scriptFileName,g_lineNumber,31);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
             }
@@ -5920,12 +5576,14 @@ repeatcase:
 
             C_GetNextValue(LABEL_DEFINE);
 
-            k = *(g_scriptPtr-1);
+            k = g_scriptPtr[-1];
 
             if (EDUKE32_PREDICT_FALSE((unsigned)k >= MAXQUOTES))
             {
                 initprintf("%s:%d: error: quote number exceeds limit of %d.\n",g_scriptFileName,g_lineNumber,MAXQUOTES);
                 g_errorCnt++;
+                scriptSkipLine();
+                continue;
             }
             else
             {
@@ -5937,7 +5595,7 @@ repeatcase:
 
             i = 0;
 
-            C_SkipSpace();
+            scriptSkipSpaces();
 
             if (tw == CON_REDEFINEQUOTE)
             {
@@ -5961,11 +5619,11 @@ repeatcase:
                 else
                     *(apXStrings[g_numXStrings]+i) = *textptr;
                 textptr++,i++;
-                if (EDUKE32_PREDICT_FALSE(i >= MAXQUOTELEN-1))
+                if (EDUKE32_PREDICT_FALSE(i >= MAXQUOTELEN))
                 {
                     initprintf("%s:%d: warning: truncating quote text to %d characters.\n",g_scriptFileName,g_lineNumber,MAXQUOTELEN-1);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
             }
@@ -5978,18 +5636,53 @@ repeatcase:
             else
             {
                 *(apXStrings[g_numXStrings]+i) = '\0';
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr++=g_numXStrings;
-                g_numXStrings++;
+                scriptWriteValue(g_numXStrings++);
             }
+            continue;
+
+        case CON_DEFINECHEATDESCRIPTION:
+            g_scriptPtr--;
+
+            C_GetNextValue(LABEL_DEFINE);
+
+            k = g_scriptPtr[-1];
+
+            if (EDUKE32_PREDICT_FALSE((unsigned)k >= NUMCHEATS))
+            {
+                initprintf("%s:%d: error: cheat number exceeds limit of %d.\n",g_scriptFileName,g_lineNumber,NUMCHEATS);
+                g_errorCnt++;
+                scriptSkipLine();
+                continue;
+            }
+
+            g_scriptPtr--;
+
+            i = 0;
+
+            scriptSkipSpaces();
+
+            while (*textptr != 0x0a && *textptr != 0x0d && *textptr != 0)
+            {
+                *(CheatDescriptions[k]+i) = *textptr;
+                textptr++,i++;
+                if (EDUKE32_PREDICT_FALSE(i >= MAXCHEATDESC))
+                {
+                    initprintf("%s:%d: warning: truncating cheat text to %d characters.\n",g_scriptFileName,g_lineNumber,MAXCHEATDESC-1);
+                    g_warningCnt++;
+                    scriptSkipLine();
+                    break;
+                }
+            }
+
+            *(CheatDescriptions[k]+i) = '\0';
             continue;
 
         case CON_CHEATKEYS:
             g_scriptPtr--;
             C_GetNextValue(LABEL_DEFINE);
-            CheatKeys[0] = *(g_scriptPtr-1);
+            CheatKeys[0] = g_scriptPtr[-1];
             C_GetNextValue(LABEL_DEFINE);
-            CheatKeys[1] = *(g_scriptPtr-1);
+            CheatKeys[1] = g_scriptPtr[-1];
             g_scriptPtr -= 2;
             continue;
 
@@ -6004,7 +5697,7 @@ repeatcase:
             {
                 initprintf("%s:%d: error: cheat undefinition attempts to undefine nonexistent cheat.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
 
@@ -6014,28 +5707,28 @@ repeatcase:
         case CON_DEFINECHEAT:
             g_scriptPtr--;
             C_GetNextValue(LABEL_DEFINE);
-            k = *(g_scriptPtr-1);
+            k = g_scriptPtr[-1];
 
             if (EDUKE32_PREDICT_FALSE((unsigned)k >= NUMCHEATS))
             {
                 initprintf("%s:%d: error: cheat redefinition attempts to redefine nonexistent cheat.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                C_NextLine();
+                scriptSkipLine();
                 continue;
             }
             g_scriptPtr--;
             i = 0;
-            C_SkipSpace();
+            scriptSkipSpaces();
             while (*textptr != 0x0a && *textptr != 0x0d && *textptr != 0 && *textptr != ' ')
             {
                 CheatStrings[k][i] = Btolower(*textptr);
                 textptr++,i++;
-                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(CheatStrings[k])-1))
+                if (EDUKE32_PREDICT_FALSE(i >= (signed)sizeof(CheatStrings[k])))
                 {
                     initprintf("%s:%d: warning: truncating cheat string to %d characters.\n",
                         g_scriptFileName,g_lineNumber,(signed)sizeof(CheatStrings[k])-1);
                     g_warningCnt++;
-                    C_NextLine();
+                    scriptSkipLine();
                     break;
                 }
             }
@@ -6050,12 +5743,19 @@ repeatcase:
             // This depends on tempbuf remaining in place after C_GetNextValue():
             j = hash_find(&h_labels,tempbuf);
 
-            k = *(g_scriptPtr-1);
-            if (EDUKE32_PREDICT_FALSE((unsigned)k >= MAXSOUNDS))
+            k = g_scriptPtr[-1];
+            if (EDUKE32_PREDICT_FALSE((unsigned)k >= MAXSOUNDS-1))
             {
-                initprintf("%s:%d: error: exceeded sound limit of %d.\n",g_scriptFileName,g_lineNumber,MAXSOUNDS);
+                initprintf("%s:%d: error: sound index exceeds limit of %d.\n",g_scriptFileName,g_lineNumber, MAXSOUNDS-1);
                 g_errorCnt++;
+                k = MAXSOUNDS-1;
             }
+            else if (EDUKE32_PREDICT_FALSE(g_sounds[k].filename != NULL))
+            {
+                initprintf("%s:%d: warning: sound %d already defined (%s)\n",g_scriptFileName,g_lineNumber,k,g_sounds[k].filename);
+                g_warningCnt++;
+            }
+
             g_scriptPtr--;
             i = 0;
             C_SkipComments();
@@ -6095,31 +5795,33 @@ repeatcase:
             check_filename_case(g_sounds[k].filename);
 
             C_GetNextValue(LABEL_DEFINE);
-            g_sounds[k].ps = *(g_scriptPtr-1);
+            g_sounds[k].ps = g_scriptPtr[-1];
             C_GetNextValue(LABEL_DEFINE);
-            g_sounds[k].pe = *(g_scriptPtr-1);
+            g_sounds[k].pe = g_scriptPtr[-1];
             C_GetNextValue(LABEL_DEFINE);
-            g_sounds[k].pr = *(g_scriptPtr-1);
+            g_sounds[k].pr = g_scriptPtr[-1];
 
             C_GetNextValue(LABEL_DEFINE);
-            g_sounds[k].m = *(g_scriptPtr-1) & ~SF_ONEINST_INTERNAL;
-            if (*(g_scriptPtr-1) & 1)
+            g_sounds[k].m = g_scriptPtr[-1] & ~SF_ONEINST_INTERNAL;
+            if (g_scriptPtr[-1] & SF_LOOP)
                 g_sounds[k].m |= SF_ONEINST_INTERNAL;
 
             C_GetNextValue(LABEL_DEFINE);
-            g_sounds[k].vo = *(g_scriptPtr-1);
+            g_sounds[k].vo = g_scriptPtr[-1];
             g_scriptPtr -= 5;
+
+            g_sounds[k].volume = fix16_one;
 
             if (k > g_highestSoundIdx)
                 g_highestSoundIdx = k;
 
-            if (k >= 0 && k < MAXSOUNDS && g_dynamicSoundMapping && j >= 0 && (labeltype[j] & LABEL_DEFINE))
-                G_ProcessDynamicSoundMapping(label+(j<<6),k);
+            if (g_dynamicSoundMapping && j >= 0 && (labeltype[j] & LABEL_DEFINE))
+                G_ProcessDynamicSoundMapping(label+(j<<6), k);
             continue;
 
         case CON_ENDEVENT:
 
-            if (EDUKE32_PREDICT_FALSE(!g_parsingEventPtr))
+            if (EDUKE32_PREDICT_FALSE(!g_scriptEventOffset))
             {
                 C_ReportError(-1);
                 initprintf("%s:%d: error: found `endevent' without open `onevent'.\n",g_scriptFileName,g_lineNumber);
@@ -6127,69 +5829,57 @@ repeatcase:
             }
             if (EDUKE32_PREDICT_FALSE(g_numBraces > 0))
             {
-                C_ReportError(ERROR_OPENBRACKET);
-                g_errorCnt++;
-            }
-            else if (EDUKE32_PREDICT_FALSE(g_numBraces < 0))
-            {
-                C_ReportError(ERROR_CLOSEBRACKET);
+                C_ReportError(ERROR_NOTTOPLEVEL);
                 g_errorCnt++;
             }
             // if event has already been declared then put a jump in instead
-            if (previous_event)
+            if (g_scriptEventChainOffset)
             {
                 g_scriptPtr--;
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = CON_JUMP | (g_lineNumber << 12);
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = MAXGAMEVARS;
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = previous_event;
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = CON_ENDEVENT | (g_lineNumber << 12);
+                scriptWriteValue(CON_JUMP | LINE_NUMBER);
+                scriptWriteValue(GV_FLAG_CONSTANT);
+                scriptWriteValue(g_scriptEventChainOffset);
+                scriptWriteValue(CON_ENDEVENT | LINE_NUMBER);
 
-                C_FillEventBreakStackWithJump((intptr_t *)g_parsingEventBreakPtr, previous_event);
+                C_FillEventBreakStackWithJump((intptr_t *)g_scriptEventBreakOffset, g_scriptEventChainOffset);
 
-                previous_event = 0;
+                g_scriptEventChainOffset = 0;
             }
             else
             {
                 // pad space for the next potential appendevent
-                apScriptGameEventEnd[g_currentEvent] = (g_scriptPtr-1)-apScript;
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = CON_ENDEVENT | (g_lineNumber << 12);
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = g_parsingEventBreakPtr;
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = CON_ENDEVENT | (g_lineNumber << 12);
+                apScriptGameEventEnd[g_currentEvent] = &g_scriptPtr[-1] - apScript;
+                scriptWriteValue(CON_ENDEVENT | LINE_NUMBER);
+                scriptWriteValue(g_scriptEventBreakOffset);
+                scriptWriteValue(CON_ENDEVENT | LINE_NUMBER);
             }
 
-            g_parsingEventBreakPtr = g_parsingEventPtr = g_parsingActorPtr = 0;
+            g_scriptEventBreakOffset = g_scriptEventOffset = g_scriptActorOffset = 0;
             g_currentEvent = -1;
             Bsprintf(g_szCurrentBlockName,"(none)");
             continue;
 
         case CON_ENDA:
-            if (EDUKE32_PREDICT_FALSE(!g_parsingActorPtr || g_parsingEventPtr))
+            if (EDUKE32_PREDICT_FALSE(!g_scriptActorOffset || g_scriptEventOffset))
             {
                 C_ReportError(-1);
                 initprintf("%s:%d: error: found `enda' without open `actor'.\n",g_scriptFileName,g_lineNumber);
                 g_errorCnt++;
-                g_parsingEventPtr = 0;
+                g_scriptEventOffset = 0;
             }
-            if (EDUKE32_PREDICT_FALSE(g_numBraces != 0))
+            if (EDUKE32_PREDICT_FALSE(g_numBraces > 0))
             {
-                C_ReportError(g_numBraces > 0 ? ERROR_OPENBRACKET : ERROR_CLOSEBRACKET);
+                C_ReportError(ERROR_NOTTOPLEVEL);
                 g_errorCnt++;
             }
-            g_parsingActorPtr = 0;
+            g_scriptActorOffset = 0;
             Bsprintf(g_szCurrentBlockName,"(none)");
             continue;
 
         case CON_RETURN:
             if (g_checkingSwitch)
             {
-                g_checkingCase = 0;
+                g_checkingCase = false;
                 return 1;
             }
             continue;
@@ -6206,29 +5896,26 @@ repeatcase:
                     continue;
                 }
 
-                g_checkingCase = 0;
+                g_checkingCase = false;
                 return 1;
             }
-            else if (g_parsingEventPtr)
+            else if (g_scriptEventOffset)
             {
                 g_scriptPtr--;
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = CON_JUMP | (g_lineNumber << 12);
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *(g_scriptPtr++) = MAXGAMEVARS;
-                BITPTR_CLEAR(g_scriptPtr-apScript);
-                *g_scriptPtr = g_parsingEventBreakPtr;
-                g_parsingEventBreakPtr = g_scriptPtr++ - apScript;
+                scriptWriteValue(CON_JUMP | LINE_NUMBER);
+                scriptWriteValue(GV_FLAG_CONSTANT);
+                scriptWriteValue(g_scriptEventBreakOffset);
+                g_scriptEventBreakOffset = &g_scriptPtr[-1] - apScript;
             }
             continue;
 
         case CON_SCRIPTSIZE:
             g_scriptPtr--;
             C_GetNextValue(LABEL_DEFINE);
-            j = *(g_scriptPtr-1);
+            j = g_scriptPtr[-1];
             g_scriptPtr--;
             C_SkipComments();
-            if (C_SetScriptSize(j)) return 1;
+            C_SetScriptSize(j);
             continue;
 
         case CON_SHADETO:
@@ -6237,32 +5924,30 @@ repeatcase:
             g_scriptPtr--;
             continue;
 
-        case CON_ADDLOG:
         case CON_FALL:
-        case CON_TIP:
-            //        case 21:
-        case CON_KILLIT:
-        case CON_RESETACTIONCOUNT:
-        case CON_PSTOMP:
-        case CON_RESETPLAYER:
-        case CON_RESETCOUNT:
-        case CON_WACKPLAYER:
-        case CON_OPERATE:
-        case CON_RESPAWNHITAG:
         case CON_GETLASTPAL:
-        case CON_PKICK:
-        case CON_MIKESND:
-        case CON_TOSSWEAPON:
-        case CON_SPGETLOTAG:
-        case CON_SPGETHITAG:
-        case CON_SECTGETLOTAG:
-        case CON_SECTGETHITAG:
-        case CON_GETTEXTUREFLOOR:
         case CON_GETTEXTURECEILING:
+        case CON_GETTEXTUREFLOOR:
         case CON_INSERTSPRITEQ:
-        case CON_STOPALLSOUNDS:
-        case CON_STOPALLMUSIC:
+        case CON_KILLIT:
+        case CON_MIKESND:
+        case CON_OPERATE:
+        case CON_PKICK:
+        case CON_PSTOMP:
+        case CON_RESETACTIONCOUNT:
+        case CON_RESETCOUNT:
+        case CON_RESETPLAYER:
+        case CON_RESPAWNHITAG:
+        case CON_SECTGETHITAG:
+        case CON_SECTGETLOTAG:
+        case CON_SPGETHITAG:
+        case CON_SPGETLOTAG:
         case CON_STARTSCREEN:
+        case CON_STOPALLMUSIC:
+        case CON_STOPALLSOUNDS:
+        case CON_TIP:
+        case CON_TOSSWEAPON:
+        case CON_WACKPLAYER:
             continue;
 
         case CON_NULLOP:
@@ -6272,7 +5957,7 @@ repeatcase:
                 g_warningCnt++;
                 initprintf("%s:%d: warning: `nullop' found without `else'\n",g_scriptFileName,g_lineNumber);
                 g_scriptPtr--;
-                g_ifElseAborted = 1;
+                g_skipBranch = true;
             }
             continue;
 
@@ -6352,11 +6037,10 @@ repeatcase:
 /* Anything added with C_AddDefinition() cannot be overwritten in the CONs */
 static void C_AddDefinition(const char *lLabel,int32_t lValue,int32_t lType)
 {
-    Bstrcpy(label+(g_labelCnt<<6),lLabel);
+    Bstrcpy(LAST_LABEL,lLabel);
     labeltype[g_labelCnt] = lType;
-    hash_add(&h_labels,label+(g_labelCnt<<6),g_labelCnt,0);
+    hash_add(&h_labels,LAST_LABEL,g_labelCnt,0);
     labelcode[g_labelCnt++] = lValue;
-    g_defaultLabelCnt++;
 }
 
 // KEEPINSYNC lunatic/con_lang.lua
@@ -6384,107 +6068,114 @@ static void C_AddDefaultDefinitions(void)
     }
 #endif
 
-    tokenmap_t predefined[] = {
-        { "STAT_DEFAULT", STAT_DEFAULT },
-        { "STAT_ACTOR", STAT_ACTOR },
-        { "STAT_ZOMBIEACTOR", STAT_ZOMBIEACTOR },
-        { "STAT_EFFECTOR", STAT_EFFECTOR },
-        { "STAT_PROJECTILE", STAT_PROJECTILE },
-        { "STAT_MISC", STAT_MISC },
-        { "STAT_STANDABLE", STAT_STANDABLE },
-        { "STAT_LOCATOR", STAT_LOCATOR },
-        { "STAT_ACTIVATOR", STAT_ACTIVATOR },
-        { "STAT_TRANSPORT", STAT_TRANSPORT },
-        { "STAT_PLAYER", STAT_PLAYER },
-        { "STAT_FX", STAT_FX },
-        { "STAT_FALLER", STAT_FALLER },
-        { "STAT_DUMMYPLAYER", STAT_DUMMYPLAYER },
-        { "STAT_LIGHT", STAT_LIGHT },
+    static tokenmap_t predefined[] =
+    {
+        { "CLIPMASK0",         CLIPMASK0 },
+        { "CLIPMASK1",         CLIPMASK1 },
 
-        { "SFLAG_SHADOW", SFLAG_SHADOW },
-        { "SFLAG_NVG", SFLAG_NVG },
-        { "SFLAG_NOSHADE", SFLAG_NOSHADE },
-        { "SFLAG_BADGUY", SFLAG_BADGUY },
-        { "SFLAG_NOPAL", SFLAG_NOPAL },
-        { "SFLAG_NOEVENTS", SFLAG_NOEVENTCODE },
-        { "SFLAG_NOLIGHT", SFLAG_NOLIGHT },
-        { "SFLAG_USEACTIVATOR", SFLAG_USEACTIVATOR },
-        { "SFLAG_NOCLIP", SFLAG_NOCLIP },
-        { "SFLAG_SMOOTHMOVE", SFLAG_SMOOTHMOVE },
-        { "SFLAG_NOTELEPORT", SFLAG_NOTELEPORT },
-        { "SFLAG_NODAMAGEPUSH", SFLAG_NODAMAGEPUSH },
-        { "SFLAG_NOWATERDIP", SFLAG_NOWATERDIP },
-        { "SFLAG_HURTSPAWNBLOOD", SFLAG_HURTSPAWNBLOOD },
-        { "SFLAG_GREENSLIMEFOOD", SFLAG_GREENSLIMEFOOD },
-        { "SFLAG_REALCLIPDIST", SFLAG_REALCLIPDIST },
-        { "SFLAG_WAKEUPBADGUYS", SFLAG_WAKEUPBADGUYS },
-        { "SFLAG_DAMAGEEVENT", SFLAG_DAMAGEEVENT },
-
-        { "STR_MAPNAME", STR_MAPNAME },
-        { "STR_MAPFILENAME", STR_MAPFILENAME },
-        { "STR_PLAYERNAME", STR_PLAYERNAME },
-        { "STR_VERSION", STR_VERSION },
-        { "STR_GAMETYPE", STR_GAMETYPE },
-        { "STR_VOLUMENAME", STR_VOLUMENAME },
-        { "STR_YOURTIME", STR_YOURTIME },
-        { "STR_PARTIME", STR_PARTIME },
-        { "STR_DESIGNERTIME", STR_DESIGNERTIME },
-        { "STR_BESTTIME", STR_BESTTIME },
-        { "STR_USERMAPFILENAME", STR_USERMAPFILENAME },
-
-        { "MAXSTATUS", MAXSTATUS },
-        { "MAXSPRITES", MAXSPRITES },
-        { "MAX_WEAPONS", MAX_WEAPONS },
-        { "MAXSPRITESONSCREEN", MAXSPRITESONSCREEN },
-        { "MAXTILES", MAXTILES },
-
-        { "PROJ_BOUNCES", PROJ_BOUNCES },
-        { "PROJ_BSOUND", PROJ_BSOUND },
-        { "PROJ_CLIPDIST", PROJ_CLIPDIST },
-        { "PROJ_CSTAT", PROJ_CSTAT },
-        { "PROJ_DECAL", PROJ_DECAL },
-        { "PROJ_DROP", PROJ_DROP },
-        { "PROJ_EXTRA", PROJ_EXTRA },
-        { "PROJ_EXTRA_RAND", PROJ_EXTRA_RAND },
-        { "PROJ_FLASH_COLOR", PROJ_FLASH_COLOR },
-        { "PROJ_HITRADIUS", PROJ_HITRADIUS },
-        { "PROJ_ISOUND", PROJ_ISOUND },
-        { "PROJ_OFFSET", PROJ_OFFSET },
-        { "PROJ_PAL", PROJ_PAL },
-        { "PROJ_RANGE", PROJ_RANGE },
-        { "PROJ_SHADE", PROJ_SHADE },
-        { "PROJ_SOUND", PROJ_SOUND },
-        { "PROJ_SPAWNS", PROJ_SPAWNS },
-        { "PROJ_SXREPEAT", PROJ_SXREPEAT },
-        { "PROJ_SYREPEAT", PROJ_SYREPEAT },
-        { "PROJ_TNUM", PROJ_TNUM },
-        { "PROJ_TOFFSET", PROJ_TOFFSET },
-        { "PROJ_TRAIL", PROJ_TRAIL },
-        { "PROJ_TXREPEAT", PROJ_TXREPEAT },
-        { "PROJ_TYREPEAT", PROJ_TYREPEAT },
-        { "PROJ_USERDATA", PROJ_USERDATA },
-        { "PROJ_VEL_MULT", PROJ_MOVECNT },
-        { "PROJ_VEL", PROJ_VEL },
-        { "PROJ_WORKSLIKE", PROJ_WORKSLIKE },
-        { "PROJ_XREPEAT", PROJ_XREPEAT },
-        { "PROJ_YREPEAT", PROJ_YREPEAT },
-
-        { "GAMEVAR_PERPLAYER", GAMEVAR_PERPLAYER },
-        { "GAMEVAR_PERACTOR", GAMEVAR_PERACTOR },
-        { "GAMEVAR_NODEFAULT", GAMEVAR_NODEFAULT },
-        { "GAMEVAR_NORESET", GAMEVAR_NORESET },
-        { "GAMEVAR_NOMULTI", GAMEVAR_NOMULTI },
-
-        { "GAMEARRAY_RESTORE", GAMEARRAY_RESTORE },
-        { "GAMEARRAY_INT16", GAMEARRAY_INT16 },
-        { "GAMEARRAY_INT8", GAMEARRAY_INT8 },
-        { "GAMEARRAY_UINT16", GAMEARRAY_UINT16 },
-        { "GAMEARRAY_UINT8", GAMEARRAY_UINT8 },
         { "GAMEARRAY_BOOLEAN", GAMEARRAY_BITMAP },
+        { "GAMEARRAY_INT16",   GAMEARRAY_INT16 },
+        { "GAMEARRAY_INT8",    GAMEARRAY_INT8 },
+        { "GAMEARRAY_RESTORE", GAMEARRAY_RESTORE },
+        { "GAMEARRAY_UINT16",  GAMEARRAY_UINT16 },
+        { "GAMEARRAY_UINT8",   GAMEARRAY_UINT8 },
+
+        { "GAMEVAR_NODEFAULT", GAMEVAR_NODEFAULT },
+        { "GAMEVAR_NOMULTI",   GAMEVAR_NOMULTI },
+        { "GAMEVAR_NORESET",   GAMEVAR_NORESET },
+        { "GAMEVAR_PERACTOR",  GAMEVAR_PERACTOR },
+        { "GAMEVAR_PERPLAYER", GAMEVAR_PERPLAYER },
+        { "GAMEVAR_SERIALIZE", GAMEVAR_SERIALIZE },
+
+        { "MAX_WEAPONS",        MAX_WEAPONS },
+        { "MAXSPRITES",         MAXSPRITES },
+        { "MAXSPRITESONSCREEN", MAXSPRITESONSCREEN },
+        { "MAXSTATUS",          MAXSTATUS },
+        { "MAXTILES",           MAXTILES },
+
+        { "PROJ_BOUNCES",     PROJ_BOUNCES },
+        { "PROJ_BSOUND",      PROJ_BSOUND },
+        { "PROJ_CLIPDIST",    PROJ_CLIPDIST },
+        { "PROJ_CSTAT",       PROJ_CSTAT },
+        { "PROJ_DECAL",       PROJ_DECAL },
+        { "PROJ_DROP",        PROJ_DROP },
+        { "PROJ_EXTRA",       PROJ_EXTRA },
+        { "PROJ_EXTRA_RAND",  PROJ_EXTRA_RAND },
+        { "PROJ_FLASH_COLOR", PROJ_FLASH_COLOR },
+        { "PROJ_HITRADIUS",   PROJ_HITRADIUS },
+        { "PROJ_ISOUND",      PROJ_ISOUND },
+        { "PROJ_OFFSET",      PROJ_OFFSET },
+        { "PROJ_PAL",         PROJ_PAL },
+        { "PROJ_RANGE",       PROJ_RANGE },
+        { "PROJ_SHADE",       PROJ_SHADE },
+        { "PROJ_SOUND",       PROJ_SOUND },
+        { "PROJ_SPAWNS",      PROJ_SPAWNS },
+        { "PROJ_SXREPEAT",    PROJ_SXREPEAT },
+        { "PROJ_SYREPEAT",    PROJ_SYREPEAT },
+        { "PROJ_TNUM",        PROJ_TNUM },
+        { "PROJ_TOFFSET",     PROJ_TOFFSET },
+        { "PROJ_TRAIL",       PROJ_TRAIL },
+        { "PROJ_TXREPEAT",    PROJ_TXREPEAT },
+        { "PROJ_TYREPEAT",    PROJ_TYREPEAT },
+        { "PROJ_USERDATA",    PROJ_USERDATA },
+        { "PROJ_VEL",         PROJ_VEL },
+        { "PROJ_VEL_MULT",    PROJ_MOVECNT },
+        { "PROJ_WORKSLIKE",   PROJ_WORKSLIKE },
+        { "PROJ_XREPEAT",     PROJ_XREPEAT },
+        { "PROJ_YREPEAT",     PROJ_YREPEAT },
+
+        { "SFLAG_BADGUY",          SFLAG_BADGUY },
+        { "SFLAG_DAMAGEEVENT",     SFLAG_DAMAGEEVENT },
+        { "SFLAG_GREENSLIMEFOOD",  SFLAG_GREENSLIMEFOOD },
+        { "SFLAG_HURTSPAWNBLOOD",  SFLAG_HURTSPAWNBLOOD },
+        { "SFLAG_NOCLIP",          SFLAG_NOCLIP },
+        { "SFLAG_NODAMAGEPUSH",    SFLAG_NODAMAGEPUSH },
+        { "SFLAG_NOEVENTS",        SFLAG_NOEVENTCODE },
+        { "SFLAG_NOLIGHT",         SFLAG_NOLIGHT },
+        { "SFLAG_NOPAL",           SFLAG_NOPAL },
+        { "SFLAG_NOSHADE",         SFLAG_NOSHADE },
+        { "SFLAG_NOTELEPORT",      SFLAG_NOTELEPORT },
+        { "SFLAG_NOWATERDIP",      SFLAG_NOWATERDIP },
+        { "SFLAG_NVG",             SFLAG_NVG },
+        { "SFLAG_REALCLIPDIST",    SFLAG_REALCLIPDIST },
+        { "SFLAG_SHADOW",          SFLAG_SHADOW },
+        { "SFLAG_SMOOTHMOVE",      SFLAG_SMOOTHMOVE },
+        { "SFLAG_USEACTIVATOR",    SFLAG_USEACTIVATOR },
+        { "SFLAG_WAKEUPBADGUYS",   SFLAG_WAKEUPBADGUYS },
+        { "SFLAG_NOWATERSECTOR",   SFLAG_NOWATERSECTOR },
+        { "SFLAG_QUEUEDFORDELETE", SFLAG_QUEUEDFORDELETE },
+
+        { "STAT_ACTIVATOR",   STAT_ACTIVATOR },
+        { "STAT_ACTOR",       STAT_ACTOR },
+        { "STAT_DEFAULT",     STAT_DEFAULT },
+        { "STAT_DUMMYPLAYER", STAT_DUMMYPLAYER },
+        { "STAT_EFFECTOR",    STAT_EFFECTOR },
+        { "STAT_FALLER",      STAT_FALLER },
+        { "STAT_FX",          STAT_FX },
+        { "STAT_LIGHT",       STAT_LIGHT },
+        { "STAT_LOCATOR",     STAT_LOCATOR },
+        { "STAT_MISC",        STAT_MISC },
+        { "STAT_PLAYER",      STAT_PLAYER },
+        { "STAT_PROJECTILE",  STAT_PROJECTILE },
+        { "STAT_STANDABLE",   STAT_STANDABLE },
+        { "STAT_TRANSPORT",   STAT_TRANSPORT },
+        { "STAT_ZOMBIEACTOR", STAT_ZOMBIEACTOR },
+
+        { "STR_BESTTIME",        STR_BESTTIME },
+        { "STR_DESIGNERTIME",    STR_DESIGNERTIME },
+        { "STR_GAMETYPE",        STR_GAMETYPE },
+        { "STR_MAPFILENAME",     STR_MAPFILENAME },
+        { "STR_MAPNAME",         STR_MAPNAME },
+        { "STR_PARTIME",         STR_PARTIME },
+        { "STR_PLAYERNAME",      STR_PLAYERNAME },
+        { "STR_USERMAPFILENAME", STR_USERMAPFILENAME },
+        { "STR_VERSION",         STR_VERSION },
+        { "STR_VOLUMENAME",      STR_VOLUMENAME },
+        { "STR_YOURTIME",        STR_YOURTIME },
     };
 
-    for (unsigned i = 0; i < ARRAY_SIZE(predefined); i++)
-        C_AddDefinition(predefined[i].token, predefined[i].val, LABEL_DEFINE);
+    for (auto & def : predefined)
+        C_AddDefinition(def.token, def.val, LABEL_DEFINE);
 
     C_AddDefinition("NO", 0, LABEL_DEFINE | LABEL_ACTION | LABEL_AI | LABEL_MOVE);
 }
@@ -6513,25 +6204,24 @@ void C_InitProjectiles(void)
 
     DefaultProjectile = Projectile;
 
-    for (bssize_t i=MAXTILES-1; i>=0; i--)
+    for (auto & tile : g_tile)
     {
-        if (g_tile[i].proj)
-            *g_tile[i].proj = DefaultProjectile;
+        if (tile.proj)
+            *tile.proj = DefaultProjectile;
 
-        if (g_tile[i].defproj)
-            *g_tile[i].defproj = DefaultProjectile;
+        if (tile.defproj)
+            *tile.defproj = DefaultProjectile;
     }
 }
 
 #if !defined LUNATIC
-extern int32_t g_numObituaries;
-extern int32_t g_numSelfObituaries;
-
 static char const * C_ScriptVersionString(int32_t version)
 {
+#ifdef EDUKE32_STANDALONE
+    UNREFERENCED_PARAMETER(version);
+#else
     switch (version)
     {
-#ifndef EDUKE32_STANDALONE
     case 9:
         return ", v0.99 compatibility mode";
     case 10:
@@ -6540,10 +6230,9 @@ static char const * C_ScriptVersionString(int32_t version)
         return ", v1.1 compatibility mode";
     case 13:
         return ", v1.3D compatibility mode";
-#endif
-    default:
-        return "";
     }
+#endif
+    return "";
 }
 
 void C_PrintStats(void)
@@ -6553,31 +6242,58 @@ void C_PrintStats(void)
             MAXSPRITES * sizeof(spritetype)/(1<<6)),
         g_gameVarCount, MAXGAMEVARS, g_gameArrayCount, MAXGAMEARRAYS);
 
-    int i, j;
+    int cnt = g_numXStrings;
 
-    for (i=MAXQUOTES-1, j=g_numXStrings; i>=0; i--)
-    {
-        if (apStrings[i])
-            j++;
-    }
+    for (auto &ptr : apStrings)
+        if (ptr)
+            cnt++;
 
-    if (j) initprintf("%d strings, ", j);
+    if (cnt) initprintf("%d strings, ", cnt);
+    cnt = 0;
 
-    for (i=MAXEVENTS-1, j=0; i>=0; i--)
-    {
-        if (apScriptEvents[i])
-            j++;
-    }
-    if (j) initprintf("%d events, ", j);
+    for (auto & apScriptEvent : apScriptEvents)
+        if (apScriptEvent)
+            cnt++;
 
-    for (i=MAXTILES-1, j=0; i>=0; i--)
-    {
-        if (g_tile[i].execPtr)
-            j++;
-    }
-    if (j) initprintf("%d actors", j);
+    if (cnt) initprintf("%d events, ", cnt);
+    cnt = 0;
 
+    for (auto & tile : g_tile)
+        if (tile.execPtr)
+            cnt++;
+
+    if (cnt) initprintf("%d actors", cnt);
     initprintf("\n");
+}
+
+// TODO: add some kind of mapping between the table and the struct holding the tokens
+void scriptInitTables()
+{
+    for (auto table : tables)
+        hash_init(table);
+
+    for (auto table : inttables)
+        inthash_init(table);
+
+    for (auto &keyword : vm_keywords)
+        hash_add(&h_keywords, keyword.token, keyword.val, 0);
+
+    for (auto &iter_token : iter_tokens)
+        hash_add(&h_iter, iter_token.token, iter_token.val, 0);
+
+    for (auto &varvar : varvartable)
+        inthash_add(&h_varvar, varvar.x, varvar.y, 0);
+
+#ifdef CON_DISCRETE_VAR_ACCESS
+    for (auto &globalvar : globalvartable)
+        inthash_add(&h_globalvar, globalvar.x, globalvar.y, 0);
+
+    for (auto &playervar : playervartable)
+        inthash_add(&h_playervar, playervar.x, playervar.y, 0);
+
+    for (auto &actorvar : actorvartable)
+        inthash_add(&h_actorvar, actorvar.x, actorvar.y, 0);
+#endif
 }
 
 void C_Compile(const char *fileName)
@@ -6585,27 +6301,28 @@ void C_Compile(const char *fileName)
     Bmemset(apScriptEvents, 0, sizeof(apScriptEvents));
     Bmemset(apScriptGameEventEnd, 0, sizeof(apScriptGameEventEnd));
 
-    for (int i=0; i<MAXTILES; i++)
-    {
-        Bmemset(&g_tile[i], 0, sizeof(tiledata_t));
-        g_actorMinMs[i] = 1e308;
-    }
+    for (auto & i : g_tile)
+        Bmemset(&i, 0, sizeof(tiledata_t));
 
-    C_InitHashes();
+    for (double & actorMinMs : g_actorMinMs)
+        actorMinMs = 1e308;
+
+    scriptInitTables();
+    VM_InitHashTables();
+
     Gv_Init();
     C_InitProjectiles();
 
-    int kFile = kopen4loadfrommod(fileName,g_loadFromGroupOnly);
+    buildvfs_kfd kFile = kopen4loadfrommod(fileName, g_loadFromGroupOnly);
 
-    if (kFile == -1) // JBF: was 0
+    if (kFile == buildvfs_kfd_invalid) // JBF: was 0
     {
         if (g_loadFromGroupOnly == 1 || numgroupfiles == 0)
         {
 #ifndef EDUKE32_STANDALONE
             char const *gf = G_GrpFile();
             Bsprintf(tempbuf,"Required game data was not found.  A valid copy of \"%s\" or other compatible data is needed to run EDuke32.\n\n"
-                     "You can find \"%s\" in the \"DN3DINST\" or \"ATOMINST\" directory on your Duke Nukem 3D installation disc.\n\n"
-                     "Please copy \"%s\" to your game directory and restart EDuke32!", gf, gf, gf);
+                     "You must copy \"%s\" to your game directory before continuing!", gf, gf);
             G_GameExit(tempbuf);
 #else
             G_GameExit(" ");
@@ -6632,29 +6349,29 @@ void C_Compile(const char *fileName)
     char * mptr = (char *)Xmalloc(kFileLen+1);
     mptr[kFileLen] = 0;
 
-    textptr = (char *) mptr;
-    kread(kFile,(char *)textptr,kFileLen);
+    textptr = (char *)mptr;
+    kread(kFile, (char *)textptr, kFileLen);
     kclose(kFile);
 
-    Bfree(apScript);
+    g_scriptcrc = Bcrc32(NULL, 0, 0L);
+    g_scriptcrc = Bcrc32(textptr, kFileLen, g_scriptcrc);
+
+    Xfree(apScript);
 
     apScript = (intptr_t *)Xcalloc(1, g_scriptSize * sizeof(intptr_t));
-    bitptr   = (char *)Xcalloc(1, (((g_scriptSize + 7) >> 3) + 1) * sizeof(uint8_t));
-    //    initprintf("script: %d, bitptr: %d\n",script,bitptr);
+    bitptr   = (uint8_t *)Xcalloc(1, (((g_scriptSize + 7) >> 3) + 1) * sizeof(uint8_t));
 
-    g_labelCnt        = 0;
-    g_defaultLabelCnt = 0;
-    g_scriptPtr       = apScript + 3;  // move permits constants 0 and 1; moveptr[1] would be script[2] (reachable?)
-    g_warningCnt      = 0;
-    g_errorCnt        = 0;
-    g_lineNumber      = 1;
-    g_totalLines      = 0;
-
-    C_AddDefaultDefinitions();
+    g_errorCnt   = 0;
+    g_labelCnt   = 0;
+    g_lineNumber = 1;
+    g_scriptPtr  = apScript + 3;  // move permits constants 0 and 1; moveptr[1] would be script[2] (reachable?)
+    g_totalLines = 0;
+    g_warningCnt = 0;
 
     Bstrcpy(g_scriptFileName, fileName);
 
-    C_ParseCommand(1);
+    C_AddDefaultDefinitions();
+    C_ParseCommand(true);
 
     for (char * m : g_scriptModules)
     {
@@ -6673,26 +6390,28 @@ void C_Compile(const char *fileName)
     DO_FREE_AND_NULL(mptr);
 
     if (g_warningCnt || g_errorCnt)
+    {
         initprintf("Found %d warning(s), %d error(s).\n", g_warningCnt, g_errorCnt);
 
-    if (g_errorCnt)
-    {
-        Bsprintf(buf, "Error compiling CON files.");
-        G_GameExit(buf);
+        if (g_errorCnt)
+        {
+            Bsprintf(buf, "Error compiling CON files.");
+            G_GameExit(buf);
+        }
     }
 
-    for (int i = 0; i < MAXEVENTS; ++i)
+    for (intptr_t i : apScriptGameEventEnd)
     {
-        if (!apScriptGameEventEnd[i])
+        if (!i)
             continue;
 
-        intptr_t *eventEnd = apScript + apScriptGameEventEnd[i];
-        // C_FillEventBreakStackWithEndEvent
-        intptr_t *breakPtr = (intptr_t*)*(eventEnd + 2);
+        auto const eventEnd = apScript + i;
+        auto breakPtr = (intptr_t*)*(eventEnd + 2);
+
         while (breakPtr)
         {
             breakPtr = apScript + (intptr_t)breakPtr;
-            *(breakPtr-2) = CON_ENDEVENT | (g_lineNumber << 12);
+            scriptWriteAtOffset(CON_ENDEVENT | LINE_NUMBER, breakPtr-2);
             breakPtr = (intptr_t*)*breakPtr;
         }
     }
@@ -6701,11 +6420,14 @@ void C_Compile(const char *fileName)
 
     C_SetScriptSize(g_scriptPtr-apScript+8);
 
-    initprintf("Script compiled in %dms, %ld bytes%s\n", timerGetTicks() - startcompiletime,
-                (unsigned long)(g_scriptPtr-apScript), C_ScriptVersionString(g_scriptVersion));
+    initprintf("Compiled %d bytes in %ums%s\n", (int)((intptr_t)g_scriptPtr - (intptr_t)apScript),
+               timerGetTicks() - startcompiletime, C_ScriptVersionString(g_scriptVersion));
 
-    for (unsigned i=0; i < ARRAY_SIZE(tables_free); i++)
-        hash_free(tables_free[i]);
+    for (auto i : tables_free)
+        hash_free(i);
+
+    for (auto i : inttables)
+        inthash_free(i);
 
     freehashnames();
     freesoundhashnames();
@@ -6716,19 +6438,19 @@ void C_Compile(const char *fileName)
     C_InitQuotes();
 }
 
-void C_ReportError(int32_t iError)
+void C_ReportError(int error)
 {
     if (Bstrcmp(g_szCurrentBlockName,g_szLastBlockName))
     {
-        if (g_parsingEventPtr || g_processingState || g_parsingActorPtr)
-            initprintf("%s: In %s `%s':\n",g_scriptFileName,g_parsingEventPtr?"event":g_parsingActorPtr?"actor":"state",g_szCurrentBlockName);
+        if (g_scriptEventOffset || g_processingState || g_scriptActorOffset)
+            initprintf("%s: In %s `%s':\n",g_scriptFileName,g_scriptEventOffset?"event":g_scriptActorOffset?"actor":"state",g_szCurrentBlockName);
         else initprintf("%s: At top level:\n",g_scriptFileName);
         Bstrcpy(g_szLastBlockName,g_szCurrentBlockName);
     }
-    switch (iError)
+    switch (error)
     {
-    case ERROR_CLOSEBRACKET:
-        initprintf("%s:%d: error: found more `}' than `{' before `%s'.\n",g_scriptFileName,g_lineNumber,tempbuf);
+    case ERROR_NOTTOPLEVEL:
+        initprintf("%s:%d: error: `%s' not at top level within script.\n",g_scriptFileName,g_lineNumber,tempbuf);
         break;
     case ERROR_EVENTONLY:
         initprintf("%s:%d: error: keyword `%s' only available during events.\n",g_scriptFileName,g_lineNumber,tempbuf);
@@ -6740,22 +6462,22 @@ void C_ReportError(int32_t iError)
         initprintf("%s:%d: error: expected a keyword but found `%s'.\n",g_scriptFileName,g_lineNumber,tempbuf);
         break;
     case ERROR_FOUNDWITHIN:
-        initprintf("%s:%d: error: found `%s' within %s.\n",g_scriptFileName,g_lineNumber,tempbuf,g_parsingEventPtr?"an event":g_parsingActorPtr?"an actor":"a state");
+        initprintf("%s:%d: error: found `%s' within %s.\n",g_scriptFileName,g_lineNumber,tempbuf,g_scriptEventOffset?"an event":g_scriptActorOffset?"an actor":"a state");
         break;
     case ERROR_ISAKEYWORD:
-        initprintf("%s:%d: error: symbol `%s' is a keyword.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: symbol `%s' is a keyword.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_NOENDSWITCH:
-        initprintf("%s:%d: error: did not find `endswitch' before `%s'.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: did not find `endswitch' before `%s'.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_NOTAGAMEDEF:
-        initprintf("%s:%d: error: symbol `%s' is not a definition.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: symbol `%s' is not a definition.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_NOTAGAMEVAR:
-        initprintf("%s:%d: error: symbol `%s' is not a variable.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: symbol `%s' is not a variable.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_NOTAGAMEARRAY:
-        initprintf("%s:%d: error: symbol `%s' is not an array.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: symbol `%s' is not an array.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_GAMEARRAYBNC:
         initprintf("%s:%d: error: malformed array index: expected ], found %c\n",g_scriptFileName,g_lineNumber,*textptr);
@@ -6766,35 +6488,32 @@ void C_ReportError(int32_t iError)
     case ERROR_INVALIDARRAYWRITE:
         initprintf("%s:%d: error: arrays can only be written to using `setarray'.\n",g_scriptFileName,g_lineNumber);
         break;
-    case ERROR_OPENBRACKET:
-        initprintf("%s:%d: error: found more `{' than `}' before `%s'.\n",g_scriptFileName,g_lineNumber,tempbuf);
-        break;
     case ERROR_PARAMUNDEFINED:
         initprintf("%s:%d: error: parameter `%s' is undefined.\n",g_scriptFileName,g_lineNumber,tempbuf);
         break;
     case ERROR_NOTAMEMBER:
-        initprintf("%s:%d: error: symbol `%s' is not a valid structure member.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: symbol `%s' is not a valid structure member.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_SYNTAXERROR:
         initprintf("%s:%d: error: syntax error.\n",g_scriptFileName,g_lineNumber);
         break;
     case ERROR_VARREADONLY:
-        initprintf("%s:%d: error: variable `%s' is read-only.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: variable `%s' is read-only.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_ARRAYREADONLY:
-        initprintf("%s:%d: error: array `%s' is read-only.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: array `%s' is read-only.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case ERROR_VARTYPEMISMATCH:
-        initprintf("%s:%d: error: variable `%s' is of the wrong type.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: error: variable `%s' is of the wrong type.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case WARNING_BADGAMEVAR:
-        initprintf("%s:%d: warning: variable `%s' should be either per-player OR per-actor, not both.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: warning: variable `%s' should be either per-player OR per-actor, not both.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case WARNING_DUPLICATECASE:
         initprintf("%s:%d: warning: duplicate case ignored.\n",g_scriptFileName,g_lineNumber);
         break;
     case WARNING_DUPLICATEDEFINITION:
-        initprintf("%s:%d: warning: duplicate definition `%s' ignored.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: warning: duplicate definition `%s' ignored.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case WARNING_EVENTSYNC:
         initprintf("%s:%d: warning: found `%s' within a local event.\n",g_scriptFileName,g_lineNumber,tempbuf);
@@ -6803,13 +6522,13 @@ void C_ReportError(int32_t iError)
         initprintf("%s:%d: warning: expected a label, found a constant.\n",g_scriptFileName,g_lineNumber);
         break;
     case WARNING_NAMEMATCHESVAR:
-        initprintf("%s:%d: warning: symbol `%s' already used for variable.\n",g_scriptFileName,g_lineNumber,label+(g_labelCnt<<6));
+        initprintf("%s:%d: warning: symbol `%s' already used for variable.\n",g_scriptFileName,g_lineNumber,LAST_LABEL);
         break;
     case WARNING_VARMASKSKEYWORD:
-        initprintf("%s:%d: warning: variable `%s' masks keyword.\n", g_scriptFileName, g_lineNumber, label+(g_labelCnt<<6));
+        initprintf("%s:%d: warning: variable `%s' masks keyword.\n", g_scriptFileName, g_lineNumber, LAST_LABEL);
         break;
     case WARNING_ARRAYMASKSKEYWORD:
-        initprintf("%s:%d: warning: array `%s' masks keyword.\n", g_scriptFileName, g_lineNumber, label+(g_labelCnt<<6));
+        initprintf("%s:%d: warning: array `%s' masks keyword.\n", g_scriptFileName, g_lineNumber, LAST_LABEL);
         break;
     }
 }

@@ -192,11 +192,12 @@ EVENT = {
     EVENT_DISPLAYSCUBA = 112,
     EVENT_DISPLAYTIP = 113,
     EVENT_DISPLAYACCESS = 114,
+    EVENT_RESETGOTPICS = 115,
 --    EVENT_ANIMATEALLSPRITES = previous+1,  -- internal
 -- KEEPINSYNC with MAXEVENTS below
 }
 
-MAXEVENTS = 115  -- KEEPINSYNC with above EVENT_* list
+MAXEVENTS = 116  -- KEEPINSYNC with above EVENT_* list
 
 -- NOTE: negated values are not exported to the ffi.C namespace or CON.
 -- See TWEAK_SFLAG below.
@@ -452,6 +453,9 @@ local ActorLabels = {
     mdxoff = SX".mdoff.x",  -- NAME
     mdyoff = SX".mdoff.y",
     mdzoff = SX".mdoff.z",
+    posxoff = SX".mdposoff.x",
+    posyoff = SX".mdposoff.y",
+    poszoff = SX".mdposoff.z",
     mdflags = SX".flags",
     xpanning = SX".xpanning",
     ypanning = SX".ypanning",

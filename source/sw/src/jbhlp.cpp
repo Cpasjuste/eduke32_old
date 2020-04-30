@@ -46,7 +46,7 @@ static char tempbuf[256];
 
 // Prototypes
 
-void Message(char *string, char color);
+void Message(const char *string, char color);
 long GetAToken(char *name, char *tc, long length);
 uint8_t* BKeyPressed(void);
 void ResetKeys(void);
@@ -54,7 +54,7 @@ void ResetKeys(void);
 
 // Functions
 
-void Msg(char *string, char color)
+void Msg(const char *string, char color)
 {
     clearmidstatbar16();
 
@@ -67,7 +67,7 @@ void Msg(char *string, char color)
 // # symbol precedes a comment in the help file
 long GetAToken(char *name, char *tc, long length)
 {
-    int i,x=0;
+    int x=0;
     char t,*tmp,tokenfound=0;
     char token[10];
     long count=0;
@@ -118,7 +118,7 @@ long GetAToken(char *name, char *tc, long length)
 
 void ContextHelp(short spritenum)
 {
-    int i,fp,x=0,y=4;
+    int fp,x=0,y=4;
     char t,*tc;
     char name[20];
     char *filebuffer;
@@ -139,7 +139,7 @@ void ContextHelp(short spritenum)
 
     // Read in whole file
     size = kfilelength(fp);
-    filebuffer = (char *)malloc(size);
+    filebuffer = (char *)Xmalloc(size);
     if (filebuffer == NULL)
     {
         Msg("Not enough memory to load swhelp.hlp",M_RED);
@@ -157,7 +157,7 @@ void ContextHelp(short spritenum)
     kclose(fp);
 
     // Conver filebuffer to all upper case
-    //strupr(filebuffer);
+    //Bstrupr(filebuffer);
 
     // Assign a token name to search for based on the sprite being pointed to.
 

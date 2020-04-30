@@ -1,7 +1,18 @@
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
+
 #pragma once
 
 #ifndef palette_h_
 #define palette_h_
+
+#include "cache1d.h"
+#include "vfs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,9 +36,9 @@ extern const char *(paletteGetBlendTable) (int32_t blend);
 #define paletteGetBlendTable(blend) (blendtable[blend])
 #endif
 
-extern uint32_t PaletteIndexFullbrights[8];
-#define IsPaletteIndexFullbright(col) (PaletteIndexFullbrights[(col)>>5] & (1u<<((col)&31)))
-#define SetPaletteIndexFullbright(col) (PaletteIndexFullbrights[(col)>>5] |= (1u<<((col)&31)))
+extern uint8_t PaletteIndexFullbrights[32];
+#define IsPaletteIndexFullbright(col) (PaletteIndexFullbrights[(col)>>3] & (1u<<((col)&7)))
+#define SetPaletteIndexFullbright(col) (PaletteIndexFullbrights[(col)>>3] |= (1u<<((col)&7)))
 
 typedef struct {
     char r, g, b, f;
@@ -53,6 +64,7 @@ void videoFadePalette(uint8_t r, uint8_t g, uint8_t b, uint8_t offset);
 extern int32_t realmaxshade;
 extern float frealmaxshade;
 
+extern int32_t globalpal;
 extern int32_t globalblend;
 extern uint32_t g_lastpalettesum;
 extern palette_t paletteGetColor(int32_t col);
@@ -62,7 +74,7 @@ extern void setup_blend(int32_t blend, int32_t doreverse);
 extern uint8_t basepalreset;
 extern int32_t curbrightness, gammabrightness;
 
-extern int32_t paletteLoadLookupTable(int32_t fp);
+extern int32_t paletteLoadLookupTable(buildvfs_kfd fp);
 extern void paletteSetupDefaultFog(void);
 extern void palettePostLoadLookups(void);
 extern void paletteFixTranslucencyMask(void);

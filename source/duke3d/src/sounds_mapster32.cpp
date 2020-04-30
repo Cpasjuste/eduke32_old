@@ -43,6 +43,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "common.h"
 #include "common_game.h"
 
+#include "vfs.h"
+
 #define LOUDESTVOLUME 150
 #define MUSICANDSFX 5
 
@@ -54,9 +56,7 @@ int32_t MixRate = 44100;
 
 int32_t g_numEnvSoundsPlaying;
 
-void MUSIC_Update(void) {}  // needed when linking
-
-void S_Callback(uint32_t);
+void S_Callback(intptr_t);
 
 /*
 ===================
@@ -73,24 +73,26 @@ int32_t S_SoundStartup(void)
     void *initdata = 0;
 
     // TODO: read config
-    int32_t FXVolume=220, /*NumVoices=32,*/ NumChannels=2, ReverseStereo=0;
+    int32_t FXVolume=220, /*NumVoices=32,*/ NumChannels=2;
 
-#ifdef MIXERTYPEWIN
+#ifdef _WIN32
     initdata = (void *) win_gethwnd(); // used for DirectSound
 #endif
 
+    initprintf("Initializing sound... ");
+
     status = FX_Init(NumVoices, NumChannels, MixRate, initdata);
-    if (status == FX_Ok)
+    if (status != FX_Ok)
     {
-        FX_SetVolume(FXVolume);
-        FX_SetReverseStereo(ReverseStereo);
-        FX_SetCallBack(S_Callback);
-    }
-    else
-    {
-        initprintf("Sound startup error: %s\n", FX_ErrorString(FX_Error));
+        initprintf("Sound startup error: %s\n", FX_ErrorString(status));
         return -2;
     }
+
+    FX_SetVolume(FXVolume);
+#ifdef ASS_REVERSESTEREO
+    FX_SetReverseStereo(0);
+#endif
+    FX_SetCallBack(S_Callback);
 
     SM32_havesound = 1;
 
@@ -107,14 +109,12 @@ int32_t S_SoundStartup(void)
 
 void S_SoundShutdown(void)
 {
-    int32_t status;
-
     if (!SM32_havesound)
         return;
 
-    status = FX_Shutdown();
+    int status = FX_Shutdown();
     if (status != FX_Ok)
-        initprintf("Sound shutdown error: %s\n", FX_ErrorString(FX_Error));
+        initprintf("Sound shutdown error: %s\n", FX_ErrorString(status));
 }
 
 int32_t S_LoadSound(uint32_t num)
@@ -128,8 +128,8 @@ int32_t S_LoadSound(uint32_t num)
         return 0;
     }
 
-    int32_t fp = S_OpenAudio(g_sounds[num].filename, 0, 0);
-    if (fp == -1)
+    buildvfs_kfd fp = S_OpenAudio(g_sounds[num].filename, 0, 0);
+    if (fp == buildvfs_kfd_invalid)
     {
         OSD_Printf(OSDTEXT_RED "Sound %s(#%d) not found!\n",g_sounds[num].filename,num);
         return 0;
@@ -138,9 +138,9 @@ int32_t S_LoadSound(uint32_t num)
     int32_t l = kfilelength(fp);
     g_sounds[num].soundsiz = l;
 
-    g_sounds[num].lock = 200;
+    g_sounds[num].lock = CACHE1D_LOCKED;
 
-    cacheAllocateBlock((intptr_t *)&g_sounds[num].ptr,l,(char *)&g_sounds[num].lock);
+    g_cache.allocateBlock((intptr_t *)&g_sounds[num].ptr,l,(char *)&g_sounds[num].lock);
     kread(fp, g_sounds[num].ptr , l);
     kclose(fp);
     return 1;
@@ -239,8 +239,8 @@ int32_t S_PlaySound3D(int32_t num, int32_t i, const vec3_t *pos)
     }
     else
     {
-        if (g_sounds[num].lock < 200)
-            g_sounds[num].lock = 200;
+        if (g_sounds[num].lock < CACHE1D_LOCKED)
+            g_sounds[num].lock = CACHE1D_LOCKED;
         else g_sounds[num].lock++;
     }
 
@@ -255,12 +255,12 @@ int32_t S_PlaySound3D(int32_t num, int32_t i, const vec3_t *pos)
             return -1;
 
         voice = FX_Play(g_sounds[num].ptr, g_sounds[num].soundsiz, 0, -1,
-                                  pitch, sndist>>6, sndist>>6, 0, g_sounds[num].pr, num);
+                                  pitch, sndist>>6, sndist>>6, 0, g_sounds[num].pr, fix16_one, num);
     }
     else
     {
         voice = FX_Play3D(g_sounds[num].ptr, g_sounds[num].soundsiz, FX_ONESHOT,
-                              pitch, sndang>>4, sndist>>6, g_sounds[num].pr, num);
+                              pitch, sndang>>4, sndist>>6, g_sounds[num].pr, fix16_one, num);
     }
 
     if (voice >= FX_Ok)
@@ -306,20 +306,20 @@ void S_PlaySound(int32_t num)
     }
     else
     {
-        if (g_sounds[num].lock < 200)
-            g_sounds[num].lock = 200;
+        if (g_sounds[num].lock < CACHE1D_LOCKED)
+            g_sounds[num].lock = CACHE1D_LOCKED;
         else g_sounds[num].lock++;
     }
 
     if (g_sounds[num].m & SF_LOOP)
     {
         voice = FX_Play(g_sounds[num].ptr, g_sounds[num].soundsiz, 0, -1,
-                                  pitch,LOUDESTVOLUME,LOUDESTVOLUME,LOUDESTVOLUME,g_sounds[num].soundsiz,num);
+                                  pitch,LOUDESTVOLUME,LOUDESTVOLUME,LOUDESTVOLUME,g_sounds[num].soundsiz, fix16_one, num);
     }
     else
     {
         voice = FX_Play3D(g_sounds[num].ptr, g_sounds[num].soundsiz, FX_ONESHOT,
-                              pitch,0,255-LOUDESTVOLUME,g_sounds[num].pr, num);
+                              pitch,0,255-LOUDESTVOLUME,g_sounds[num].pr, fix16_one, num);
     }
 
     if (voice >= FX_Ok)
@@ -341,7 +341,7 @@ int32_t A_PlaySound(uint32_t num, int32_t i)
         return 0;
     }
 
-    return S_PlaySound3D(num,i, (vec3_t *)&sprite[i]);
+    return S_PlaySound3D(num,i, &sprite[i].pos);
 }
 
 void S_StopSound(int32_t num)
@@ -440,7 +440,7 @@ void S_Update(void)
         }
 }
 
-void S_Callback(uint32_t num)
+void S_Callback(intptr_t num)
 {
     int32_t i,j,k;
 
@@ -457,9 +457,9 @@ void S_Callback(uint32_t num)
 
                 if (sprite[i].picnum == MUSICANDSFX && sector[sprite[i].sectnum].lotag < 3 && sprite[i].lotag < 999)
                 {
-                    extern uint8_t g_ambiencePlaying[MAXSPRITES>>3];
+                    extern uint8_t g_ambiencePlaying[(MAXSPRITES+7)>>3];
 
-                    g_ambiencePlaying[i>>3] &= ~(1<<(i&7));
+                    g_ambiencePlaying[i>>3] &= ~pow2char[i&7];
 
                     if (j < k-1)
                     {
@@ -482,8 +482,8 @@ void S_ClearSoundLocks(void)
     int32_t i;
 
     for (i=0; i<MAXSOUNDS; i++)
-        if (g_sounds[i].lock >= 200)
-            g_sounds[i].lock = 199;
+        if (g_sounds[i].lock >= CACHE1D_LOCKED)
+            g_sounds[i].lock = CACHE1D_UNLOCKED;
 }
 
 int32_t A_CheckSoundPlaying(int32_t i, int32_t num)
@@ -497,7 +497,7 @@ int32_t S_CheckSoundPlaying(int32_t i, int32_t num)
 {
     if (i == -1)
     {
-        if (g_sounds[num].lock >= 200)
+        if (g_sounds[num].lock >= CACHE1D_LOCKED)
             return 1;
         return 0;
     }

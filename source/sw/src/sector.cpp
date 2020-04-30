@@ -37,7 +37,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "weapon.h"
 #include "jtags.h"
 
-#include "net.h"
+#include "network.h"
 
 #include "break.h"
 #include "track.h"
@@ -100,8 +100,12 @@ void SetSectorWallBits(short sectnum, int bit_mask, SWBOOL set_sectwall, SWBOOL 
         if (set_sectwall)
             SET(wall[wall_num].extra, bit_mask);
 
-        if (set_nextwall && wall[wall_num].nextwall >= 0)
-            SET(wall[wall[wall_num].nextwall].extra, bit_mask);
+        if (set_nextwall)
+        {
+            uint16_t const nextwall = wall[wall_num].nextwall;
+            if (nextwall < MAXWALLS)
+                SET(wall[nextwall].extra, bit_mask);
+        }
 
         wall_num = wall[wall_num].point2;
     }
@@ -136,6 +140,28 @@ void WallSetupDontMove(void)
     }
 }
 
+static void WallSetupLoop(WALLp wp, int16_t lotag, int16_t extra)
+{
+    // set first wall
+    {
+        SET(wp->extra, extra);
+        uint16_t const nextwall = wp->nextwall;
+        if (nextwall < MAXWALLS)
+            SET(wall[nextwall].extra, extra);
+    }
+
+    // Travel all the way around loop setting wall bits
+    for (uint16_t wall_num = wp->point2;
+         wall[wall_num].lotag != lotag;
+         wall_num = wall[wall_num].point2)
+    {
+        SET(wall[wall_num].extra, extra);
+        uint16_t const nextwall = wall[wall_num].nextwall;
+        if (nextwall < MAXWALLS)
+            SET(wall[nextwall].extra, extra);
+    }
+}
+
 void
 WallSetup(void)
 {
@@ -162,10 +188,10 @@ WallSetup(void)
             wall[i].picnum = FAF_MIRROR_PIC+1;
 
         // get map min and max coordinates
-        x_min_bound = min(wp->x, x_min_bound);
-        y_min_bound = min(wp->y, y_min_bound);
-        x_max_bound = max(wp->x, x_max_bound);
-        y_max_bound = max(wp->y, y_max_bound);
+        x_min_bound = min(TrackerCast(wp->x), x_min_bound);
+        y_min_bound = min(TrackerCast(wp->y), y_min_bound);
+        x_max_bound = max(TrackerCast(wp->x), x_max_bound);
+        y_max_bound = max(TrackerCast(wp->y), y_max_bound);
 
         // this overwrites the lotag so it needs to be called LAST - its down there
         // SetupWallForBreak(wp);
@@ -174,104 +200,33 @@ WallSetup(void)
         {
         case TAG_WALL_LOOP_DONT_SPIN:
         {
-            short wall_num, start_wall;
-
-            // set first wall
-            SET(wp->extra, WALLFX_LOOP_DONT_SPIN);
-            SET(wall[wp->nextwall].extra, WALLFX_LOOP_DONT_SPIN);
-
-            // move the the next wall
-            start_wall = wp->point2;
-
-            // Travel all the way around loop setting wall bits
-            for (wall_num = start_wall;
-                 wall[wall_num].lotag != TAG_WALL_LOOP_DONT_SPIN;
-                 wall_num = wall[wall_num].point2)
-            {
-                SET(wall[wall_num].extra, WALLFX_LOOP_DONT_SPIN);
-                SET(wall[wall[wall_num].nextwall].extra, WALLFX_LOOP_DONT_SPIN);
-            }
-
+            WallSetupLoop(wp, TAG_WALL_LOOP_DONT_SPIN, WALLFX_LOOP_DONT_SPIN);
             break;
         }
 
         case TAG_WALL_LOOP_DONT_SCALE:
         {
-            short wall_num, start_wall;
-
-            // set first wall
-            SET(wp->extra, WALLFX_DONT_SCALE);
-            SET(wall[wp->nextwall].extra, WALLFX_DONT_SCALE);
-
-            // move the the next wall
-            start_wall = wp->point2;
-
-            // Travel all the way around loop setting wall bits
-            for (wall_num = start_wall;
-                 wall[wall_num].lotag != TAG_WALL_LOOP_DONT_SCALE;
-                 wall_num = wall[wall_num].point2)
-            {
-                SET(wall[wall_num].extra, WALLFX_DONT_SCALE);
-                if (wall[wall_num].nextwall >= 0)
-                    SET(wall[wall[wall_num].nextwall].extra, WALLFX_DONT_SCALE);
-            }
-
+            WallSetupLoop(wp, TAG_WALL_LOOP_DONT_SCALE, WALLFX_DONT_SCALE);
             wp->lotag = 0;
-
             break;
         }
 
         case TAG_WALL_LOOP_OUTER_SECONDARY:
         {
-            short wall_num, start_wall;
+            // make sure it's a red wall
+            ASSERT((uint16_t)wp->nextwall < MAXWALLS);
 
-            // make sure its a red wall
-            ASSERT(wp->nextwall >= 0);
-
-            // set first wall
-            SET(wp->extra, WALLFX_LOOP_OUTER|WALLFX_LOOP_OUTER_SECONDARY);
-            SET(wall[wp->nextwall].extra, WALLFX_LOOP_OUTER|WALLFX_LOOP_OUTER_SECONDARY);
-
-            // move the the next wall
-            start_wall = wp->point2;
-
-            // Travel all the way around loop setting wall bits
-            for (wall_num = start_wall;
-                 wall[wall_num].lotag != TAG_WALL_LOOP_OUTER_SECONDARY;
-                 wall_num = wall[wall_num].point2)
-            {
-                SET(wall[wall_num].extra, WALLFX_LOOP_OUTER|WALLFX_LOOP_OUTER_SECONDARY);
-                SET(wall[wall[wall_num].nextwall].extra, WALLFX_LOOP_OUTER|WALLFX_LOOP_OUTER_SECONDARY);
-            }
-
+            WallSetupLoop(wp, TAG_WALL_LOOP_OUTER_SECONDARY, WALLFX_LOOP_OUTER|WALLFX_LOOP_OUTER_SECONDARY);
             break;
         }
 
         case TAG_WALL_LOOP_OUTER:
         {
-            short wall_num, start_wall;
+            // make sure it's a red wall
+            ASSERT((uint16_t)wp->nextwall < MAXWALLS);
 
-            // make sure its a red wall
-            ASSERT(wp->nextwall >= 0);
-
-            // set first wall
-            SET(wp->extra, WALLFX_LOOP_OUTER);
-            SET(wall[wp->nextwall].extra, WALLFX_LOOP_OUTER);
-
-            // move the the next wall
-            start_wall = wp->point2;
-
-            // Travel all the way around loop setting wall bits
-            for (wall_num = start_wall;
-                 wall[wall_num].lotag != TAG_WALL_LOOP_OUTER;
-                 wall_num = wall[wall_num].point2)
-            {
-                SET(wall[wall_num].extra, WALLFX_LOOP_OUTER);
-                SET(wall[wall[wall_num].nextwall].extra, WALLFX_LOOP_OUTER);
-            }
-
+            WallSetupLoop(wp, TAG_WALL_LOOP_OUTER, WALLFX_LOOP_OUTER);
             wp->lotag = 0;
-
             break;
         }
 
@@ -284,77 +239,26 @@ WallSetup(void)
 
         case TAG_WALL_LOOP_SPIN_2X:
         {
-            short wall_num, start_wall;
-
-            // set first wall
-            SET(wp->extra, WALLFX_LOOP_SPIN_2X);
-            SET(wall[wp->nextwall].extra, WALLFX_LOOP_SPIN_2X);
-
-            // move the the next wall
-            start_wall = wp->point2;
-
-            // Travel all the way around loop setting wall bits
-            for (wall_num = start_wall;
-                 wall[wall_num].lotag != TAG_WALL_LOOP_SPIN_2X;
-                 wall_num = wall[wall_num].point2)
-            {
-                SET(wall[wall_num].extra, WALLFX_LOOP_SPIN_2X);
-                SET(wall[wall[wall_num].nextwall].extra, WALLFX_LOOP_SPIN_2X);
-            }
-
+            WallSetupLoop(wp, TAG_WALL_LOOP_SPIN_2X, WALLFX_LOOP_SPIN_2X);
             break;
         }
 
         case TAG_WALL_LOOP_SPIN_4X:
         {
-            short wall_num, start_wall;
-
-            // set first wall
-            SET(wp->extra, WALLFX_LOOP_SPIN_4X);
-            SET(wall[wp->nextwall].extra, WALLFX_LOOP_SPIN_4X);
-
-            // move the the next wall
-            start_wall = wp->point2;
-
-            // Travel all the way around loop setting wall bits
-            for (wall_num = start_wall;
-                 wall[wall_num].lotag != TAG_WALL_LOOP_SPIN_4X;
-                 wall_num = wall[wall_num].point2)
-            {
-                SET(wall[wall_num].extra, WALLFX_LOOP_SPIN_4X);
-                SET(wall[wall[wall_num].nextwall].extra, WALLFX_LOOP_SPIN_4X);
-            }
-
+            WallSetupLoop(wp, TAG_WALL_LOOP_SPIN_4X, WALLFX_LOOP_SPIN_4X);
             break;
         }
 
         case TAG_WALL_LOOP_REVERSE_SPIN:
         {
-            short wall_num, start_wall;
-
-            // set first wall
-            SET(wp->extra, WALLFX_LOOP_REVERSE_SPIN);
-            SET(wall[wp->nextwall].extra, WALLFX_LOOP_REVERSE_SPIN);
-
-            // move the the next wall
-            start_wall = wp->point2;
-
-            // Travel all the way around loop setting wall bits
-            for (wall_num = start_wall;
-                 wall[wall_num].lotag != TAG_WALL_LOOP_REVERSE_SPIN;
-                 wall_num = wall[wall_num].point2)
-            {
-                SET(wall[wall_num].extra, WALLFX_LOOP_REVERSE_SPIN);
-                SET(wall[wall[wall_num].nextwall].extra, WALLFX_LOOP_REVERSE_SPIN);
-            }
-
+            WallSetupLoop(wp, TAG_WALL_LOOP_REVERSE_SPIN, WALLFX_LOOP_REVERSE_SPIN);
             break;
         }
 
         case TAG_WALL_SINE_Y_BEGIN:
         case TAG_WALL_SINE_X_BEGIN:
         {
-            short wall_num, cnt, last_wall, num_points, type, tag_end;
+            short wall_num, cnt, num_points, type, tag_end;
             SINE_WALLp sw;
             short range = 250, speed = 3, peak = 0;
 
@@ -472,10 +376,10 @@ SectorLiquidSet(short i)
 void
 SectorSetup(void)
 {
-    short i = 0, k, tag;
-    short NextSineWave = 0, rotcnt = 0, swingcnt = 0;
+    short i = 0, tag;
+    short NextSineWave = 0;
 
-    short startwall, endwall, j, ndx, door_sector;
+    short ndx;
 
     WallSetup();
 
@@ -489,7 +393,7 @@ SectorSetup(void)
         SectorObject[ndx].Animator = NULL;
         SectorObject[ndx].controller = NULL;
         SectorObject[ndx].sp_child = NULL;
-        SectorObject[ndx].xmid = MAXLONG;
+        SectorObject[ndx].xmid = INT32_MAX;
     }
 
     memset(SineWaveFloor, -1, sizeof(SineWaveFloor));
@@ -575,7 +479,7 @@ SectorSetup(void)
         {
             SINE_WAVE_FLOOR *swf;
             short near_sect = i, base_sect = i;
-            short swf_ndx = 0;
+            uint16_t swf_ndx = 0;
             short cnt = 0, sector_cnt;
             int range;
             int range_diff = 0;
@@ -731,13 +635,13 @@ SectorMidPoint(short sectnum, int *xmid, int *ymid, int *zmid)
 
 
 void
-DoSpringBoard(PLAYERp pp, short sectnum)
+DoSpringBoard(PLAYERp pp/*, short sectnum*/)
 {
-    int sb;
-    int i;
     void DoPlayerBeginForceJump(PLAYERp);
 
 #if 0
+    int sb;
+    int i;
     i = AnimGetGoal(&sector[sectnum].floorz);
 
     // if in motion return
@@ -936,8 +840,8 @@ SectorDistanceByMid(short sect1, int sect2)
 short
 DoSpawnActorTrigger(short match)
 {
-    int i, nexti, pnum;
-    short spawn_count = 0, hidden;
+    int i, nexti;
+    short spawn_count = 0;
     SPRITEp sp;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_SPAWN_TRIGGER], i, nexti)
@@ -967,7 +871,6 @@ OperateSector(short sectnum, short player_is_operating)
     if (!player_is_operating)
     {
         SPRITEp fsp;
-        short match;
         short i,nexti;
 
 
@@ -1126,8 +1029,6 @@ SectorExp(short SpriteNum, short sectnum, short orig_ang, int zh)
 {
     SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
-    SECT_USERp sectu = SectUser[sectnum];
-    SECTORp sectp = &sector[sectnum];
     short explosion;
     SPRITEp exp;
     USERp eu;
@@ -1169,13 +1070,7 @@ DoExplodeSector(short match)
 {
     short orig_ang;
     int zh;
-    USERp u;
     short cf,nextcf;
-    short ed,nexted;
-
-    int ss, nextss;
-    SECTORp dsectp, ssectp;
-    SPRITEp src_sp, dest_sp;
 
     SPRITEp esp;
     SECTORp sectp;
@@ -1190,7 +1085,7 @@ DoExplodeSector(short match)
             continue;
 
         if (!User[cf])
-            u = SpawnUser(cf, 0, NULL);
+            /*u = */SpawnUser(cf, 0, NULL);
 
         sectp = &sector[esp->sectnum];
 
@@ -1222,7 +1117,6 @@ DoExplodeSector(short match)
 int DoSpawnSpot(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = u->SpriteP;
 
     if ((u->WaitTics -= synctics) < 0)
     {
@@ -1443,7 +1337,7 @@ DoSectorObjectKillMatch(short match)
 
     for (sop = SectorObject; sop < &SectorObject[MAX_SECTOR_OBJECTS]; sop++)
     {
-        if (sop->xmid == MAXLONG)
+        if (sop->xmid == INT32_MAX)
             continue;
 
         if (sop->match_event == match)
@@ -1504,14 +1398,13 @@ WeaponExplodeSectorInRange(short weapon)
     SPRITEp sp;
     int dist;
     int radius;
-    short match;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_SPRITE_HIT_MATCH], i, nexti)
     {
         sp = &sprite[i];
 
         // test to see if explosion is close to crack sprite
-        dist = FindDistance3D(wp->x - sp->x, wp->y - sp->y, (wp->z - sp->z)>>4);
+        dist = FindDistance3D(wp->x - sp->x, wp->y - sp->y, wp->z - sp->z);
 
         if (sp->clipdist == 0)
             continue;
@@ -1524,10 +1417,11 @@ WeaponExplodeSectorInRange(short weapon)
         if (!FAFcansee(wp->x,wp->y,wp->z,wp->sectnum,sp->x,sp->y,sp->z,sp->sectnum))
             continue;
 
+#if 0
+//        short match;
         match = sp->hitag;
         // this and every other crack sprite of this type is now dead
         // don't use them
-#if 0
         KillMatchingCrackSprites(match);
         DoExplodeSector(match);
         DoMatchEverything(NULL, match, -1);
@@ -1542,7 +1436,7 @@ WeaponExplodeSectorInRange(short weapon)
 
 
 void
-ShootableSwitch(short SpriteNum, short Weapon)
+ShootableSwitch(short SpriteNum)
 {
     SPRITEp sp = &sprite[SpriteNum];
 
@@ -1705,7 +1599,7 @@ void DoMatchEverything(PLAYERp pp, short match, short state)
         DoVatorMatch(pp, match);
 
     if (!TestSpikeMatchActive(match))
-        DoSpikeMatch(pp, match);
+        DoSpikeMatch(match);
 
     if (!TestRotatorMatchActive(match))
         DoRotatorMatch(pp, match, FALSE);
@@ -1989,7 +1883,7 @@ OperateSprite(short SpriteNum, short player_is_operating)
             DoVatorMatch(pp, sp->hitag);
 
         if (!TestSpikeMatchActive(sp->hitag))
-            DoSpikeMatch(pp, sp->hitag);
+            DoSpikeMatch(sp->hitag);
 
         if (!TestRotatorMatchActive(sp->hitag))
             DoRotatorMatch(pp, sp->hitag, FALSE);
@@ -2003,7 +1897,7 @@ OperateSprite(short SpriteNum, short player_is_operating)
     case TAG_LEVEL_EXIT_SWITCH:
     {
         extern short Level;
-        extern SWBOOL QuitFlag, ExitLevel, FinishedLevel;
+        extern SWBOOL ExitLevel, FinishedLevel;
 
         AnimateSwitch(sp, -1);
 
@@ -2177,10 +2071,13 @@ int DoTrapMatch(short match)
 void
 OperateTripTrigger(PLAYERp pp)
 {
-    SECTORp sectp = &sector[pp->cursectnum];
-
     if (Prediction)
         return;
+
+    if (pp->cursectnum < 0)
+        return;
+
+    SECTORp sectp = &sector[pp->cursectnum];
 
 #if 0
     // new method
@@ -2212,7 +2109,7 @@ OperateTripTrigger(PLAYERp pp)
     case TAG_LEVEL_EXIT_SWITCH:
     {
         extern short Level;
-        extern SWBOOL QuitFlag, ExitLevel, FinishedLevel;
+        extern SWBOOL ExitLevel, FinishedLevel;
 
         if (sectp->hitag)
             Level = sectp->hitag;
@@ -2250,7 +2147,7 @@ OperateTripTrigger(PLAYERp pp)
         if (!TestVatorMatchActive(sectp->hitag))
             DoVatorMatch(pp, sectp->hitag);
         if (!TestSpikeMatchActive(sectp->hitag))
-            DoSpikeMatch(pp, sectp->hitag);
+            DoSpikeMatch(sectp->hitag);
         if (!TestRotatorMatchActive(sectp->hitag))
             DoRotatorMatch(pp, sectp->hitag, FALSE);
         if (!TestSlidorMatchActive(sectp->hitag))
@@ -2339,6 +2236,9 @@ OperateContinuousTrigger(PLAYERp pp)
     if (Prediction)
         return;
 
+    if (pp->cursectnum < 0)
+        return;
+
     switch (LOW_TAG(pp->cursectnum))
     {
     case TAG_TRIGGER_MISSILE_TRAP:
@@ -2421,9 +2321,6 @@ short PlayerTakeSectorDamage(PLAYERp pp)
 #define PLAYER_SOUNDEVENT_TAG 900
 SWBOOL NearThings(PLAYERp pp)
 {
-    short sectnum;
-    short rndnum;
-    int daz;
     short neartagsect, neartagwall, neartagsprite;
     int neartaghitdist;
 
@@ -2651,7 +2548,7 @@ int DoPlayerGrabStar(PLAYERp pp)
         {
             sp = &sprite[StarQueue[i]];
 
-            if (FindDistance3D(sp->x - pp->posx, sp->y - pp->posy, (sp->z - pp->posz + Z(12))>>4) < 500)
+            if (FindDistance3D(sp->x - pp->posx, sp->y - pp->posy, sp->z - pp->posz + Z(12)) < 500)
             {
                 break;
             }
@@ -2680,8 +2577,6 @@ int DoPlayerGrabStar(PLAYERp pp)
 void
 PlayerOperateEnv(PLAYERp pp)
 {
-    SECT_USERp sectu = SectUser[pp->cursectnum];
-    SECTORp sectp = &sector[pp->cursectnum];
     SWBOOL found;
 
     if (Prediction)
@@ -2761,12 +2656,11 @@ PlayerOperateEnv(PLAYERp pp)
 
             {
                 int neartaghitdist;
-                short neartagsector, neartagsprite, neartagwall;
+                short neartagsector, neartagwall;
 
                 neartaghitdist = nti[0].dist;
                 neartagsector = nti[0].sectnum;
                 neartagwall = nti[0].wallnum;
-                neartagsprite = nti[0].spritenum;
 
                 if (neartagsector >= 0 && neartaghitdist < 1024)
                 {
@@ -2794,12 +2688,12 @@ PlayerOperateEnv(PLAYERp pp)
             {
             case TAG_VATOR:
                 DoVatorOperate(pp, pp->cursectnum);
-                DoSpikeOperate(pp, pp->cursectnum);
+                DoSpikeOperate(pp->cursectnum);
                 DoRotatorOperate(pp, pp->cursectnum);
                 DoSlidorOperate(pp, pp->cursectnum);
                 break;
             case TAG_SPRING_BOARD:
-                DoSpringBoard(pp, pp->cursectnum);
+                DoSpringBoard(pp/*, pp->cursectnum*/);
                 FLAG_KEY_RELEASE(pp, SK_OPERATE);
                 break;
             case TAG_DOOR_ROTATE:
@@ -2821,8 +2715,10 @@ PlayerOperateEnv(PLAYERp pp)
     //
     // ////////////////////////////
 
-    if (sectu && sectu->damage)
+    SECT_USERp sectu;
+    if (pp->cursectnum >= 0 && (sectu = SectUser[pp->cursectnum]) && sectu->damage)
     {
+        SECTORp sectp = &sector[pp->cursectnum];
         if (TEST(sectu->flags, SECTFU_DAMAGE_ABOVE_SECTOR))
         {
             PlayerTakeSectorDamage(pp);
@@ -2852,7 +2748,7 @@ PlayerOperateEnv(PLAYERp pp)
     {
         OperateTripTrigger(pp);
 
-        if (TEST(sector[pp->cursectnum].extra, SECTFX_WARP_SECTOR))
+        if (pp->cursectnum >= 0 && TEST(sector[pp->cursectnum].extra, SECTFX_WARP_SECTOR))
         {
             if (!TEST(pp->Flags2, PF2_TELEPORTED))
             {
@@ -3024,11 +2920,11 @@ DoAnim(int numtics)
 void
 AnimClear(void)
 {
-    int i, animval;
-
 #if 1
     AnimCnt = 0;
 #else
+    int i;
+
     for (i = AnimCnt - 1; i >= 0; i--)
     {
         if (Anim[i].extra)
@@ -3155,7 +3051,6 @@ void initlava(void)
 #if 0
     int x, y, z, r;
     int i;
-    extern char tempbuf[];
 
 //char lavabakpic[(LAVASIZ + 2) * (LAVASIZ + 2)], lavainc[LAVASIZ];
 //int lavanumdrops, lavanumframes;
@@ -3376,7 +3271,6 @@ DoPanning(void)
 void
 DoSector(void)
 {
-    short i;
     SECTOR_OBJECTp sop;
     SWBOOL riding;
     extern SWBOOL DebugActorFreeze;
@@ -3415,7 +3309,7 @@ DoSector(void)
     for (sop = SectorObject; sop < &SectorObject[MAX_SECTOR_OBJECTS]; sop++)
     {
 
-        if (sop->xmid == MAXLONG || sop->xmid == MAXSO)
+        if (sop->xmid == INT32_MAX /*|| sop->xmid == MAXSO*/)
             continue;
 
 

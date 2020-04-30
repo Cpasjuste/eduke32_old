@@ -23,6 +23,8 @@
  */
 
 #include "compat.h"
+#include "cache1d.h"
+#include "pragmas.h"
 
 #ifdef HAVE_VORBIS
 
@@ -41,7 +43,7 @@
 # include "vorbis/vorbisfile.h"
 #endif
 
-#define BLOCKSIZE 0x8000
+#define BLOCKSIZE MV_MIXBUFFERSIZE
 
 
 typedef struct {
@@ -52,25 +54,22 @@ typedef struct {
    OggVorbis_File vf;
 
    char block[BLOCKSIZE];
-   int32_t lastbitstream;
+   int lastbitstream;
 } vorbis_data;
 
 // designed with multiple calls in mind
 static void MV_GetVorbisCommentLoops(VoiceNode *voice, vorbis_comment *vc)
 {
-    if (vc == NULL)
-        return;
-
-    const char *vc_loopstart = NULL;
-    const char *vc_loopend = NULL;
-    const char *vc_looplength = NULL;
+    const char *vc_loopstart = nullptr;
+    const char *vc_loopend = nullptr;
+    const char *vc_looplength = nullptr;
 
     for (int comment = 0; comment < vc->comments; ++comment)
     {
-        const char *entry = (const char *)vc->user_comments[comment];
-        if (entry != NULL && entry[0] != '\0')
+        auto entry = (const char *)vc->user_comments[comment];
+        if (entry != nullptr && entry[0] != '\0')
         {
-            const char *value = strchr(entry, '=');
+            const char *value = Bstrchr(entry, '=');
 
             if (!value)
                 continue;
@@ -78,54 +77,52 @@ static void MV_GetVorbisCommentLoops(VoiceNode *voice, vorbis_comment *vc)
             const size_t field = value - entry;
             value += 1;
 
-            for (size_t t = 0; t < loopStartTagCount && vc_loopstart == NULL; ++t)
+            for (int t = 0; t < loopStartTagCount && vc_loopstart == nullptr; ++t)
             {
-                char const * const tag = loopStartTags[t];
-                if (field == strlen(tag) && Bstrncasecmp(entry, tag, field) == 0)
+                auto tag = loopStartTags[t];
+                if (field == Bstrlen(tag) && Bstrncasecmp(entry, tag, field) == 0)
                     vc_loopstart = value;
             }
 
-            for (size_t t = 0; t < loopEndTagCount && vc_loopend == NULL; ++t)
+            for (int t = 0; t < loopEndTagCount && vc_loopend == nullptr; ++t)
             {
-                char const * const tag = loopEndTags[t];
-                if (field == strlen(tag) && Bstrncasecmp(entry, tag, field) == 0)
+                auto tag = loopEndTags[t];
+                if (field == Bstrlen(tag) && Bstrncasecmp(entry, tag, field) == 0)
                     vc_loopend = value;
             }
 
-            for (size_t t = 0; t < loopLengthTagCount && vc_looplength == NULL; ++t)
+            for (int t = 0; t < loopLengthTagCount && vc_looplength == nullptr; ++t)
             {
-                char const * const tag = loopLengthTags[t];
-                if (field == strlen(tag) && Bstrncasecmp(entry, tag, field) == 0)
+                auto tag = loopLengthTags[t];
+                if (field == Bstrlen(tag) && Bstrncasecmp(entry, tag, field) == 0)
                     vc_looplength = value;
             }
         }
     }
 
-    if (vc_loopstart != NULL)
+    if (vc_loopstart != nullptr)
     {
+        const ogg_int64_t ov_loopstart = Batol(vc_loopstart);
+        if (ov_loopstart >= 0) // a loop starting at 0 is valid
         {
-            const ogg_int64_t ov_loopstart = atol(vc_loopstart);
-            if (ov_loopstart >= 0) // a loop starting at 0 is valid
-            {
-                voice->LoopStart = (const char *) (intptr_t) ov_loopstart;
-                voice->LoopSize = 1;
-            }
+            voice->LoopStart = (const char *) (intptr_t) ov_loopstart;
+            voice->LoopSize = 1;
         }
     }
-    if (vc_loopend != NULL)
+    if (vc_loopend != nullptr)
     {
         if (voice->LoopSize > 0)
         {
-            const ogg_int64_t ov_loopend = atol(vc_loopend);
+            const ogg_int64_t ov_loopend = Batol(vc_loopend);
             if (ov_loopend > 0) // a loop ending at 0 is invalid
                 voice->LoopEnd = (const char *) (intptr_t) ov_loopend;
         }
     }
-    if (vc_looplength != NULL)
+    if (vc_looplength != nullptr)
     {
         if (voice->LoopSize > 0 && voice->LoopEnd == 0)
         {
-            const ogg_int64_t ov_looplength = atol(vc_looplength);
+            const ogg_int64_t ov_looplength = Batol(vc_looplength);
             if (ov_looplength > 0) // a loop of length 0 is invalid
                 voice->LoopEnd = (const char *) ((intptr_t) ov_looplength + (intptr_t) voice->LoopStart);
         }
@@ -136,21 +133,21 @@ static void MV_GetVorbisCommentLoops(VoiceNode *voice, vorbis_comment *vc)
 
 static size_t read_vorbis(void *ptr, size_t size, size_t nmemb, void *datasource)
 {
-    vorbis_data *vorb = (vorbis_data *)datasource;
+    auto vorb = (vorbis_data *)datasource;
 
     errno = 0;
 
     if (vorb->length == vorb->pos)
         return 0;
 
-    size_t nread = 0;
+    int nread = 0;
 
     for (; nmemb > 0; nmemb--, nread++)
     {
-        size_t bytes = vorb->length - vorb->pos;
+        int bytes = vorb->length - vorb->pos;
 
-        if (size < bytes)
-            bytes = size;
+        if ((signed)size < bytes)
+            bytes = (int)size;
 
         memcpy(ptr, (uint8_t *)vorb->ptr + vorb->pos, bytes);
         vorb->pos += bytes;
@@ -169,7 +166,7 @@ static size_t read_vorbis(void *ptr, size_t size, size_t nmemb, void *datasource
 
 static int seek_vorbis(void *datasource, ogg_int64_t offset, int whence)
 {
-    vorbis_data *vorb = (vorbis_data *)datasource;
+    auto vorb = (vorbis_data *)datasource;
 
     switch (whence)
     {
@@ -194,7 +191,7 @@ static int close_vorbis(void *datasource)
 
 static long tell_vorbis(void *datasource)
 {
-    vorbis_data *vorb = (vorbis_data *)datasource;
+    auto vorb = (vorbis_data *)datasource;
 
     return vorb->pos;
 }
@@ -202,16 +199,16 @@ static long tell_vorbis(void *datasource)
 static ov_callbacks vorbis_callbacks = { read_vorbis, seek_vorbis, close_vorbis, tell_vorbis };
 
 
-int32_t MV_GetVorbisPosition(VoiceNode *voice)
+int MV_GetVorbisPosition(VoiceNode *voice)
 {
-    vorbis_data * vd = (vorbis_data *) voice->rawdataptr;
+    auto vd = (vorbis_data *) voice->rawdataptr;
 
     return ov_pcm_tell(&vd->vf);
 }
 
-void MV_SetVorbisPosition(VoiceNode *voice, int32_t position)
+void MV_SetVorbisPosition(VoiceNode *voice, int position)
 {
-    vorbis_data * vd = (vorbis_data *) voice->rawdataptr;
+    auto vd = (vorbis_data *) voice->rawdataptr;
 
     ov_pcm_seek(&vd->vf, position);
 }
@@ -226,16 +223,14 @@ static playbackstatus MV_GetNextVorbisBlock(VoiceNode *voice)
 {
     int bitstream;
 
-    voice->Playing = TRUE;
-
-    int32_t bytesread = 0;
-    vorbis_data *vd = (vorbis_data *)voice->rawdataptr;
+    int bytesread = 0;
+    auto vd = (vorbis_data *)voice->rawdataptr;
     do
     {
 #ifdef USING_TREMOR
-        int32_t bytes = ov_read(&vd->vf, vd->block + bytesread, BLOCKSIZE - bytesread, &bitstream);
+        int bytes = ov_read(&vd->vf, vd->block + bytesread, BLOCKSIZE - bytesread, &bitstream);
 #else
-        int32_t bytes = ov_read(&vd->vf, vd->block + bytesread, BLOCKSIZE - bytesread, 0, 2, 1, &bitstream);
+        int bytes = ov_read(&vd->vf, vd->block + bytesread, BLOCKSIZE - bytesread, 0, 2, 1, &bitstream);
 #endif
         // fprintf(stderr, "ov_read = %d\n", bytes);
         if (bytes > 0)
@@ -282,42 +277,34 @@ static playbackstatus MV_GetNextVorbisBlock(VoiceNode *voice)
         else if (bytes < 0)
         {
             MV_Printf("MV_GetNextVorbisBlock ov_read: err %d\n", bytes);
-            voice->Playing = FALSE;
             return NoMoreData;
         }
     } while (bytesread < BLOCKSIZE);
 
     if (bytesread == 0)
-    {
-        voice->Playing = FALSE;
         return NoMoreData;
-    }
 
     if (bitstream != vd->lastbitstream)
     {
-        vorbis_info *vi = 0;
-
-        vi = ov_info(&vd->vf, -1);
+        vorbis_info *vi = ov_info(&vd->vf, -1);
         if (!vi || (vi->channels != 1 && vi->channels != 2))
-        {
-            voice->Playing = FALSE;
             return NoMoreData;
-        }
 
-        voice->channels = vi->channels;
+        voice->channels     = vi->channels;
         voice->SamplingRate = vi->rate;
-        voice->RateScale = (voice->SamplingRate * voice->PitchScale) / MV_MixRate;
+        voice->RateScale    = divideu32(voice->SamplingRate * voice->PitchScale, MV_MixRate);
+
         voice->FixedPointBufferSize = (voice->RateScale * MV_MIXBUFFERSIZE) - voice->RateScale;
-        MV_SetVoiceMixMode(voice);
         vd->lastbitstream = bitstream;
+        MV_SetVoiceMixMode(voice);
     }
 
-    bytesread /= 2 * voice->channels;
+    uint32_t const samples = divideu32(bytesread, ((voice->bits>>3) * voice->channels));
 
     voice->position = 0;
     voice->sound = vd->block;
     voice->BlockLength = 0;
-    voice->length = bytesread << 16;  // ???: Should the literal 16 be voice->bits?
+    voice->length = samples << 16;
 
 #ifdef GEKKO
     // If libtremor had the three additional ov_read() parameters that libvorbis has,
@@ -338,14 +325,10 @@ Begin playback of sound data at specified angle and distance
 from listener.
 ---------------------------------------------------------------------*/
 
-int32_t MV_PlayVorbis3D(char *ptr, uint32_t ptrlength, int32_t loophow, int32_t pitchoffset, int32_t angle,
-                        int32_t distance, int32_t priority, uint32_t callbackval)
+int MV_PlayVorbis3D(char *ptr, uint32_t length, int loophow, int pitchoffset, int angle, int distance, int priority, fix16_t volume, intptr_t callbackval)
 {
     if (!MV_Installed)
-    {
-        MV_SetErrorCode(MV_NotInstalled);
-        return MV_Error;
-    }
+        return MV_SetErrorCode(MV_NotInstalled);
 
     if (distance < 0)
     {
@@ -353,13 +336,13 @@ int32_t MV_PlayVorbis3D(char *ptr, uint32_t ptrlength, int32_t loophow, int32_t 
         angle += MV_NUMPANPOSITIONS / 2;
     }
 
-    int const volume = MIX_VOLUME(distance);
+    int const vol = MIX_VOLUME(distance);
 
     // Ensure angle is within 0 - 127
     angle &= MV_MAXPANPOSITION;
 
-    return MV_PlayVorbis(ptr, ptrlength, loophow, -1, pitchoffset, max(0, 255 - distance),
-                         MV_PanTable[angle][volume].left, MV_PanTable[angle][volume].right, priority, callbackval);
+    return MV_PlayVorbis(ptr, length, loophow, -1, pitchoffset, max(0, 255 - distance),
+                         MV_PanTable[angle][vol].left, MV_PanTable[angle][vol].right, priority, volume, callbackval);
 }
 
 
@@ -370,100 +353,76 @@ Begin playback of sound data with the given sound levels and
 priority.
 ---------------------------------------------------------------------*/
 
-int32_t MV_PlayVorbis(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t loopend, int32_t pitchoffset,
-                      int32_t vol, int32_t left, int32_t right, int32_t priority, uint32_t callbackval)
+int MV_PlayVorbis(char *ptr, uint32_t length, int loopstart, int loopend, int pitchoffset, int vol, int left, int right, int priority, fix16_t volume, intptr_t callbackval)
 {
-   UNREFERENCED_PARAMETER(loopend);
+    UNREFERENCED_PARAMETER(loopend);
 
-   if (!MV_Installed)
-   {
-       MV_SetErrorCode(MV_NotInstalled);
-       return MV_Error;
-   }
+    if (!MV_Installed)
+        return MV_SetErrorCode(MV_NotInstalled);
 
-   vorbis_data *vd = (vorbis_data *)calloc(1, sizeof(vorbis_data));
+    VoiceNode *voice = MV_AllocVoice(priority);
 
-   if (!vd)
-   {
-       MV_SetErrorCode(MV_InvalidFile);
-       return MV_Error;
-   }
+    if (voice == nullptr)
+        return MV_SetErrorCode(MV_NoVoices);
 
-   vd->ptr = ptr;
-   vd->pos = 0;
-   vd->length = ptrlength;
-   vd->lastbitstream = -1;
+    voice->ptrlock = CACHE1D_PERMANENT;
 
-   int32_t status = ov_open_callbacks((void *)vd, &vd->vf, 0, 0, vorbis_callbacks);
+    if (voice->rawdataptr == nullptr || voice->wavetype != FMT_VORBIS)
+        g_cache.allocateBlock((intptr_t *)&voice->rawdataptr, sizeof(vorbis_data), &voice->ptrlock);
 
-   if (status < 0)
-   {
-       free(vd);
-       MV_Printf("MV_PlayVorbis: err %d\n", status);
-       MV_SetErrorCode(MV_InvalidFile);
-       return MV_Error;
-   }
+    vorbis_data *vd = (vorbis_data *)voice->rawdataptr;
 
-   vorbis_info *vi = ov_info(&vd->vf, 0);
+    vd->ptr    = ptr;
+    vd->pos    = 0;
+    vd->length = length;
 
-   if (!vi)
-   {
-       ov_clear(&vd->vf);
-       free(vd);
-       MV_SetErrorCode(MV_InvalidFile);
-       return MV_Error;
-   }
+    vd->lastbitstream = -1;
 
-   if (vi->channels != 1 && vi->channels != 2)
-   {
-       ov_clear(&vd->vf);
-       free(vd);
-       MV_SetErrorCode(MV_InvalidFile);
-       return MV_Error;
-   }
+    int status = ov_open_callbacks((void *)vd, &vd->vf, 0, 0, vorbis_callbacks);
+    vorbis_info *vi;
 
-   // Request a voice from the voice pool
-   VoiceNode *voice = MV_AllocVoice(priority);
+    if (status < 0 || ((vi = ov_info(&vd->vf, 0)) == nullptr) || vi->channels < 1 || vi->channels > 2)
+    {
+        if (status == 0)
+            ov_clear(&vd->vf);
+        else
+            MV_Printf("MV_PlayVorbis: err %d\n", status);
 
-   if (voice == NULL)
-   {
-       ov_clear(&vd->vf);
-       free(vd);
-       MV_SetErrorCode(MV_NoVoices);
-       return MV_Error;
-   }
+        voice->ptrlock = CACHE1D_FREE;
+        return MV_SetErrorCode(MV_InvalidFile);
+    }
 
-   voice->wavetype    = FMT_VORBIS;
-   voice->bits        = 16;
-   voice->channels    = vi->channels;
-   voice->rawdataptr       = (void *) vd;
-   voice->GetSound    = MV_GetNextVorbisBlock;
-   voice->NextBlock   = vd->block;
-   voice->LoopCount   = 0;
-   voice->BlockLength = 0;
-   voice->length      = 0;
-   voice->next        = NULL;
-   voice->prev        = NULL;
-   voice->priority    = priority;
-   voice->callbackval = callbackval;
+    voice->wavetype    = FMT_VORBIS;
+    voice->bits        = 16;
+    voice->channels    = vi->channels;
+    voice->rawdataptr  = (void *)vd;
+    voice->GetSound    = MV_GetNextVorbisBlock;
+    voice->NextBlock   = vd->block;
+    voice->LoopCount   = 0;
+    voice->BlockLength = 0;
+    voice->length      = 0;
+    voice->next        = nullptr;
+    voice->prev        = nullptr;
+    voice->priority    = priority;
+    voice->callbackval = callbackval;
 
-   voice->LoopStart   = 0;
-   voice->LoopEnd     = 0;
-   voice->LoopSize    = (loopstart >= 0 ? 1 : 0);
+    voice->LoopStart = nullptr;
+    voice->LoopEnd   = nullptr;
+    voice->LoopSize  = (loopstart >= 0 ? 1 : 0);
 
     // load loop tags from metadata
-    MV_GetVorbisCommentLoops(voice, ov_comment(&vd->vf, 0));
+    if (auto comment = ov_comment(&vd->vf, 0))
+        MV_GetVorbisCommentLoops(voice, comment);
 
-   voice->Playing     = TRUE;
-   voice->Paused      = FALSE;
+    voice->Paused = FALSE;
 
-   MV_SetVoicePitch(voice, vi->rate, pitchoffset);
-   MV_SetVoiceMixMode( voice );
+    MV_SetVoicePitch(voice, vi->rate, pitchoffset);
+    MV_SetVoiceMixMode(voice);
 
-   MV_SetVoiceVolume( voice, vol, left, right );
-   MV_PlayVoice( voice );
+    MV_SetVoiceVolume(voice, vol, left, right, volume);
+    MV_PlayVoice(voice);
 
-   return voice->handle;
+    return voice->handle;
 }
 
 void MV_ReleaseVorbisVoice( VoiceNode * voice )
@@ -471,18 +430,19 @@ void MV_ReleaseVorbisVoice( VoiceNode * voice )
     if (voice->wavetype != FMT_VORBIS)
         return;
 
-    vorbis_data *vd = (vorbis_data *)voice->rawdataptr;
+    auto vd = (vorbis_data *)voice->rawdataptr;
+
+    voice->length = 0;
+    voice->sound = nullptr;
+    voice->ptrlock = CACHE1D_UNLOCKED;
 
     ov_clear(&vd->vf);
-    free(vd);
-
-    voice->rawdataptr = 0;
 }
 #else
 #include "_multivc.h"
 
-int32_t MV_PlayVorbis(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t loopend, int32_t pitchoffset,
-    int32_t vol, int32_t left, int32_t right, int32_t priority, uint32_t callbackval)
+int MV_PlayVorbis(char *ptr, uint32_t ptrlength, int loopstart, int loopend, int pitchoffset,
+    int vol, int left, int right, int priority, fix16_t volume, intptr_t callbackval)
 {
     UNREFERENCED_PARAMETER(ptr);
     UNREFERENCED_PARAMETER(ptrlength);
@@ -493,14 +453,15 @@ int32_t MV_PlayVorbis(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t 
     UNREFERENCED_PARAMETER(left);
     UNREFERENCED_PARAMETER(right);
     UNREFERENCED_PARAMETER(priority);
+    UNREFERENCED_PARAMETER(volume);
     UNREFERENCED_PARAMETER(callbackval);
 
     MV_Printf("MV_PlayVorbis: OggVorbis support not included in this binary.\n");
     return -1;
 }
 
-int32_t MV_PlayVorbis3D(char *ptr, uint32_t ptrlength, int32_t loophow, int32_t pitchoffset, int32_t angle,
-    int32_t distance, int32_t priority, uint32_t callbackval)
+int MV_PlayVorbis3D(char *ptr, uint32_t ptrlength, int loophow, int pitchoffset, int angle,
+    int distance, int priority, fix16_t volume, intptr_t callbackval)
 {
     UNREFERENCED_PARAMETER(ptr);
     UNREFERENCED_PARAMETER(ptrlength);
@@ -509,6 +470,7 @@ int32_t MV_PlayVorbis3D(char *ptr, uint32_t ptrlength, int32_t loophow, int32_t 
     UNREFERENCED_PARAMETER(angle);
     UNREFERENCED_PARAMETER(distance);
     UNREFERENCED_PARAMETER(priority);
+    UNREFERENCED_PARAMETER(volume);
     UNREFERENCED_PARAMETER(callbackval);
 
     MV_Printf("MV_PlayVorbis: OggVorbis support not included in this binary.\n");

@@ -43,7 +43,7 @@ void MusicShutdown(void);
 
 // 3D sound engine declarations //////////////////////////////////////////////
 // Flag settings used to turn on and off 3d sound options
-typedef enum
+enum
 {
     v3df_none       = 0,    // Default, take no action, use all defaults
     v3df_follow     = 1,    // 1 = Do coordinate updates on sound
@@ -56,7 +56,8 @@ typedef enum
     v3df_init       = 64,   // 1 = First pass of sound, don't play it.
     // This is mainly used for intermittent sounds
     v3df_nolookup   = 128   // don't use ambient table lookup
-} Voc3D_Flags;
+};
+typedef int Voc3D_Flags;
 
 struct VOCstruct;
 typedef struct VOCstruct VOC_INFO, *VOC_INFOp;
@@ -83,7 +84,6 @@ void UnInitSound(void);
 void InitFX(void);
 void InitMusic(void);
 void StopFX(void);
-void FlipStereo(void);
 void StopSong(void);
 void PauseSong(SWBOOL pauseon);
 void StopSound(void);
@@ -93,6 +93,7 @@ SWBOOL PlaySong(char *song_file_name, int cdaudio_track, SWBOOL loop, SWBOOL res
 void SetSongVolume(int volume);
 SWBOOL SongIsPlaying(void);
 void PlaySoundRTS(int rts_num);
+extern int8_t SongTrack;
 
 //
 // Standard VOC format information - generally don't need this
@@ -120,11 +121,12 @@ struct ambientstruct
 };
 
 // VOC File flag settings for digi_entries.
-typedef enum
+enum
 {
     vf_normal = 0,
     vf_loop = 1
-} Voc_Flags;
+};
+typedef int Voc_Flags;
 
 //
 // Table that describes the voc file and how it will be played

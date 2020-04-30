@@ -23,11 +23,18 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #ifndef gamevars_h_
 #define gamevars_h_
 
-#include "gamedef.h"
 #include "fix16.hpp"
+#include "gamedef.h"
+
+#include "vfs.h"
 
 #define MAXGAMEVARS 2048 // must be a power of two
 #define MAXVARLABEL 26
+
+#define GV_FLAG_CONSTANT (MAXGAMEVARS)
+#define GV_FLAG_NEGATIVE (MAXGAMEVARS<<1)
+#define GV_FLAG_ARRAY (MAXGAMEVARS<<2)
+#define GV_FLAG_STRUCT (MAXGAMEVARS<<3)
 
 // store global game definitions
 enum GamevarFlags_t
@@ -42,12 +49,14 @@ enum GamevarFlags_t
     GAMEVAR_READONLY  = 0x00001000,  // values are read-only (no setvar allowed)
     GAMEVAR_INT32PTR  = 0x00002000,  // plValues is a pointer to an int32_t
     GAMEVAR_INT16PTR  = 0x00008000,  // plValues is a pointer to a short
-    GAMEVAR_UINT8PTR  = 0x00010000,  // plValues is a pointer to a char
     GAMEVAR_NORESET   = 0x00020000,  // var values are not reset when restoring map state
     GAMEVAR_SPECIAL   = 0x00040000,  // flag for structure member shortcut vars
     GAMEVAR_NOMULTI   = 0x00080000,  // don't attach to multiplayer packets
     GAMEVAR_Q16PTR    = 0x00100000,  // plValues is a pointer to a q16.16
-    GAMEVAR_PTR_MASK  = (GAMEVAR_INT32PTR | GAMEVAR_INT16PTR | GAMEVAR_UINT8PTR | GAMEVAR_Q16PTR),
+    GAMEVAR_SERIALIZE = 0x00200000,  // write into permasaves
+
+    GAMEVAR_RAWQ16PTR = GAMEVAR_Q16PTR | GAMEVAR_SPECIAL,  // plValues is a pointer to a q16.16 but we don't want conversion
+    GAMEVAR_PTR_MASK  = GAMEVAR_INT32PTR | GAMEVAR_INT16PTR | GAMEVAR_Q16PTR | GAMEVAR_RAWQ16PTR,
 };
 
 #if !defined LUNATIC
@@ -79,6 +88,7 @@ enum GamearrayFlags_t
     GAMEARRAY_WARN      = 0x00200000,
 
     GAMEARRAY_SIZE_MASK = GAMEARRAY_INT8 | GAMEARRAY_INT16 | GAMEARRAY_BITMAP,
+    GAMEARRAY_STORAGE_MASK = GAMEARRAY_INT8 | GAMEARRAY_INT16 | GAMEARRAY_BITMAP | GAMEARRAY_STRIDE2,
     GAMEARRAY_TYPE_MASK = GAMEARRAY_UNSIGNED | GAMEARRAY_INT8 | GAMEARRAY_INT16 | GAMEARRAY_BITMAP,
 };
 
@@ -108,16 +118,16 @@ extern gamearray_t aGameArrays[MAXGAMEARRAYS];
 extern int32_t     g_gameVarCount;
 extern int32_t     g_gameArrayCount;
 
-unsigned __fastcall Gv_GetArrayElementSize(int const arrayIdx);
 size_t __fastcall Gv_GetArrayAllocSizeForCount(int const arrayIdx, size_t const count);
-size_t __fastcall Gv_GetArrayAllocSize(int const arrayIdx);
-size_t __fastcall Gv_GetArrayCountFromFile(int const arrayIdx, size_t const filelength);
+size_t __fastcall Gv_GetArrayCountForAllocSize(int const arrayIdx, size_t const filelength);
+static FORCE_INLINE size_t Gv_GetArrayAllocSize(int const arrayIdx) { return Gv_GetArrayAllocSizeForCount(arrayIdx, aGameArrays[arrayIdx].size); }
+unsigned __fastcall Gv_GetArrayElementSize(int const arrayIdx);
 int __fastcall Gv_GetArrayValue(int const id, int index);
-int __fastcall Gv_GetVar(int id, int spriteNum, int playerNum);
-void __fastcall Gv_SetVar(int const id, int const lValue, int const spriteNum, int const playerNum);
-int __fastcall Gv_GetVarX(int id);
-void __fastcall Gv_GetManyVars(int const count, int32_t * const rv);
-void __fastcall Gv_SetVarX(int const id, int const lValue);
+int __fastcall Gv_GetVar(int const gameVar, int const spriteNum, int const playerNum);
+void __fastcall Gv_SetVar(int const gameVar, int const newValue, int const spriteNum, int const playerNum);
+int __fastcall Gv_GetVar(int const gameVar);
+void __fastcall Gv_GetManyVars(int const numVars, int32_t * const outBuf);
+void __fastcall Gv_SetVar(int const gameVar, int const newValue);
 
 template <typename T>
 static FORCE_INLINE void Gv_FillWithVars(T & rv)
@@ -127,26 +137,25 @@ static FORCE_INLINE void Gv_FillWithVars(T & rv)
     Gv_GetManyVars(sizeof(T)/sizeof(int32_t), (int32_t *)&rv);
 }
 
-int Gv_GetVarByLabel(const char *szGameLabel,int const lDefault,int const spriteNum,int const playerNum);
+int Gv_GetVarByLabel(const char *szGameLabel,int defaultValue,int spriteNum,int playerNum);
 void Gv_NewArray(const char *pszLabel,void *arrayptr,intptr_t asize,uint32_t dwFlags);
 void Gv_NewVar(const char *pszLabel,intptr_t lValue,uint32_t dwFlags);
 
 static FORCE_INLINE void A_ResetVars(int const spriteNum)
 {
-    for (bssize_t i = 0; i < g_gameVarCount; ++i)
+    for (auto &gv : aGameVars)
     {
-        if ((aGameVars[i].flags & (GAMEVAR_PERACTOR | GAMEVAR_NODEFAULT)) != GAMEVAR_PERACTOR)
-            continue;
-        aGameVars[i].pValues[spriteNum] = aGameVars[i].defaultValue;
+        if ((gv.flags & (GAMEVAR_PERACTOR|GAMEVAR_NODEFAULT)) == GAMEVAR_PERACTOR)
+            gv.pValues[spriteNum] = gv.defaultValue;
     }
 }
-
+void VM_InitHashTables(void);
 void Gv_DumpValues(void);
 void Gv_InitWeaponPointers(void);
 void Gv_RefreshPointers(void);
 void Gv_ResetVars(void);
-int Gv_ReadSave(int32_t kFile);
-void Gv_WriteSave(FILE *fil);
+int Gv_ReadSave(buildvfs_kfd kFile);
+void Gv_WriteSave(buildvfs_FILE fil);
 void Gv_Clear(void);
 #else
 extern int32_t g_noResetVars;
@@ -158,93 +167,113 @@ void Gv_Init(void);
 void Gv_FinalizeWeaponDefaults(void);
 
 #if !defined LUNATIC
-#define VM_GAMEVAR_OPERATOR(func, operator)                                                                                                          \
-    static FORCE_INLINE void __fastcall func(int const id, int32_t const operand)                                                                    \
-    {                                                                                                                                                \
-        gamevar_t &var = aGameVars[id];                                                                                                              \
-                                                                                                                                                     \
-        switch (var.flags & (GAMEVAR_USER_MASK | GAMEVAR_PTR_MASK))                                                                                  \
-        {                                                                                                                                            \
-            default: var.global operator operand; break;                                                                                             \
-            case GAMEVAR_PERPLAYER:                                                                                                                  \
-                if (EDUKE32_PREDICT_FALSE((unsigned)vm.playerNum > MAXPLAYERS - 1))                                                                  \
-                    break;                                                                                                                           \
-                var.pValues[vm.playerNum] operator operand;                                                                                          \
-                break;                                                                                                                               \
-            case GAMEVAR_PERACTOR:                                                                                                                   \
-                if (EDUKE32_PREDICT_FALSE((unsigned)vm.spriteNum > MAXSPRITES - 1))                                                                  \
-                    break;                                                                                                                           \
-                var.pValues[vm.spriteNum] operator operand;                                                                                          \
-                break;                                                                                                                               \
-            case GAMEVAR_INT32PTR: *(int32_t *)var.global operator(int32_t) operand; break;                                                          \
-            case GAMEVAR_INT16PTR: *(int16_t *)var.global operator(int16_t) operand; break;                                                          \
-            case GAMEVAR_UINT8PTR: *(uint8_t *)var.global operator(uint8_t) operand; break;                                                          \
-            case GAMEVAR_Q16PTR:                                                                                                                     \
-            {                                                                                                                                        \
-                Fix16 *pfix = (Fix16 *)var.global;                                                                                                   \
-                *pfix operator(int16_t) operand;                                                                                                     \
-                break;                                                                                                                               \
-            }                                                                                                                                        \
-        }                                                                                                                                            \
+static inline int __fastcall VM_GetStruct(uint32_t const flags, intptr_t * const addr)
+{
+    Bassert(flags & (LABEL_CHAR|LABEL_SHORT|LABEL_INT));
+
+    int returnValue = 0;
+
+    switch (flags & (LABEL_CHAR|LABEL_SHORT|LABEL_INT|LABEL_UNSIGNED))
+    {
+        case LABEL_CHAR:                 returnValue = *(int8_t *)addr; break;
+        case LABEL_CHAR|LABEL_UNSIGNED:  returnValue = *(uint8_t *)addr; break;
+
+        case LABEL_SHORT:                returnValue = *(int16_t *)addr; break;
+        case LABEL_SHORT|LABEL_UNSIGNED: returnValue = *(uint16_t *)addr; break;
+
+        case LABEL_INT:                  returnValue = *(int32_t *)addr; break;
+        case LABEL_INT|LABEL_UNSIGNED:   returnValue = *(uint32_t *)addr; break;
     }
 
-#if defined(__arm__) || defined(LIBDIVIDE_ALWAYS)
-static FORCE_INLINE void __fastcall Gv_DivVar(int const id, int32_t const operand)
-{
-    gamevar_t &var = aGameVars[id];
+    return returnValue;
+}
 
-    if (EDUKE32_PREDICT_FALSE((var.flags & GAMEVAR_PERPLAYER && (unsigned) vm.playerNum > MAXPLAYERS - 1) ||
-        (var.flags & GAMEVAR_PERACTOR && (unsigned) vm.spriteNum > MAXSPRITES - 1)))
-        return;
+static FORCE_INLINE void __fastcall VM_SetStruct(uint32_t const flags, intptr_t * const addr, int32_t newValue)
+{
+    Bassert(flags & (LABEL_CHAR|LABEL_SHORT|LABEL_INT));
+
+    switch (flags & (LABEL_CHAR|LABEL_SHORT|LABEL_INT|LABEL_UNSIGNED))
+    {
+        case LABEL_CHAR:                 *(int8_t *)addr = newValue; break;
+        case LABEL_CHAR|LABEL_UNSIGNED:  *(uint8_t *)addr = newValue; break;
+
+        case LABEL_SHORT:                *(int16_t *)addr = newValue; break;
+        case LABEL_SHORT|LABEL_UNSIGNED: *(uint16_t *)addr = newValue; break;
+
+        case LABEL_INT:                  *(int32_t *)addr = newValue; break;
+        case LABEL_INT|LABEL_UNSIGNED:   *(uint32_t *)addr = newValue; break;
+    }
+}
+
+#define VM_GAMEVAR_OPERATOR(func, operator)                                                            \
+    static FORCE_INLINE ATTRIBUTE((flatten)) void __fastcall func(int const id, int32_t const operand) \
+    {                                                                                                  \
+        auto &var = aGameVars[id];                                                                     \
+                                                                                                       \
+        switch (var.flags & (GAMEVAR_USER_MASK | GAMEVAR_PTR_MASK))                                    \
+        {                                                                                              \
+            default:                                                                                   \
+                var.global operator operand;                                                           \
+                break;                                                                                 \
+            case GAMEVAR_PERPLAYER:                                                                    \
+                var.pValues[vm.playerNum & (MAXPLAYERS-1)] operator operand;                           \
+                break;                                                                                 \
+            case GAMEVAR_PERACTOR:                                                                     \
+                var.pValues[vm.spriteNum & (MAXSPRITES-1)] operator operand;                           \
+                break;                                                                                 \
+            case GAMEVAR_INT32PTR: *(int32_t *)var.pValues operator(int32_t) operand; break;           \
+            case GAMEVAR_INT16PTR: *(int16_t *)var.pValues operator(int16_t) operand; break;           \
+            case GAMEVAR_Q16PTR:                                                                       \
+            {                                                                                          \
+                Fix16 *pfix = (Fix16 *)var.global;                                                     \
+                *pfix  operator fix16_from_int(operand);                                               \
+                break;                                                                                 \
+            }                                                                                          \
+        }                                                                                              \
+    }
+
+static FORCE_INLINE void __fastcall Gv_DivVar(int const id, int32_t const d)
+{
+    using namespace libdivide;
 
     static libdivide_s32_t sdiv;
     static int32_t lastValue;
-    intptr_t *iptr = &var.global;
-    bool const foundInTable = (unsigned) operand < DIVTABLESIZE;
-    libdivide_s32_t *dptr = foundInTable ? (libdivide_s32_t *) &divtable32[operand] : &sdiv;
 
-    if (operand == lastValue || foundInTable)
-        goto skip;
+    auto &var = aGameVars[id];
+    auto *dptr = &sdiv;
+    auto iptr = &var.global;
 
-    sdiv = libdivide_s32_gen((lastValue = operand));
-
-skip:
+    if ((unsigned)d < DIVTABLESIZE)
+        dptr = &divtable32[d];
+    else if (d != lastValue)
+        sdiv = libdivide_s32_gen((lastValue = d));
+    
     switch (var.flags & (GAMEVAR_USER_MASK | GAMEVAR_PTR_MASK))
     {
-        case GAMEVAR_PERPLAYER: iptr = &var.pValues[vm.playerNum];
-        default: break;
-        case GAMEVAR_PERACTOR: iptr = &var.pValues[vm.spriteNum]; break;
+        case GAMEVAR_PERACTOR: iptr = &var.pValues[vm.spriteNum & (MAXSPRITES-1)]; goto jmp;
+        case GAMEVAR_PERPLAYER: iptr = &var.pValues[vm.playerNum & (MAXPLAYERS-1)]; fallthrough__;
+        default: jmp: *iptr = libdivide_s32_do(*iptr, dptr); break;
+
         case GAMEVAR_INT32PTR:
         {
-            int32_t & value = *(int32_t *)var.global;
-            value = (int32_t)libdivide_s32_do(value, dptr);
-            return;
+            auto &value = *(int32_t *)var.pValues;
+            value = libdivide_s32_do(value, dptr);
+            break;
         }
         case GAMEVAR_INT16PTR:
         {
-            int16_t & value = *(int16_t *)var.global;
+            auto &value = *(int16_t *)var.pValues;
             value = (int16_t)libdivide_s32_do(value, dptr);
-            return;
-        }
-        case GAMEVAR_UINT8PTR:
-        {
-            uint8_t & value = *(uint8_t *)var.global;
-            value = (uint8_t)libdivide_s32_do(value, dptr);
-            return;
+            break;
         }
         case GAMEVAR_Q16PTR:
         {
-            fix16_t & value = *(fix16_t *)var.global;
-            value = fix16_div(value, fix16_from_int(operand));
-            return;
+            auto &value = *(fix16_t *)var.pValues;
+            value = fix16_div(value, fix16_from_int(d));
+            break;
         }
     }
-
-    *iptr = libdivide_s32_do(*iptr, dptr);
 }
-#else
-VM_GAMEVAR_OPERATOR(Gv_DivVar, /= )
-#endif
 
 VM_GAMEVAR_OPERATOR(Gv_AddVar, +=)
 VM_GAMEVAR_OPERATOR(Gv_SubVar, -=)

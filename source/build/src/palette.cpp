@@ -1,3 +1,11 @@
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
+
 #include "compat.h"
 #include "build.h"
 #include "engine_priv.h"
@@ -7,6 +15,8 @@
 #include "palette.h"
 #include "a.h"
 #include "xxhash.h"
+
+#include "vfs.h"
 
 uint8_t *basepaltable[MAXBASEPALS] = { palette };
 uint8_t basepalreset=1;
@@ -18,7 +28,6 @@ palette_t curpalette[256];			// the current palette, unadjusted for brightness o
 palette_t curpalettefaded[256];		// the current palette, adjusted for brightness and tint (ie. what gets sent to the card)
 palette_t palfadergb = { 0, 0, 0, 0 };
 char palfadedelta = 0;
-uint8_t blackcol;
 
 int32_t realmaxshade;
 float frealmaxshade;
@@ -48,7 +57,6 @@ void fullscreen_tint_gl(uint8_t r, uint8_t g, uint8_t b, uint8_t f)
 
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_ALPHA_TEST);
-    glDisable(GL_TEXTURE_2D);
     polymost_setFogEnabled(false);
 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -135,16 +143,16 @@ static void maybe_alloc_palookup(int32_t palnum);
 //
 void paletteLoadFromDisk(void)
 {
-    initfastcolorlookup_scale(30, 59, 11);
-    initfastcolorlookup_gridvectors();
+    paletteInitClosestColorScale(30, 59, 11);
+    paletteInitClosestColorGrid();
 
 #ifdef USE_OPENGL
-    for (size_t x = 0; x < MAXBLENDTABS; ++x)
-        glblend[x] = defaultglblend;
+    for (auto & x : glblend)
+        x = defaultglblend;
 #endif
 
-    int32_t fil;
-    if ((fil = kopen4load("palette.dat", 0)) == -1)
+    buildvfs_kfd fil;
+    if ((fil = kopen4load("palette.dat", 0)) == buildvfs_kfd_invalid)
         return;
 
 
@@ -153,58 +161,35 @@ void paletteLoadFromDisk(void)
     if (kread_and_test(fil, palette, 768))
         return kclose(fil);
 
-    for (bssize_t k = 0; k < 768; k++)
-        palette[k] <<= 2;
+    for (unsigned char & k : palette)
+        k <<= 2;
 
-    initfastcolorlookup_palette(palette);
+    paletteInitClosestColorMap(palette);
 
     paletteloaded |= PALETTE_MAIN;
 
 
     // PALETTE_SHADES
 
-    if (kread_and_test(fil, &numshades, 2))
-        return kclose(fil);
-    numshades = B_LITTLE16(numshades);
-
-    if (numshades <= 1)
-    {
-        initprintf("Warning: Invalid number of shades in \"palette.dat\"!\n");
-        numshades = 0;
-        return kclose(fil);
-    }
-
     // Auto-detect LameDuke. Its PALETTE.DAT doesn't have a 'numshades' 16-bit
     // int after the base palette, but starts directly with the shade tables.
-    // Thus, the first two bytes will be 00 01, which is 256 if read as
-    // little-endian int16_t.
-    int32_t lamedukep = 0;
-    if (numshades >= 256)
+    int lamedukep = 0;
+    if (kfilelength(fil) == 41600)
     {
-        static char const * const seekfail = "Warning: klseek() failed in loadpalette()!\n";
-
-        uint16_t temp;
-        if (kread_and_test(fil, &temp, 2))
+        numshades = 32;
+        lamedukep = 1;
+    }
+    else
+    {
+        if (kread_and_test(fil, &numshades, 2))
             return kclose(fil);
-        temp = B_LITTLE16(temp);
-        if (temp == 770 || numshades > 256) // 02 03
-        {
-            if (klseek(fil, -4, BSEEK_CUR) < 0)
-            {
-                initputs(seekfail);
-                return kclose(fil);
-            }
+        numshades = B_LITTLE16(numshades);
 
-            numshades = 32;
-            lamedukep = 1;
-        }
-        else
+        if (numshades <= 1)
         {
-            if (klseek(fil, -2, BSEEK_CUR) < 0)
-            {
-                initputs(seekfail);
-                return kclose(fil);
-            }
+            initprintf("Warning: Invalid number of shades in \"palette.dat\"!\n");
+            numshades = 0;
+            return kclose(fil);
         }
     }
 
@@ -229,13 +214,15 @@ void paletteLoadFromDisk(void)
 
             // Read the entries above and on the diagonal, if the table is
             // thought as being row-major.
-            if (kread_and_test(fil, &transluc[256*i + i], 256-i-1))
+            if (kread_and_test(fil, &transluc[256*i + i + 1], 255-i))
                 return kclose(fil);
 
             // Duplicate the entries below the diagonal.
-            for (bssize_t j=0; j<i; j++)
-                transluc[256*i + j] = transluc[256*j + i];
+            for (bssize_t j=i+1; j<256; j++)
+                transluc[256*j + i] = transluc[256*i + j];
         }
+        for (bssize_t i=0; i<256; i++)
+            transluc[256*i + i] = i;
     }
     else
     {
@@ -265,7 +252,7 @@ void paletteLoadFromDisk(void)
             if (kread_and_test(fil, &blendnum, 1))
             {
                 initprintf("Warning: failed reading additional blending table index\n");
-                Bfree(tab);
+                Xfree(tab);
                 return kclose(fil);
             }
 
@@ -275,13 +262,13 @@ void paletteLoadFromDisk(void)
             if (kread_and_test(fil, tab, 256*256))
             {
                 initprintf("Warning: failed reading additional blending table\n");
-                Bfree(tab);
+                Xfree(tab);
                 return kclose(fil);
             }
 
             paletteSetBlendTable(blendnum, tab);
         }
-        Bfree(tab);
+        Xfree(tab);
 
         // Read log2 of count of alpha blending tables.
         uint8_t lognumalphatabs;
@@ -297,7 +284,7 @@ void paletteLoadFromDisk(void)
     kclose(fil);
 }
 
-uint32_t PaletteIndexFullbrights[8];
+uint8_t PaletteIndexFullbrights[32];
 
 void palettePostLoadTables(void)
 {
@@ -319,12 +306,6 @@ void palettePostLoadTables(void)
     blackcol = paletteGetClosestColor(0, 0, 0);
     whitecol = paletteGetClosestColor(255, 255, 255);
     redcol = paletteGetClosestColor(255, 0, 0);
-
-    for (size_t i = 0; i<16; i++)
-    {
-        palette_t *edcol = (palette_t *) &vgapal16[4*i];
-        editorcolors[i] = getclosestcol_lim(edcol->b, edcol->g, edcol->r, 239);
-    }
 
     // Bmemset(PaletteIndexFullbrights, 0, sizeof(PaletteIndexFullbrights));
     for (bssize_t c = 0; c < 255; ++c) // skipping transparent color
@@ -362,27 +343,32 @@ void palettePostLoadTables(void)
         PostLoad_FoundShade: ;
         frealmaxshade = (float)(realmaxshade = s+1);
     }
+
+    for (size_t i = 0; i<256; i++)
+    {
+        if (editorcolorsdef[i])
+            continue;
+
+        palette_t *edcol = (palette_t *) &vgapal16[4*i];
+        editorcolors[i] = paletteGetClosestColorWithBlacklist(edcol->b, edcol->g, edcol->r, 254, PaletteIndexFullbrights);
+    }
 }
 
 void paletteFixTranslucencyMask(void)
 {
-    for (bssize_t i=0; i<MAXPALOOKUPS; i++)
+    for (auto thispalookup : palookup)
     {
-        char * const thispalookup = palookup[i];
         if (thispalookup == NULL)
             continue;
 
         for (bssize_t j=0; j<numshades; j++)
-        {
             thispalookup[(j<<8) + 255] = 255;
-        }
     }
 
     // fix up translucency table so that transluc(255,x)
     // and transluc(x,255) is black instead of purple.
-    for (bssize_t i=0; i<MAXBLENDTABS; i++)
+    for (auto transluc : blendtable)
     {
-        char * const transluc = blendtable[i];
         if (transluc == NULL)
             continue;
 
@@ -403,7 +389,7 @@ void paletteFixTranslucencyMask(void)
 //  - on success, 0
 //  - on error, -1 (didn't read enough data)
 //  - -2: error, we already wrote an error message ourselves
-int32_t paletteLoadLookupTable(int32_t fp)
+int32_t paletteLoadLookupTable(buildvfs_kfd fp)
 {
     uint8_t numlookups;
     char remapbuf[256];
@@ -474,7 +460,7 @@ static void maybe_alloc_palookup(int32_t palnum)
     {
         alloc_palookup(palnum);
         if (palookup[palnum] == NULL)
-            Bexit(1);
+            fatal_exit("NULL palette!\n");
     }
 }
 
@@ -544,9 +530,6 @@ void handle_blend(uint8_t enable, uint8_t blend, uint8_t def)
 
 int32_t paletteSetLookupTable(int32_t palnum, const uint8_t *shtab)
 {
-    if (numshades != 32)
-        return -1;
-
     if (shtab != NULL)
     {
         maybe_alloc_palookup(palnum);
@@ -655,7 +638,12 @@ void paletteSetColorTable(int32_t id, uint8_t const * const table)
 
     Bmemcpy(basepaltable[id], table, 768);
 
-    uploadbasepalette(id);
+#ifdef USE_OPENGL
+    if (videoGetRenderMode() >= REND_POLYMOST)
+    {
+        uploadbasepalette(id);
+    }
+#endif
 }
 
 void paletteFreeColorTable(int32_t const id)
@@ -686,7 +674,7 @@ void videoSetPalette(char dabrightness, uint8_t dapalid, uint8_t flags)
     int32_t palsumdidchange;
     //    uint32_t lastbright = curbrightness;
 
-    Bassert((flags&4)==0);
+    // Bassert((flags&4)==0); // What is so bad about this flag?
 
     if (/*(unsigned)dapalid >= MAXBASEPALS ||*/ basepaltable[dapalid] == NULL)
         dapalid = 0;
@@ -815,7 +803,9 @@ void videoFadePalette(uint8_t r, uint8_t g, uint8_t b, uint8_t offset)
     uint32_t newpalettesum = XXH32((uint8_t *) curpalettefaded, sizeof(curpalettefaded), sizeof(curpalettefaded));
 
     if (newpalettesum != lastpalettesum || newpalettesum != g_lastpalettesum)
+    {
         videoUpdatePalette(0, 256);
+    }
 
     g_lastpalettesum = lastpalettesum = newpalettesum;
 }

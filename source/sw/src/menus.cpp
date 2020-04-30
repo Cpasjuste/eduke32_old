@@ -45,12 +45,13 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "function.h"
 #include "gamedefs.h"
 #include "config.h"
-#include "net.h"
+#include "network.h"
 #include "fx_man.h"
 #include "music.h"
 #include "text.h"
 
 #include "colormap.h"
+#include "config.h"
 
 //#define PLOCK_VERSION TRUE
 
@@ -58,8 +59,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 short TimeLimitTable[9] = {0,3,5,10,15,20,30,45,60};
 
 short QuickLoadNum = -1;
-char QuickLoadDescrDialog[32];
-SWBOOL QuickSaveMode = FALSE;
+char QuickLoadDescrDialog[128];
 SWBOOL SavePrompt = FALSE;
 extern SWBOOL InMenuLevel, LoadGameOutsideMoveLoop, LoadGameFromDemo;
 extern uint8_t RedBookSong[40];
@@ -122,7 +122,6 @@ short buttonsettings[btn_max];
 // EXTERNS ////////////////////////////
 #define XDIM    320
 #define YDIM    200
-extern char DefaultPalette[];
 extern SWBOOL QuitFlag;
 
 void TerminateGame(void);
@@ -171,15 +170,14 @@ static SWBOOL ApplyModeSettings(void)
 
     if (lastx == newx && lasty == newy && lastbpp == newbpp && lastfs == newfs) return FALSE;
 
-    if (setgamemode(newfs, newx, newy, newbpp))
-        setgamemode(lastfs, lastx, lasty, lastbpp);
+    if (videoSetGameMode(newfs, newx, newy, newbpp, upscalefactor))
+        videoSetGameMode(lastfs, lastx, lasty, lastbpp, upscalefactor);
     else
     {
-        extern int32_t ScreenMode,ScreenWidth,ScreenHeight,ScreenBPP; // Because I'm too lazy to include config.h
-        ScreenMode = newfs;
-        ScreenWidth = newx;
-        ScreenHeight = newy;
-        ScreenBPP = newbpp;
+        ud_setup.ScreenMode = newfs;
+        ud_setup.ScreenWidth = newx;
+        ud_setup.ScreenHeight = newy;
+        ud_setup.ScreenBPP = newbpp;
 
         SetupAspectRatio();
         SetRedrawScreen(Player + myconnectindex);
@@ -200,7 +198,9 @@ MenuItem sound_i[] =
 
     //{DefButton(btn_talking, 0, "Talking"), OPT_XS,            OPT_LINE(4), 1, m_defshade, 0, NULL, MNU_FxCheck, NULL},
     {DefButton(btn_ambience, 0, "Ambience"), OPT_XS,          OPT_LINE(4), 1, m_defshade, 0, NULL, MNU_FxCheck, NULL},
+#ifdef ASS_REVERSESTEREO
     {DefButton(btn_flipstereo, 0, "Flip Stereo"), OPT_XS,     OPT_LINE(5), 1, m_defshade, 0, NULL, MNU_FxCheck, NULL},
+#endif
     //{DefButton(btn_playcd, 0, "Play CD"), OPT_XS,         OPT_LINE(6), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefNone}
 };
@@ -392,6 +392,8 @@ MenuItem options_i[] =
     {DefButton(btn_auto_aim, 0, "Auto-Aiming"), OPT_XS,          OPT_LINE(9), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefButton(btn_voxels, 0, "Voxel Sprites"), OPT_XS,          OPT_LINE(10), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefButton(btn_stats, 0, "Level Stats"), OPT_XS,             OPT_LINE(11), 1, m_defshade, 0, NULL, MNU_StatCheck, NULL},
+    {DefButton(btn_darts, 0, "Use Darts"), OPT_XS,               OPT_LINE(12), 1, m_defshade, 0, NULL, NULL, NULL},
+    {DefButton(btn_autoswitch, 0, "Equip Pickups"), OPT_XS,      OPT_LINE(13), 1, m_defshade, 0, NULL, NULL, NULL},
     {DefNone}
 };
 
@@ -515,7 +517,7 @@ MenuGroup LoadGameGroup = {100, 5, "^Load Game", load_i, pic_loadgame, 0, m_defs
 #define MAIN_XSTART 55
 #define MAIN_LINE(line) (MAIN_YSTART + (MAIN_YOFF * line))
 
-#define MAIN_MENU_COOL_STUFF "^Cool Stuff"
+#define MAIN_MENU_COOL_STUFF "^Credits"
 #define MAIN_MENU_HOW_TO_ORDER "^How to Order"
 
 MenuItem main_i[] =
@@ -539,7 +541,7 @@ MenuGroup   *menuarray[MaxLayers], *currentmenu;
 SWBOOL UsingMenus = FALSE;
 
 #define MAXDIALOG       2       // Maximum number of dialog strings allowed
-char *dialog[MAXDIALOG];
+const char *dialog[MAXDIALOG];
 
 // Global menu setting values ////////////////////////////////////////////////////////////////////
 // Mouse slider vars
@@ -562,9 +564,7 @@ MenuItem_p cust_callback_item;
 
 // Prototypes ///////////////////////////////////////////////////////////////////////////////////
 
-static void MNU_ClearDialog(void);
 static SWBOOL MNU_Dialog(void);
-void LoadSaveMsg(char *msg);
 static void MNU_ItemPreProcess(MenuGroup *group);
 static void MNU_SelectItem(MenuGroup *group, short index, SWBOOL draw);
 static void MNU_PushItem(MenuItem *item, SWBOOL draw);
@@ -588,10 +588,9 @@ MNU_Ten(void)
 */
 // CTW REMOVED END
 SWBOOL
-MNU_DoEpisodeSelect(UserCall call, MenuItem *item)
+MNU_DoEpisodeSelect(UserCall UNUSED(call), MenuItem *UNUSED(item))
 {
     short w,h;
-    char TempString[80];
     char *extra_text;
 
     extra_text = EpisodeSubtitles[0];
@@ -605,13 +604,13 @@ MNU_DoEpisodeSelect(UserCall call, MenuItem *item)
 }
 
 SWBOOL
-MNU_DoParentalPassword(UserCall call, MenuItem_p item)
+MNU_DoParentalPassword(UserCall UNUSED(call), MenuItem_p UNUSED(item))
 {
     short w,h;
     signed char MNU_InputString(char *, short);
     static SWBOOL cur_show;
     char TempString[80];
-    char *extra_text;
+    const char *extra_text;
 
 
     extra_text = "This mode should remove most of the";
@@ -714,12 +713,12 @@ MNU_DoParentalPassword(UserCall call, MenuItem_p item)
         if (cur_show)
         {
             MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString,1,16);
-            rotatesprite((TEXT_XCENTER(w)+w+7)<<16,(MESSAGE_LINE+3)<<16,64<<9,0,COINCURSOR+((totalclock>>3)%7),0,0,MenuDrawFlags,0,0,xdim-1,ydim-1);
+            rotatesprite((TEXT_XCENTER(w)+w+7)<<16,(MESSAGE_LINE+3)<<16,64<<9,0,COINCURSOR+(((int32_t) totalclock>>3)%7),0,0,MenuDrawFlags,0,0,xdim-1,ydim-1);
         }
         else
         {
             MNU_DrawString(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString,1,16);
-            rotatesprite((TEXT_XCENTER(w)+w+7)<<16,(MESSAGE_LINE+3)<<16,64<<9,0,COINCURSOR+((totalclock>>3)%7),0,0,MenuDrawFlags,0,0,xdim-1,ydim-1);
+            rotatesprite((TEXT_XCENTER(w)+w+7)<<16,(MESSAGE_LINE+3)<<16,64<<9,0,COINCURSOR+(((int32_t) totalclock>>3)%7),0,0,MenuDrawFlags,0,0,xdim-1,ydim-1);
         }
 
     }
@@ -742,8 +741,8 @@ MNU_ParentalCustom(void)
         // clear keyboard buffer
         while (KB_KeyWaiting())
         {
-            if (KB_Getch() == 0)
-                KB_Getch();
+            if (KB_GetCh() == 0)
+                KB_GetCh();
         }
 
         // toggle edit mode
@@ -776,7 +775,7 @@ SWBOOL MNU_KeySetupCustom(UserCall call, MenuItem *item)
 
     {
         short w, h = 0;
-        char *s = "Keys Setup";
+        const char *s = "Keys Setup";
         rotatesprite(10 << 16, (5-3) << 16, MZ, 0, 2427,
                      m_defshade, 0, MenuDrawFlags|ROTATE_SPRITE_CORNER, 0, 0, xdim - 1, ydim - 1);
         MNU_MeasureStringLarge(s, &w, &h);
@@ -786,21 +785,22 @@ SWBOOL MNU_KeySetupCustom(UserCall call, MenuItem *item)
     if (currentmode)
     {
         // customising a key
-        char *strs[] = { "Press the key to assign to", "\"%s\" %s", "or ESCAPE to cancel." };
-        char *col[2] = { "(primary)", "(secondary)" };
+        const char *strs[] = { "Press the key to assign to", "\"%s\" %s", "or ESCAPE to cancel." };
+        const char *col[2] = { "(primary)", "(secondary)" };
         short w, h = 8;
         int i, j, y;
+        int32_t sc;
 
         if (KEY_PRESSED(KEYSC_ESC))
         {
             KB_ClearKeyDown(sc_Escape);
             currentmode = 0;
         }
-        else if (KB_GetLastScanCode() > 0)
+        else if ((sc = KB_GetLastScanCode()) != sc_None)
         {
-            KB_ClearKeyDown(KB_GetLastScanCode());
+            KB_ClearKeyDown(sc);
 
-            KeyboardKeys[currentkey][currentcol] = KB_GetLastScanCode();
+            KeyboardKeys[currentkey][currentcol] = sc;
             if (currentkey != gamefunc_Show_Console)
             {
                 CONTROL_MapKey(currentkey,
@@ -809,7 +809,7 @@ SWBOOL MNU_KeySetupCustom(UserCall call, MenuItem *item)
             }
             else
             {
-                OSD_CaptureKey(KB_GetLastScanCode());
+                OSD_CaptureKey(sc);
             }
 
             currentmode = 0;
@@ -836,7 +836,7 @@ SWBOOL MNU_KeySetupCustom(UserCall call, MenuItem *item)
 #define PGSIZ 14
         int topitem = 0, botitem = NUMGAMEFUNCTIONS;
         int i,j;
-        char *morestr = "More...";
+        const char *morestr = "More...";
         const char *p;
 
         UserInput inpt = {FALSE,FALSE,dir_None};
@@ -926,16 +926,16 @@ SWBOOL MNU_KeySetupCustom(UserCall call, MenuItem *item)
             j = OPT_LINE(0)+(i-topitem)*8;
             MNU_DrawSmallString(OPT_XS, j, ds, (i==currentkey) ? 0 : 12, 16);
 
-            p = getkeyname(KeyboardKeys[i][0]);
-            if (!p || KeyboardKeys[i][0]==0xff) p = "  -";
-            MNU_DrawSmallString(OPT_XSIDE, j, (char *)p, (i==currentkey) ? -5 : 12,
+            p = keyGetName(KeyboardKeys[i][0]);
+            if (!p || !KeyboardKeys[i][0] || KeyboardKeys[i][0]==0xff) p = "  -";
+            MNU_DrawSmallString(OPT_XSIDE, j, p, (i==currentkey) ? -5 : 12,
                                 (i==currentkey && currentcol==0) ? 14 : 16);
 
             if (i == gamefunc_Show_Console) continue;
 
-            p = getkeyname(KeyboardKeys[i][1]);
-            if (!p || KeyboardKeys[i][1]==0xff) p = "  -";
-            MNU_DrawSmallString(OPT_XSIDE + 4*14, j, (char *)p, (i==currentkey) ? -5 : 12,
+            p = keyGetName(KeyboardKeys[i][1]);
+            if (!p || !KeyboardKeys[i][1] || KeyboardKeys[i][1]==0xff) p = "  -";
+            MNU_DrawSmallString(OPT_XSIDE + 4*14, j, p, (i==currentkey) ? -5 : 12,
                                 (i==currentkey && currentcol==1) ? 14 : 16);
         }
 
@@ -958,7 +958,7 @@ static int MNU_SelectButtonFunction(const char *buttonname, int *currentfunc)
 {
     const int PGSIZ = 9;
     const char *strs[] = { "Select the function to assign to", "%s", "or ESCAPE to cancel." };
-    int topitem = 0, botitem = NUMGAMEFUNCTIONS-1;
+    int topitem = 0, botitem = NUMGAMEFUNCTIONS;
     int i, j, y;
     short w, h=0;
     int returnval = 0;
@@ -978,13 +978,13 @@ static int MNU_SelectButtonFunction(const char *buttonname, int *currentfunc)
     }
     else if (KB_KeyPressed(sc_End))
     {
-        *currentfunc = NUMGAMEFUNCTIONS-1;   // -1 because the last one is the console and the top is 'none'
+        *currentfunc = NUMGAMEFUNCTIONS;
         KB_ClearKeyDown(sc_End);
     }
     else if (KB_KeyPressed(sc_PgDn))
     {
         *currentfunc += PGSIZ;
-        if (*currentfunc >= NUMGAMEFUNCTIONS) *currentfunc = NUMGAMEFUNCTIONS-1;
+        if (*currentfunc > NUMGAMEFUNCTIONS) *currentfunc = NUMGAMEFUNCTIONS;
         KB_ClearKeyDown(sc_PgDn);
     }
     else if (KB_KeyPressed(sc_PgUp))
@@ -998,11 +998,11 @@ static int MNU_SelectButtonFunction(const char *buttonname, int *currentfunc)
         returnval = 1;
     }
     else if (inpt.dir == dir_North) *currentfunc = max(0, *currentfunc-1);
-    else if (inpt.dir == dir_South) *currentfunc = min(NUMGAMEFUNCTIONS-1, *currentfunc+1);
+    else if (inpt.dir == dir_South) *currentfunc = min(int(NUMGAMEFUNCTIONS), *currentfunc+1);
 
     CONTROL_ClearUserInput(&inpt);
 
-    if (NUMGAMEFUNCTIONS-1 > PGSIZ)
+    if (NUMGAMEFUNCTIONS > PGSIZ)
     {
         topitem = *currentfunc - PGSIZ/2;
         botitem = topitem + PGSIZ;
@@ -1012,9 +1012,9 @@ static int MNU_SelectButtonFunction(const char *buttonname, int *currentfunc)
             botitem += -topitem;
             topitem = 0;
         }
-        else if (botitem >= NUMGAMEFUNCTIONS)
+        else if (botitem > NUMGAMEFUNCTIONS)
         {
-            botitem = NUMGAMEFUNCTIONS-1;
+            botitem = NUMGAMEFUNCTIONS;
             topitem = botitem - PGSIZ;
         }
     }
@@ -1057,7 +1057,7 @@ static int MNU_SelectButtonFunction(const char *buttonname, int *currentfunc)
         MNU_MeasureSmallString(morestr,&dx,&dy);
         if (topitem > 0)
             MNU_DrawSmallString(XDIM - OPT_XS - dx, OPT_LINE(4), morestr, 8,16);
-        if (botitem < NUMGAMEFUNCTIONS-1)
+        if (botitem < NUMGAMEFUNCTIONS)
             MNU_DrawSmallString(XDIM - OPT_XS - dx, OPT_LINE(4)+PGSIZ*8, morestr, 8,16);
     }
 
@@ -1254,7 +1254,7 @@ static SWBOOL MNU_SetAdvancedMouseFunctions(MenuItem_p item)
 
 static MenuItem_p joystick_button_item = NULL;
 
-static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p mitem)
+static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p UNUSED(mitem))
 {
     MenuItem_p item;
     MenuItem templayer = { DefLayer(0, JoystickButtonNames[0], &joybuttonsgroup), OPT_XS, OPT_LINE(0), 1, m_defshade, 0, NULL, NULL, MNU_JoystickButtonPostProcess };
@@ -1275,13 +1275,13 @@ static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p mitem)
     joybuttonssetupgroup.items = joybuttons_i[0];
     item = &joybuttons_i[0][0];
 
-    for (button = 0; button < joynumbuttons * 2 + (joynumhats > 0) * 4; )
+    for (button = 0; button < joystick.numButtons * 2 + (joystick.numHats > 0) * 4; )
     {
-        if (button < joynumbuttons * 2)
+        if (button < joystick.numButtons * 2)
         {
             int dbutton = button / 2;
 
-            strcpy(JoystickButtonNames[dbutton], getjoyname(1, dbutton));
+            strcpy(JoystickButtonNames[dbutton], joyGetName(1, dbutton));
 
             templayer.text = JoystickButtonNames[dbutton];
             templayer.y = OPT_LINE(pageitem);
@@ -1298,7 +1298,7 @@ static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p mitem)
             pageitem++;
 
             strcpy(JoystickButtonNames[dbutton + MAXJOYBUTTONS], "Double ");
-            strcat(JoystickButtonNames[dbutton + MAXJOYBUTTONS], getjoyname(1, dbutton));
+            strcat(JoystickButtonNames[dbutton + MAXJOYBUTTONS], joyGetName(1, dbutton));
 
             templayer.text = JoystickButtonNames[dbutton + MAXJOYBUTTONS];
             templayer.y = OPT_LINE(pageitem);
@@ -1318,10 +1318,10 @@ static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p mitem)
         }
         else
         {
-            int dir = button - joynumbuttons * 2;
-            int dbutton = joynumbuttons + dir;
+            int dir = button - joystick.numButtons * 2;
+            int dbutton = joystick.numButtons + dir;
 
-            strcpy(JoystickButtonNames[dbutton], getjoyname(2, 0));
+            strcpy(JoystickButtonNames[dbutton], joyGetName(2, 0));
             strcat(JoystickButtonNames[dbutton], hatdirs[dir]);
 
             templayer.text = JoystickButtonNames[dbutton];
@@ -1340,11 +1340,11 @@ static SWBOOL MNU_JoystickButtonsInitialise(MenuItem_p mitem)
             button++;
         }
 
-        if (pageitem == JOYSTICKITEMSPERPAGE || button == joynumbuttons * 2 + (joynumhats > 0) * 4)
+        if (pageitem == JOYSTICKITEMSPERPAGE || button == joystick.numButtons * 2 + (joystick.numHats > 0) * 4)
         {
             // next page
             sprintf(JoystickButtonPageName[page], "Page %d / %d", page+1,
-                    ((joynumbuttons * 2 + (joynumhats > 0) * 4) / JOYSTICKITEMSPERPAGE) + 1);
+                    ((joystick.numButtons * 2 + (joystick.numHats > 0) * 4) / JOYSTICKITEMSPERPAGE) + 1);
 
             temppagename.text = JoystickButtonPageName[page];
             memcpy(item, &temppagename, sizeof(MenuItem));
@@ -1436,7 +1436,7 @@ static SWBOOL MNU_JoystickButtonSetupCustom(UserCall call, MenuItem *item)
 
 static SWBOOL MNU_JoystickButtonNextPage(void)
 {
-    JoystickButtonPage = (JoystickButtonPage + 1) % (((joynumbuttons * 2 + (joynumhats > 0) * 4) / JOYSTICKITEMSPERPAGE) + 1);
+    JoystickButtonPage = (JoystickButtonPage + 1) % (((joystick.numButtons * 2 + (joystick.numHats > 0) * 4) / JOYSTICKITEMSPERPAGE) + 1);
     joybuttonssetupgroup.items = &joybuttons_i[JoystickButtonPage][0];
     joybuttonssetupgroup.cursor = 0;
     MNU_ItemPreProcess(&joybuttonssetupgroup);
@@ -1479,19 +1479,19 @@ static SWBOOL MNU_SetJoystickButtonFunctions(MenuItem_p item)
 
 static MenuItem_p joystick_axis_item = NULL;
 
-static SWBOOL MNU_JoystickAxesInitialise(MenuItem_p mitem)
+static SWBOOL MNU_JoystickAxesInitialise(MenuItem_p UNUSED(mitem))
 {
     if (!CONTROL_JoyPresent)
     {
         return TRUE;
     }
-    if (JoystickAxisPage < 0 || JoystickAxisPage >= joynumaxes)
+    if (JoystickAxisPage < 0 || JoystickAxisPage >= joystick.numAxes)
     {
         JoystickAxisPage = 0;
     }
 
-    strcpy(JoystickAxisName, getjoyname(0, JoystickAxisPage));
-    sprintf(JoystickAxisPageName, "Page %d / %d", JoystickAxisPage+1, joynumaxes);
+    strcpy(JoystickAxisName, joyGetName(0, JoystickAxisPage));
+    sprintf(JoystickAxisPageName, "Page %d / %d", JoystickAxisPage+1, joystick.numAxes);
     slidersettings[sldr_joyaxisanalog] = MNU_ControlAxisOffset(JoystickAnalogAxes[JoystickAxisPage]);
     slidersettings[sldr_joyaxisscale] = JoystickAnalogScale[JoystickAxisPage] >> 13;
     slidersettings[sldr_joyaxisdead] = JoystickAnalogDead[JoystickAxisPage] >> 10;
@@ -1590,7 +1590,7 @@ static SWBOOL MNU_SetJoystickAxisFunctions(MenuItem_p item)
 SWBOOL
 MNU_OrderCustom(UserCall call, MenuItem *item)
 {
-    static signed char on_screen = 0,last_screen = 0;
+    static signed char on_screen = 0;
     UserInput order_input;
     static int limitmove=0;
     UserInput tst_input;
@@ -1602,31 +1602,28 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
 
     static short RegOrderScreen[] =
     {
-        5262,
-        5261,
-        4979,
+        // 5262,
+        // 5261,
         5111,
         5118,
+        4979,
         5113,
-        //5111,
-        //5118,
-        //4979,
-        //5261,
-        //5262
 
-        5114    // JBF: for my credits
+        5120, // 5114    // JBF: for my credits
+        5120,
     };
     static short SWOrderScreen[] =
     {
-        5262,
         5110,
         5112,
-        5113,
+        // 5262,
         5111,
         5118,
         4979,
+        5113,
 
-        5114    // JBF: for my credits
+        5120, // 5114    // JBF: for my credits
+        5120,
     };
     short *OrderScreen, OrderScreenSiz;
 
@@ -1655,9 +1652,9 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
     {
         DidOrderSound = TRUE;
         choose_snd = STD_RANDOM_RANGE(1000);
-        if (choose_snd > 500 && !FX_SoundActive(wanghandle))
+        if (choose_snd > 500 && !FX_SoundValidAndActive(wanghandle))
             wanghandle = PlaySound(DIGI_WANGORDER1, &zero, &zero, &zero, v3df_dontpan);
-        else if (!FX_SoundActive(wanghandle))
+        else if (!FX_SoundValidAndActive(wanghandle))
             wanghandle = PlaySound(DIGI_WANGORDER2, &zero, &zero, &zero, v3df_dontpan);
     }
 
@@ -1691,7 +1688,7 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
         }
         else
         {
-            if (labs(totalclock - limitmove) > 7)
+            if (labs((int32_t) totalclock - limitmove) > 7)
             {
                 order_input.button0 = order_input_buffered.button0;
                 order_input.button1 = order_input_buffered.button1;
@@ -1701,7 +1698,7 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
                 order_input_buffered.button1 = tst_input.button1;
                 order_input_buffered.dir = tst_input.dir;
 
-                limitmove = totalclock;
+                limitmove = (int32_t) totalclock;
             }
         }
     }
@@ -1756,49 +1753,72 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
         on_screen = 0;
 // CTW MODIFICATION END
 
-    rotatesprite(0,0,RS_SCALE,0,OrderScreen[on_screen],0,0,
+    int const shade = on_screen >= OrderScreenSiz-2 ? 8 : 0;
+    rotatesprite(0,0,RS_SCALE,0,OrderScreen[on_screen], shade, 0,
                  (ROTATE_SPRITE_CORNER|ROTATE_SPRITE_SCREEN_CLIP|ROTATE_SPRITE_NON_MASK|ROTATE_SPRITE_IGNORE_START_MOST),
                  0, 0, xdim-1, ydim-1);
 
-    if (on_screen == OrderScreenSiz-1)
+    if (on_screen >= OrderScreenSiz-2)
     {
         // Jonathon's credits page hack :-)
 
-        static char *jtitle = "^Port Credits";
-        static char *jtext[] =
+        static const char *jtitle = "^Port Credits";
+        static const char *text1[] =
         {
-            "*GAME AND ENGINE PORT",
+            "*Technical Director",
+            " Evan \"Hendricks266\" Ramos",
+            "*Developers",
+            " Richard \"TerminX\" Gobeille",
+            " Alex \"pogokeen\" Dawson",
+            "*Retired developers",
+            " Pierre-Loup \"Plagman\" Griffais",
+            " Philipp \"Helixhorned\" Kutin",
+            "*Special thanks to",
             " Jonathon \"JonoF\" Fowler",
-            "-",
-            "*\"POLYMOST\" 3D RENDERER",
-            "*NETWORKING, OTHER CODE",
+            "*Uses BUILD Engine technology by",
             " Ken \"Awesoken\" Silverman",
-            "-",
-            " Visit http://www.jonof.id.au/jfsw for the",
-            " source code, latest news, and updates of this port."
         };
-        static char *scroller[] =
+        static const char *text2[] =
         {
-            "This program is free software; you can redistribute it",
-            "and/or modify it under the terms of the GNU General",
-            "Public License as published by the Free Software",
-            "Foundation; either version 2 of the License, or (at your",
-            "option) any later version.",
-            "",
-            "This program is distributed in the hope that it will be",
-            "useful but WITHOUT ANY WARRANTY; without even the implied",
-            "warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR",
-            "PURPOSE. See the GNU General Public License (GPL.TXT) for",
-            "more details.",
-            "",
-            "",
-            "",
-            "",
+            "*Additional thanks to",
+            " Alexey \"Nuke.YKT\" Skrybykin",
+            " Jordon \"Striker\" Moss",
+            " Fox",
+            " NY00123",
+            " Barry \"sirlemonhead\" Duncan",
+            " Gennadii \"termit\" Potapov",
+            " Sergei Shubin",
+            " Par \"Parkar\" Karlsson", // "Pär \"Parkar\" Karlsson",
+            " Ben \"ProAsm\" Smit",
+            " Charlie Wiederhold",
+            "-",
+            " This program is distributed under the terms of the",
+            " GNU General Public License version 2 as published by the",
+            " Free Software Foundation. See gpl-2.0.txt for details.",
+            " BUILD engine technology available under license. See buildlic.txt.",
+            "-",
+            " Visit eduke32.com for news and updates"
+        };
+
+        const char ** jtext;
+        unsigned jtextsiz;
+
+        if (on_screen == OrderScreenSiz-2)
+        {
+            jtext = text1;
+            jtextsiz = SIZ(text1);
+        }
+        else
+        {
+            jtext = text2;
+            jtextsiz = SIZ(text2);
+        }
+
+#if 0
+        static const char *scroller[] =
+        {
             "Thanks to these people for their input and contributions:",
             "",
-            "Richard \"TerminX\" Gobeille,",
-            "Par \"Parkar\" Karlsson", // "Pär \"Parkar\" Karlsson",
-            "Ben \"ProAsm\" Smit",
             "",
             "and all those who submitted bug reports and ",
             "supported the project financially!",
@@ -1810,16 +1830,16 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
             "",
             ""
         };
-        const int numscrollerlines = SIZ(scroller);
+#endif
         short dimx, dimy;
-        int ycur = 54;
+        int ycur = 20;
         unsigned ji;
 
         dimy = 0; MNU_MeasureString(jtitle, &dimx, &dimy);
         MNU_DrawString(160-(dimx>>1), ycur, jtitle, 0, 0);
         ycur += dimy + 8;
 
-        for (ji = 0; ji < SIZ(jtext); ji++)
+        for (ji = 0; ji < jtextsiz; ji++)
         {
             switch (jtext[ji][0])
             {
@@ -1842,8 +1862,10 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
             }
         }
 
+#if 0
+        const int numscrollerlines = SIZ(scroller);
         int m,i;
-        for (m=0, i=(totalclock/104)%numscrollerlines; m<4; m++,i++)
+        for (m=0, i=((int32_t) totalclock/104)%numscrollerlines; m<4; m++,i++)
         {
             if (i == numscrollerlines)
                 i=0;
@@ -1851,6 +1873,7 @@ MNU_OrderCustom(UserCall call, MenuItem *item)
             MNU_MeasureSmallString(scroller[i], &dimx, &dimy);
             MNU_DrawSmallString(160-(dimx>>1), 154+(m*7), scroller[i], 0, 8);
         }
+#endif
     }
 
     //KB_ClearKeysDown();
@@ -1891,7 +1914,6 @@ ExitMenus(void)
 SWBOOL
 MNU_StartGame(void)
 {
-    PLAYERp pp = Player + screenpeek;
     int handle = 0;
     int zero = 0;
 
@@ -1944,7 +1966,6 @@ MNU_StartNetGame(void)
     // CTW REMOVED
     //extern int gTenActivated;
     // CTW REMOVED END
-    int pnum;
 
     // always assumed that a demo is playing
 
@@ -2029,7 +2050,6 @@ MNU_EpisodeCustom(void)
 SWBOOL
 MNU_QuitCustom(UserCall call, MenuItem_p item)
 {
-    int select;
     int ret;
     extern SWBOOL DrawScreen;
 
@@ -2074,10 +2094,7 @@ MNU_QuitCustom(UserCall call, MenuItem_p item)
 
     if (KB_KeyPressed(sc_Y) || KB_KeyPressed(sc_Enter) || mnu_input.button0)
     {
-        if (CommPlayers >= 2)
-            MultiPlayQuitFlag = TRUE;
-        else
-            QuitFlag = TRUE;
+        CON_Quit();
 
         ExitMenus();
     }
@@ -2090,7 +2107,6 @@ MNU_QuitCustom(UserCall call, MenuItem_p item)
 SWBOOL
 MNU_QuickLoadCustom(UserCall call, MenuItem_p item)
 {
-    int select;
     extern SWBOOL ReloadPrompt;
     int bak;
     PLAYERp pp = Player + myconnectindex;
@@ -2150,24 +2166,17 @@ MNU_QuickLoadCustom(UserCall call, MenuItem_p item)
         // Y pressed
         cust_callback = NULL;
 
-        KB_ClearKeysDown();
         LoadSaveMsg("Loading...");
 
-        PauseAction();
-
-        ReloadPrompt = FALSE;
-        if (LoadGame(QuickLoadNum) == -1)
+        if (DoQuickLoad() == FALSE)
         {
             ResumeAction();
             return FALSE;
         }
 
-        ready2send = 1;
-        LastSaveNum = -1;
-
-        // do a load game here
-        KB_ClearKeysDown();
         ExitMenus();
+
+        return TRUE;
     }
 
     KB_ClearKeysDown();
@@ -2202,7 +2211,7 @@ MNU_InitMenus(void)
             if (validbpps[i] == bpp)
                 slidersettings[sldr_videobpp] = i;
 
-        i = checkvideomode(&newx, &newy, bpp, fullscreen, 1);
+        i = videoCheckMode(&newx, &newy, bpp, fullscreen, 1);
         if (i != 0x7fffffff && i >= 0)
             for (i=0; i<numvalidresolutions; i++)
                 if (validresolutions[i].xdim == newx && validresolutions[i].ydim == newy)
@@ -2227,6 +2236,8 @@ MNU_InitMenus(void)
     buttonsettings[btn_playcd] = gs.PlayCD;
     buttonsettings[btn_flipstereo] = gs.FlipStereo;
     buttonsettings[btn_stats] = gs.Stats;
+    buttonsettings[btn_darts] = gs.Darts;
+    buttonsettings[btn_autoswitch] = gs.WeaponAutoSwitch;
 
     slidersettings[sldr_gametype] = gs.NetGameType;
     slidersettings[sldr_netlevel] = gs.NetLevel;
@@ -2552,12 +2563,12 @@ MNU_InputSmallString(char *name, short pix_width)
 
     while (KB_KeyWaiting())
     {
-        ch = KB_Getch();
+        ch = KB_GetCh();
 
         // skip any extended key
         if (ch == 0)
         {
-            ch = KB_Getch();
+            ch = KB_GetCh();
             if (ch == 104) // extended enter
                 ch = ascii_return;
             else
@@ -2583,8 +2594,12 @@ MNU_InputSmallString(char *name, short pix_width)
         MNU_MeasureSmallString(name, &w, &h);
         if (w < pix_width)
         {
-            if (strlen(name) < 256) // Dont let it go too far!
-                sprintf(name, "%s%c", name, ch);
+            size_t const namelen = strlen(name);
+            if (namelen < 256) // Dont let it go too far!
+            {
+                name[namelen] = ch;
+                name[namelen+1] = '\0';
+            }
         }
     }
 
@@ -2645,7 +2660,7 @@ MNU_InputString(char *name, short pix_width)
 
     while (KB_KeyWaiting())
     {
-        ch = KB_Getch();
+        ch = KB_GetCh();
 
         ////DSPRINTF(ds, "%c %d", ch, ch);
         //MONO_PRINT(ds);
@@ -2653,7 +2668,7 @@ MNU_InputString(char *name, short pix_width)
         // skip most extended keys
         if (ch == 0)
         {
-            ch = KB_Getch();
+            ch = KB_GetCh();
 
             ////DSPRINTF(ds, "extended key %c %d", ch, ch);
             //MONO_PRINT(ds);
@@ -2683,7 +2698,9 @@ MNU_InputString(char *name, short pix_width)
         MNU_MeasureString(name, &w, &h);
         if (w < pix_width)
         {
-            sprintf(name, "%s%c", name, ch);
+            size_t const namelen = strlen(name);
+            name[namelen] = ch;
+            name[namelen+1] = '\0';
         }
     }
 
@@ -2695,16 +2712,16 @@ MNU_InputString(char *name, short pix_width)
 #define SS_YSTART SD_YSTART
 #define SS_BORDER_SIZE 5L
 
-void LoadSaveMsg(char *msg)
+void LoadSaveMsg(const char *msg)
 {
     short w,h;
 
-    flushperms();
+    renderFlushPerms();
     DrawMenuLevelScreen();
-    strcpy((char *)ds, (char *)msg);
+    strcpy(ds, msg);
     MNU_MeasureString(ds, &w, &h);
     MNU_DrawString(TEXT_XCENTER(w), 170, ds, 1, 16);
-    nextpage();
+    videoNextPage();
 }
 
 
@@ -2787,7 +2804,7 @@ SWBOOL
 MNU_GetSaveCustom(void)
 {
     short save_num;
-    extern SWBOOL InMenuLevel, LoadGameOutsideMoveLoop;
+    extern SWBOOL InMenuLevel;
 
     save_num = currentmenu->cursor;
 
@@ -2796,16 +2813,11 @@ MNU_GetSaveCustom(void)
 
     if (MenuInputMode)
     {
-        PauseAction();
-
         LoadSaveMsg("Saving...");
 
-        if (SaveGame(save_num) != -1)
+        if (DoQuickSave(save_num) == FALSE)
         {
-            QuickLoadNum = save_num;
-
             LoadGameGroup.cursor = save_num;
-            LastSaveNum = -1;
         }
 
         ResumeAction();
@@ -2821,8 +2833,8 @@ MNU_GetSaveCustom(void)
         // clear keyboard buffer
         while (KB_KeyWaiting())
         {
-            if (KB_Getch() == 0)
-                KB_Getch();
+            if (KB_GetCh() == 0)
+                KB_GetCh();
         }
 
         // toggle edit mode
@@ -2863,8 +2875,7 @@ MNU_LoadSaveMove(UserCall call, MenuItem_p item)
 {
     short i;
     short game_num;
-    short tile;
-    static short SaveGameEpisode, SaveGameLevel, SaveGameSkill;
+    static short SaveGameLevel, SaveGameSkill;
     SWBOOL GotInput = FALSE;
 
     if (!UsingMenus)
@@ -2889,15 +2900,6 @@ MNU_LoadSaveMove(UserCall call, MenuItem_p item)
 
         sprintf(SaveGameInfo1, "Level %d, Skill %d", SaveGameLevel, SaveGameSkill+1);
         SaveGameInfo2[0] = 0;
-    }
-
-    if (QuickSaveMode)
-    {
-        QuickSaveMode = FALSE;
-        MenuInputMode = TRUE;
-        strcpy(BackupSaveGameDescr, SaveGameDescr[game_num]);
-        KB_ClearKeysDown();
-        KB_FlushKeyboardQueue();
     }
 
     LastSaveNum = game_num;
@@ -2968,11 +2970,10 @@ MNU_LoadSaveMove(UserCall call, MenuItem_p item)
 }
 
 SWBOOL
-MNU_LoadSaveDraw(UserCall call, MenuItem_p item)
+MNU_LoadSaveDraw(UserCall UNUSED(call), MenuItem_p UNUSED(item))
 {
     short i;
     short game_num;
-    short tile;
 
     game_num = currentmenu->cursor;
 
@@ -2985,10 +2986,10 @@ MNU_LoadSaveDraw(UserCall call, MenuItem_p item)
         if (i == game_num && MenuInputMode && !SavePrompt)
         {
             static SWBOOL cur_show;
-            char tmp[sizeof(SaveGameDescr[0])];
+            char tmp[sizeof(SaveGameDescr[0])*2];
 
             //cur_show ^= 1;
-            cur_show = (totalclock & 32);
+            cur_show = ((int32_t) totalclock & 32);
             if (cur_show)
             {
                 // add a cursor to the end
@@ -3058,7 +3059,7 @@ MNU_CheckUserMap(MenuItem *item)
 SWBOOL
 MNU_ShareWareMessage(MenuItem *item)
 {
-    char *extra_text;
+    const char *extra_text;
     short w,h;
 
     if (SW_SHAREWARE)
@@ -3259,11 +3260,8 @@ MNU_JoystickCheck(MenuItem *item)
 static SWBOOL
 MNU_TryMusicInit(void)
 {
-    if (PlaySong(0, RedBookSong[Level], TRUE, FALSE))
-    {
-        if (currentmenu->cursor == 0)
-            MNU_MusicCheck(&currentmenu->items[currentmenu->cursor+1]);
-    }
+    if (currentmenu->cursor == 0)
+        MNU_MusicCheck(&currentmenu->items[currentmenu->cursor+1]);
 
     return TRUE;
 }
@@ -3271,29 +3269,13 @@ MNU_TryMusicInit(void)
 SWBOOL
 MNU_MusicCheck(MenuItem *item)
 {
-    if (SW_SHAREWARE)
+    if (!MusicToggle || !MusicInitialized)
     {
-        if (MusicDevice < 0 || !MusicInitialized)
-        {
-            SET(item->flags, mf_disabled);
-        }
-        else
-        {
-            RESET(item->flags, mf_disabled);
-        }
+        SET(item->flags, mf_disabled);
     }
     else
     {
-        // Redbook audio stuff
-        //JBF
-        //if (!cdvalid)
-        //    {
-        //    SET(item->flags, mf_disabled); // Just don't let CD Redbook ever be invalid!
-        //    }
-        //else
-        {
-            RESET(item->flags, mf_disabled);
-        }
+        RESET(item->flags, mf_disabled);
     }
 
     return TRUE;
@@ -3302,7 +3284,7 @@ MNU_MusicCheck(MenuItem *item)
 SWBOOL
 MNU_FxCheck(MenuItem *item)
 {
-    if (FXDevice < 0 || !FxInitialized)
+    if (!FXToggle || !FxInitialized)
     {
         SET(item->flags, mf_disabled);
     }
@@ -3317,7 +3299,7 @@ MNU_FxCheck(MenuItem *item)
 SWBOOL
 MNU_MusicFxCheck(MenuItem *item)
 {
-    if (FXDevice < 0 && MusicDevice < 0)
+    if (!FXToggle && !MusicToggle)
     {
         SET(item->flags, mf_disabled);
     }
@@ -3340,11 +3322,11 @@ MNU_DoButton(MenuItem_p item, SWBOOL draw)
     int last_value;
     short shade = MENU_SHADE_DEFAULT;
     extern char LevelSong[];
-    char *extra_text = NULL;
-    PLAYERp pp = &Player[myconnectindex];
+    const char *extra_text = NULL;
+//    PLAYERp pp = &Player[myconnectindex];
     int button_x,zero=0;
     int handle=0;
-    extern SWBOOL MusicInitialized,FxInitialized;
+    extern SWBOOL FxInitialized;
 
     button_x = OPT_XSIDE;
 
@@ -3368,6 +3350,12 @@ MNU_DoButton(MenuItem_p item, SWBOOL draw)
             break;
         case btn_stats:
             gs.Stats = state = buttonsettings[item->button];
+            break;
+        case btn_darts:
+            gs.Darts = state = buttonsettings[item->button];
+            break;
+        case btn_autoswitch:
+            gs.WeaponAutoSwitch = state = buttonsettings[item->button];
             break;
         case btn_markers:
             gs.NetSpawnMarkers = state = buttonsettings[item->button];
@@ -3479,8 +3467,10 @@ MNU_DoButton(MenuItem_p item, SWBOOL draw)
         case btn_flipstereo:
             last_value = gs.FlipStereo;
             gs.FlipStereo = state = buttonsettings[item->button];
+#ifdef ASS_REVERSESTEREO
             if (gs.FlipStereo != last_value)
-                FlipStereo();
+                FX_SetReverseStereo(gs.FlipStereo);
+#endif
             break;
         case btn_shadows:
             gs.Shadows = state = buttonsettings[item->button];
@@ -3606,9 +3596,9 @@ MNU_DoButton(MenuItem_p item, SWBOOL draw)
 }
 
 //char *gametype[] = {"War [Respawn]","Cooperative","War [No Respawn]"};
-char *gametype[] = {"WangBang (spawn)","WangBang (no spawn)","Cooperative"};
-char *playercolors[] = {"Brown","Gray","Purple","Red","Yellow","Olive","Green","Blue"};
-char *monsterskills[] = {"No Monsters","Easy","Normal","Hard","Insane!"};
+const char *gametype[] = {"WangBang (spawn)","WangBang (no spawn)","Cooperative"};
+const char *playercolors[] = {"Brown","Gray","Purple","Red","Yellow","Olive","Green","Blue"};
+const char *monsterskills[] = {"No Monsters","Easy","Normal","Hard","Insane!"};
 
 void
 MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
@@ -3616,7 +3606,7 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
     short offset, i, barwidth;
     int x, y, knobx;
     short shade = MENU_SHADE_DEFAULT;
-    char *extra_text=NULL;
+    const char *extra_text=NULL;
     char tmp_text[256];
 
     memset(tmp_text,0,256);
@@ -3636,13 +3626,13 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_MOUSESENSEMAX-1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_MOUSESENSEMAX-1));
 
         slidersettings[sldr_mouse] = offset;
 
         gs.MouseSpeed = offset * (MOUSE_SENS_MAX_VALUE/SLDR_MOUSESENSEMAX);
-        CONTROL_SetMouseSensitivity(gs.MouseSpeed);
+        CONTROL_MouseSensitivity = float(gs.MouseSpeed) * (1.f/8192.f); // fix magic scale factor
         break;
 
     case sldr_sndfxvolume:
@@ -3652,8 +3642,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_SNDFXVOLMAX-1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_SNDFXVOLMAX-1));
 
         slidersettings[sldr_sndfxvolume] = offset;
         gs.SoundVolume = FX_MIN + (offset * VOL_MUL);
@@ -3666,8 +3656,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_MUSICVOLMAX-1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_MUSICVOLMAX-1));
 
         slidersettings[sldr_musicvolume] = offset;
         gs.MusicVolume = MUSIC_MIN + (offset * VOL_MUL);
@@ -3689,8 +3679,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         ////DSPRINTF(ds,"BorderNum %d",gs.BorderNum);
         //MONO_PRINT(ds);
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_SCRSIZEMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_SCRSIZEMAX - 1));
 
         bnum = offset;
 
@@ -3712,8 +3702,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_BRIGHTNESSMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_BRIGHTNESSMAX - 1));
         slidersettings[sldr_brightness] = offset;
 
         if (gs.Brightness != offset)
@@ -3730,8 +3720,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_BORDERTILEMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_BORDERTILEMAX - 1));
         slidersettings[sldr_bordertile] = offset;
 
         if (gs.BorderTile != offset)
@@ -3749,8 +3739,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_GAMETYPEMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_GAMETYPEMAX - 1));
         slidersettings[sldr_gametype] = offset;
 
         extra_text = gametype[offset];
@@ -3767,8 +3757,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_NETLEVELMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_NETLEVELMAX - 1));
         slidersettings[sldr_netlevel] = offset;
 
         // Show the currently selected level on next line
@@ -3786,8 +3776,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_MONSTERSMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_MONSTERSMAX - 1));
         slidersettings[sldr_monsters] = offset;
 
         extra_text = monsterskills[offset];
@@ -3802,8 +3792,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_KILLLIMITMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_KILLLIMITMAX - 1));
         slidersettings[sldr_killlimit] = offset;
 
         if (offset == 0)
@@ -3826,8 +3816,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_TIMELIMITMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_TIMELIMITMAX - 1));
         slidersettings[sldr_timelimit] = offset;
 
         if (offset == 0)
@@ -3850,8 +3840,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, SLDR_PLAYERCOLORMAX - 1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(SLDR_PLAYERCOLORMAX - 1));
         slidersettings[sldr_playercolor] = offset;
 
         extra_text = playercolors[offset];
@@ -3913,8 +3903,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, barwidth-1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(barwidth-1));
 
         if (slidersettings[item->slider] != offset)
         {
@@ -3934,8 +3924,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, barwidth-1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(barwidth-1));
 
         if (slidersettings[item->slider] != offset)
         {
@@ -3958,8 +3948,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, barwidth-1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(barwidth-1));
 
         if (slidersettings[item->slider] != offset)
         {
@@ -3983,8 +3973,8 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
         if (TEST(item->flags, mf_disabled))
             break;
 
-        offset = max(offset, 0);
-        offset = min(offset, barwidth-1);
+        offset = max(offset, short(0));
+        offset = min(offset, short(barwidth-1));
 
         if (slidersettings[item->slider] != offset)
         {
@@ -3992,13 +3982,15 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
             if (item->slider == sldr_joyaxisdead)
             {
                 JoystickAnalogDead[JoystickAxisPage] = min((offset<<10), 32767);
-                CONTROL_SetJoyAxisDead(JoystickAxisPage, JoystickAnalogDead[JoystickAxisPage]);
+                //CONTROL_SetJoyAxisDead(JoystickAxisPage, JoystickAnalogDead[JoystickAxisPage]);
             }
             else
             {
                 JoystickAnalogSaturate[JoystickAxisPage] = min((offset<<10), 32767);
-                CONTROL_SetJoyAxisSaturate(JoystickAxisPage, JoystickAnalogSaturate[JoystickAxisPage]);
+                //CONTROL_SetJoyAxisSaturate(JoystickAxisPage, JoystickAnalogSaturate[JoystickAxisPage]);
             }
+
+            joySetDeadZone(JoystickAxisPage, JoystickAnalogDead[JoystickAxisPage], JoystickAnalogSaturate[JoystickAxisPage]); // [JM] !CHECKME!
         }
 
         sprintf(tmp_text, "%.2f%%", (float)(slidersettings[item->slider]<<10) / 32767.f);
@@ -4024,7 +4016,7 @@ MNU_DoSlider(short dir, MenuItem_p item, SWBOOL draw)
     knobx = x;
 
     // Draw the in between sections
-    for (i = 0; i < min(barwidth,MAX_SLDR_WIDTH); i++)
+    for (i = 0; i < min(barwidth, short(MAX_SLDR_WIDTH)); i++)
     {
         rotatesprite(x << 16, y << 16, MZ, 0, pic_slidebar, shade, 0, MenuDrawFlags, 0, 0, xdim - 1, ydim - 1);
         x += tilesiz[pic_slidebar].x;
@@ -4175,7 +4167,6 @@ void
 MNU_ItemPostProcess(MenuGroup *group)
 {
     MenuItem *item;
-    int zero = 0;
 
     if (!group->items)
         return;
@@ -4224,11 +4215,11 @@ static void
 MNU_UpLevel(void)
 {
     int zero = 0;
-    static int handle1=0;
+    static int handle1;
     // if run out of menus then EXIT
     if (!menuarrayptr)
     {
-        if (!FX_SoundActive(handle1))
+        if (!FX_SoundValidAndActive(handle1))
             handle1 = PlaySound(DIGI_STARCLINK,&zero,&zero,&zero,v3df_dontpan);
         ExitMenus();
         return;
@@ -4293,23 +4284,24 @@ MNU_DrawItemIcon(MenuItem *item)
     //void BorderRefreshClip(PLAYERp pp, short x, short y, short x2, short y2);
     int x = item->x, y = item->y;
     int scale = MZ;
-    short w,h;
+
+    int16_t cursorpic = tilesiz[pic_yinyang].x == 0 && tilesiz[pic_shuriken1].x != 0 ? pic_shuriken1 : pic_yinyang;
 
     if (item->text)
     {
         scale /= 2;
-        x -= mulscale17(tilesiz[pic_yinyang].x,scale) + 2;
+        x -= mulscale17(tilesiz[cursorpic].x,scale) + 2;
         y += 4;
     }
     else
     {
         scale -= (1<<13);
-        x -= ((tilesiz[pic_yinyang].x) / 2) - 3;
+        x -= (tilesiz[cursorpic].x / 2) - 3;
         y += 8;
     }
 
     rotatesprite(x << 16, y << 16,
-                 scale, 0, pic_yinyang, item->shade, 0, MenuDrawFlags, 0, 0, xdim - 1, ydim - 1);
+                 scale, 0, cursorpic, item->shade, 0, MenuDrawFlags, 0, 0, xdim - 1, ydim - 1);
 
     SetRedrawScreen(&Player[myconnectindex]);
     //BorderRefreshClip(&Player[myconnectindex], x - 24, y - 24, x + 24, y + 24);
@@ -4321,9 +4313,6 @@ MNU_DrawItemIcon(MenuItem *item)
 static void
 MNU_DrawItem(MenuItem *item)
 {
-    char *ptr;
-    short px, py;
-
     MNU_ItemPostProcess(currentmenu);  // Put this in so things can be drawn on item select
 
     if (!item->pic)
@@ -4573,14 +4562,12 @@ SetupMenu(void)
 ////////////////////////////////////////////////
 #define MNU_SENSITIVITY 10              // The menu's mouse sensitivity, should be real low
 
-void MNU_DoMenu(CTLType type, PLAYERp pp)
+void MNU_DoMenu(CTLType UNUSED(type))
 {
     SWBOOL resetitem;
-    UCHAR key;
     int zero = 0;
-    static int handle2 = 0;
+    static int handle2;
     static int limitmove=0;
-    static SWBOOL select_held=FALSE;
 
     resetitem = TRUE;
 
@@ -4598,7 +4585,7 @@ void MNU_DoMenu(CTLType type, PLAYERp pp)
     mnu_input.dir = dir_None;
 
     // should not get input if you are editing a save game slot
-    if (totalclock < limitmove) limitmove = totalclock;
+    if (totalclock < limitmove) limitmove = (int32_t) totalclock;
     if (!MenuInputMode)
     {
         UserInput tst_input;
@@ -4643,10 +4630,10 @@ void MNU_DoMenu(CTLType type, PLAYERp pp)
             mnu_input.dir = mnu_input_buffered.dir;
 
             if (mnu_input.dir != dir_None)
-                if (!FX_SoundActive(handle2))
+                if (!FX_SoundValidAndActive(handle2))
                     handle2 = PlaySound(DIGI_STAR,&zero,&zero,&zero,v3df_dontpan);
 
-            limitmove = totalclock;
+            limitmove = (int32_t) totalclock;
             mnu_input_buffered.dir = dir_None;
         }
     }
@@ -4663,8 +4650,8 @@ void MNU_DoMenu(CTLType type, PLAYERp pp)
     }
     else if (mnu_input.button0)
     {
-        static int handle5=0;
-        if (!FX_SoundActive(handle5))
+        static int handle5;
+        if (!FX_SoundValidAndActive(handle5))
             handle5 = PlaySound(DIGI_SWORDSWOOSH,&zero,&zero,&zero,v3df_dontpan);
         KB_ClearKeysDown();
         MNU_DoItem();
@@ -4684,17 +4671,17 @@ void MNU_DoMenu(CTLType type, PLAYERp pp)
     }
     else if (mnu_input.button1 || BUTTON(gamefunc_Show_Menu))
     {
-        static int handle3=0;
+        static int handle3;
         CONTROL_ClearButton(gamefunc_Show_Menu);
-        if (!FX_SoundActive(handle3))
+        if (!FX_SoundValidAndActive(handle3))
             handle3 = PlaySound(DIGI_SWORDSWOOSH,&zero,&zero,&zero,v3df_dontpan);
         MNU_UpLevel();
         resetitem = TRUE;
     }
     else if (MNU_DoHotkey())
     {
-        static int handle4=0;
-        if (!FX_SoundActive(handle4))
+        static int handle4;
+        if (!FX_SoundValidAndActive(handle4))
             handle4 = PlaySound(DIGI_STAR,&zero,&zero,&zero,v3df_dontpan);
         resetitem = TRUE;
         mnu_input_buffered.button0 = mnu_input_buffered.button1 = FALSE;
@@ -4720,12 +4707,10 @@ void MNU_DoMenu(CTLType type, PLAYERp pp)
 void
 MNU_CheckForMenus(void)
 {
-    extern SWBOOL GamePaused;
-
     if (UsingMenus)
     {
         //if (MoveSkip2 == 0)
-        MNU_DoMenu(ct_mainmenu, Player + myconnectindex);
+        MNU_DoMenu(ct_mainmenu);
     }
     else
     {
@@ -4736,7 +4721,7 @@ MNU_CheckForMenus(void)
             KB_ClearKeysDown();
             // setup sliders/buttons
             MNU_InitMenus();
-            MNU_DoMenu(ct_mainmenu, Player + myconnectindex);
+            MNU_DoMenu(ct_mainmenu);
             pMenuClearTextLine(Player + myconnectindex);
             PauseGame();
         }
@@ -4749,7 +4734,7 @@ MNU_CheckForMenusAnyKey(void)
     if (UsingMenus)
     {
         //if (MoveSkip2 == 0)
-        MNU_DoMenu(ct_mainmenu, Player + myconnectindex);
+        MNU_DoMenu(ct_mainmenu);
     }
     else
     {
@@ -4758,7 +4743,7 @@ MNU_CheckForMenusAnyKey(void)
             ResetKeys();
             KB_ClearKeysDown();
             MNU_InitMenus();
-            MNU_DoMenu(ct_mainmenu, Player + myconnectindex);
+            MNU_DoMenu(ct_mainmenu);
             pMenuClearTextLine(Player + myconnectindex);
         }
     }
@@ -4873,9 +4858,9 @@ Fade_Timer(int clicks)
 //        unsigned int now;
     int now;
 
-    now = totalclock;
+    now = (int32_t) totalclock;
 
-    while (abs(totalclock - now) < clicks) handleevents();
+    while (abs((int32_t) totalclock - now) < clicks) handleevents();
 }
 
 void
@@ -4885,7 +4870,7 @@ FadeIn(unsigned char startcolor, unsigned int clicks)
     RGB_color color;
     unsigned char temp_pal[768], *palette;
 
-    if (getrendermode() >= 3) return;
+    if (videoGetRenderMode() >= REND_POLYMOST) return;
 
     palette = &palette_data[0][0];
 
@@ -4943,7 +4928,7 @@ FadeOut(unsigned char targetcolor, unsigned int clicks)
     RGB_color color;
     unsigned char temp_pal[768];
 
-    if (getrendermode() >= 3) return;
+    if (videoGetRenderMode() >= REND_POLYMOST) return;
 
     color.red = palette_data[targetcolor][0];
     color.green = palette_data[targetcolor][1];
@@ -5058,10 +5043,10 @@ SetFadeAmt(PLAYERp pp, short damage, unsigned char startcolor)
     // Reset the palette
     if (pp == Player + screenpeek)
     {
-        if (getrendermode() < 3)
+        if (videoGetRenderMode() < REND_POLYMOST)
             COVERsetbrightness(gs.Brightness,&palette_data[0][0]);
         else
-            setpalettefade(0,0,0,0);
+            videoFadePalette(0,0,0,0);
         if (pp->FadeAmt <= 0)
             GetPaletteFromVESA(&ppalette[screenpeek][0]);
     }
@@ -5151,8 +5136,8 @@ SetFadeAmt(PLAYERp pp, short damage, unsigned char startcolor)
     // Do initial palette set
     if (pp == Player + screenpeek)
     {
-        if (getrendermode() < 3) set_pal(pp->temp_pal);
-        else setpalettefade(color.red, color.green, color.blue, faderamp[min(31,max(0,32-abs(pp->FadeAmt)))]);
+        if (videoGetRenderMode() < REND_POLYMOST) set_pal(pp->temp_pal);
+        else videoFadePalette(color.red, color.green, color.blue, faderamp[min(31,max(0,32-abs(pp->FadeAmt)))]);
         if (damage < -1000)
             pp->FadeAmt = 1000;  // Don't call DoPaletteFlash for underwater stuff
     }
@@ -5165,7 +5150,7 @@ SetFadeAmt(PLAYERp pp, short damage, unsigned char startcolor)
 void
 DoPaletteFlash(PLAYERp pp)
 {
-    int i, palreg, tmpreg1 = 0, tmpreg2 = 0;
+    int palreg, tmpreg1 = 0, tmpreg2 = 0;
     unsigned char *pal_ptr = &ppalette[screenpeek][0];
 
 
@@ -5175,10 +5160,10 @@ DoPaletteFlash(PLAYERp pp)
         pp->StartColor = 0;
         if (pp == Player + screenpeek)
         {
-            if (getrendermode() < 3)
+            if (videoGetRenderMode() < REND_POLYMOST)
                 COVERsetbrightness(gs.Brightness,&palette_data[0][0]);
             else
-                setpalettefade(0,0,0,0);
+                videoFadePalette(0,0,0,0);
             memcpy(pp->temp_pal, palette_data, sizeof(palette_data));
             DoPlayerDivePalette(pp);  // Check Dive again
             DoPlayerNightVisionPalette(pp);  // Check Night Vision again
@@ -5214,10 +5199,10 @@ DoPaletteFlash(PLAYERp pp)
         pp->StartColor = 0;
         if (pp == Player + screenpeek)
         {
-            if (getrendermode() < 3)
+            if (videoGetRenderMode() < REND_POLYMOST)
                 COVERsetbrightness(gs.Brightness,&palette_data[0][0]);
             else
-                setpalettefade(0,0,0,0);
+                videoFadePalette(0,0,0,0);
             memcpy(pp->temp_pal, palette_data, sizeof(palette_data));
             DoPlayerDivePalette(pp);  // Check Dive again
             DoPlayerNightVisionPalette(pp);  // Check Night Vision again
@@ -5250,10 +5235,10 @@ DoPaletteFlash(PLAYERp pp)
         // Only hard set the palette if this is currently the player's view
         if (pp == Player + screenpeek)
         {
-            if (getrendermode() < 3) set_pal(pp->temp_pal);
+            if (videoGetRenderMode() < REND_POLYMOST) set_pal(pp->temp_pal);
             else
             {
-                setpalettefade(
+                videoFadePalette(
                     palette_data[pp->StartColor][0],
                     palette_data[pp->StartColor][1],
                     palette_data[pp->StartColor][2],
@@ -5268,10 +5253,10 @@ DoPaletteFlash(PLAYERp pp)
 
 void ResetPalette(PLAYERp pp)
 {
-    if (getrendermode() < 3)
+    if (videoGetRenderMode() < REND_POLYMOST)
         COVERsetbrightness(gs.Brightness,&palette_data[0][0]);
     else
-        setpalettefade(0,0,0,0);
+        videoFadePalette(0,0,0,0);
     memcpy(pp->temp_pal, palette_data, sizeof(palette_data));
     //DoPlayerDivePalette(pp);  // Check Dive again
     //DoPlayerNightVisionPalette(pp);  // Check Night Vision again

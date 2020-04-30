@@ -45,7 +45,7 @@ static int32_t buildkeytranslationtable(void)
     MAP(SDLK_9,		0xa);
     MAP(SDLK_COLON,		0x27);
     MAP(SDLK_SEMICOLON,	0x27);
-    MAP(SDLK_LESS,		0x33);
+    MAP(SDLK_LESS,		0x56);
     MAP(SDLK_EQUALS,	0xd);
     MAP(SDLK_GREATER,	0x34);
     MAP(SDLK_QUESTION,	0x35);
@@ -153,7 +153,7 @@ static int32_t buildkeytranslationtable(void)
     MAP(SDL_SCANCODE_ESCAPE,	0x1);
     MAP(SDL_SCANCODE_SPACE,		0x39);
     MAP(SDL_SCANCODE_COMMA,		0x33);
-    MAP(SDL_SCANCODE_NONUSBACKSLASH, 0x33);
+    MAP(SDL_SCANCODE_NONUSBACKSLASH, 0x56);
     MAP(SDL_SCANCODE_MINUS,		0xc);
     MAP(SDL_SCANCODE_PERIOD,	0x34);
     MAP(SDL_SCANCODE_SLASH,		0x35);
@@ -206,6 +206,8 @@ static int32_t buildkeytranslationtable(void)
     MAP(SDL_SCANCODE_KP_3,		0x51);
     MAP(SDL_SCANCODE_KP_4,		0x4b);
     MAP(SDL_SCANCODE_KP_5,		0x4c);
+    MAP(SDL_SCANCODE_KP_CLEAR,		0x4c);
+    MAP(SDL_SCANCODE_CLEAR,		0x4c);
     MAP(SDL_SCANCODE_KP_6,		0x4d);
     MAP(SDL_SCANCODE_KP_7,		0x47);
     MAP(SDL_SCANCODE_KP_8,		0x48);
@@ -249,7 +251,7 @@ static int32_t buildkeytranslationtable(void)
     MAP(SDL_SCANCODE_LALT,		0x38);
     MAP(SDL_SCANCODE_LGUI,	0xdb);	// win l
     MAP(SDL_SCANCODE_RGUI,	0xdc);	// win r
-    MAP(SDL_SCANCODE_PRINTSCREEN,		-2);	// 0xaa + 0xb7
+//    MAP(SDL_SCANCODE_PRINTSCREEN,		-2);	// 0xaa + 0xb7
     MAP(SDL_SCANCODE_SYSREQ,	0x54);	// alt+printscr
 //    MAP(SDL_SCANCODE_PAUSE,		0xb7);	// ctrl+pause
     MAP(SDL_SCANCODE_MENU,		0xdd);	// win menu?

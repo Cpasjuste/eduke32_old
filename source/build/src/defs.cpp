@@ -21,6 +21,8 @@
 # include "hightile.h"
 #endif
 
+#include "vfs.h"
+
 enum scripttoken_t
 {
     T_INCLUDE = 0,
@@ -119,16 +121,14 @@ enum scripttoken_t
     T_DST_COLOR, T_ONE_MINUS_DST_COLOR,
     T_SHADERED, T_SHADEGREEN, T_SHADEBLUE,
     T_SHADEFACTOR,
+    T_IFCRC,T_IFMATCH,T_CRC32,
+    T_SIZE,
+    T_NEWGAMECHOICES,
 };
 
 static int32_t lastmodelid = -1, lastvoxid = -1, modelskin = -1, lastmodelskin = -1, seenframe = 0;
-static int32_t nextvoxid = 0;
 static char *faketilebuffer = NULL;
 static int32_t faketilebuffersiz = 0;
-
-#ifdef USE_OPENGL
-extern uint8_t alphahackarray[MAXTILES];
-#endif
 
 static const char *skyfaces[6] =
 {
@@ -201,12 +201,12 @@ static int32_t check_tile(const char *defcmd, int32_t tile, const scriptfile *sc
 
 static void tile_from_truecolpic(int32_t tile, const palette_t *picptr, int32_t alphacut)
 {
-    vec2s_t const siz = tilesiz[tile];
+    vec2_16_t const siz = tilesiz[tile];
     int32_t i, j, tsiz = siz.x * siz.y;
 
     maybe_grow_buffer(&faketilebuffer, &faketilebuffersiz, tsiz);
 
-    getclosestcol_flush();
+    paletteFlushClosestColor();
 
     for (j = 0; j < siz.y; ++j)
     {
@@ -215,7 +215,7 @@ static void tile_from_truecolpic(int32_t tile, const palette_t *picptr, int32_t 
         {
             palette_t const *const col = &picptr[ofs + i];
             faketilebuffer[(i * siz.y) + j] =
-            (col->f < alphacut) ? 255 : getclosestcol_lim(col->b, col->g, col->r, 254);
+            (col->f < alphacut) ? 255 : paletteGetClosestColorUpToIndex(col->b, col->g, col->r, 254);
         }
     }
 
@@ -224,7 +224,7 @@ static void tile_from_truecolpic(int32_t tile, const palette_t *picptr, int32_t 
 
 static int32_t Defs_LoadTileIntoBuffer(int32_t const tile)
 {
-    vec2s_t const siz = tilesiz[tile];
+    vec2_16_t const siz = tilesiz[tile];
     int32_t const tsiz = siz.x * siz.y;
 
     if (EDUKE32_PREDICT_FALSE(tilesiz[tile].x <= 0 || tilesiz[tile].y <= 0))
@@ -303,7 +303,7 @@ static int32_t Defs_ImportTileFromTexture(char const * const fn, int32_t const t
 
     tile_from_truecolpic(tile, picptr, alphacut);
 
-    Bfree(picptr);
+    Xfree(picptr);
 
 #ifdef USE_OPENGL
     if (istexture)
@@ -403,6 +403,7 @@ static int32_t defsparser(scriptfile *script)
         { "undefpalookuprange", T_UNDEFPALOOKUPRANGE },
         { "undefblendtablerange", T_UNDEFBLENDTABLERANGE },
         { "shadefactor",     T_SHADEFACTOR      },
+        { "newgamechoices",  T_NEWGAMECHOICES   },
     };
 
     while (1)
@@ -588,14 +589,17 @@ static int32_t defsparser(scriptfile *script)
             if (scriptfile_getnumber(script,&idxend)) break;
 
             while ((unsigned)col < 256 && idx <= idxend)
+            {
+                editorcolorsdef[col] = 1;
                 editorcolors[col++] = idx++;
+            }
         }
         break;
         case T_FOGPAL:
         {
             int32_t p,r,g,b;
 
-            if (scriptfile_getnumber(script,&p)) break;
+            if (scriptfile_getsymbol(script,&p)) break;
             if (scriptfile_getnumber(script,&r)) break;
             if (scriptfile_getnumber(script,&g)) break;
             if (scriptfile_getnumber(script,&b)) break;
@@ -611,8 +615,8 @@ static int32_t defsparser(scriptfile *script)
         {
             int32_t b,e,i;
 
-            if (scriptfile_getnumber(script,&b)) break;
-            if (scriptfile_getnumber(script,&e)) break;
+            if (scriptfile_getsymbol(script,&b)) break;
+            if (scriptfile_getsymbol(script,&e)) break;
 
             b = max(b, 1);
             e = min(e, MAXPALOOKUPS-1);
@@ -674,8 +678,8 @@ static int32_t defsparser(scriptfile *script)
                 break;
             }
 
-            int32_t const fil = kopen4load(fn, 0);
-            if (fil == -1)
+            buildvfs_kfd const fil = kopen4load(fn, 0);
+            if (fil == buildvfs_kfd_invalid)
                 break;
 
             artheader_t local;
@@ -697,6 +701,8 @@ static int32_t defsparser(scriptfile *script)
 
             artReadManifest(fil, &local);
             artPreloadFile(fil, &local);
+            for (int32_t i = local.tilestart; i <= local.tileend; ++i)
+                tileUpdatePicSiz(i);
 
             kclose(fil);
         }
@@ -722,8 +728,8 @@ static int32_t defsparser(scriptfile *script)
         {
             int32_t tile1,tile2,xsiz,ysiz,xoffs,yoffs,i;
 
-            if (scriptfile_getnumber(script,&tile1)) break;
-            if (scriptfile_getnumber(script,&tile2)) break;
+            if (scriptfile_getsymbol(script,&tile1)) break;
+            if (scriptfile_getsymbol(script,&tile2)) break;
             if (scriptfile_getnumber(script,&xsiz)) break;
             if (scriptfile_getnumber(script,&ysiz)) break;
             if (scriptfile_getsymbol(script,&xoffs)) break;
@@ -794,6 +800,10 @@ static int32_t defsparser(scriptfile *script)
             int32_t havexoffset = 0, haveyoffset = 0;
             int32_t xoffset = 0, yoffset = 0;
             int32_t istexture = 0;
+            int32_t tile_crc32 = 0;
+            vec2_t  tile_size{};
+            uint8_t have_crc32 = 0;
+            uint8_t have_size = 0;
 
             static const tokenlist tilefromtexturetokens[] =
             {
@@ -807,6 +817,8 @@ static int32_t defsparser(scriptfile *script)
                 { "texhitscan",      T_TEXHITSCAN },
                 { "nofullbright",    T_NOFULLBRIGHT },
                 { "texture",         T_TEXTURE },
+                { "ifcrc",           T_IFCRC },
+                { "ifmatch",         T_IFMATCH },
             };
 
             if (scriptfile_getsymbol(script,&tile)) break;
@@ -833,6 +845,41 @@ static int32_t defsparser(scriptfile *script)
                     scriptfile_getsymbol(script,&yoffset);
                     yoffset = clamp(yoffset, -128, 127);
                     break;
+                case T_IFCRC:
+                    scriptfile_getsymbol(script, &tile_crc32);
+                    have_crc32 = 1;
+                    break;
+                case T_IFMATCH:
+                {
+                    char *ifmatchend;
+
+                    static const tokenlist ifmatchtokens[] =
+                    {
+                        { "crc32",           T_CRC32 },
+                        { "size",            T_SIZE },
+                    };
+
+                    if (scriptfile_getbraces(script,&ifmatchend)) break;
+                    while (script->textptr < ifmatchend)
+                    {
+                        int32_t token = getatoken(script,ifmatchtokens,ARRAY_SIZE(ifmatchtokens));
+                        switch (token)
+                        {
+                        case T_CRC32:
+                            scriptfile_getsymbol(script, &tile_crc32);
+                            have_crc32 = 1;
+                            break;
+                        case T_SIZE:
+                            scriptfile_getsymbol(script, &tile_size.x);
+                            scriptfile_getsymbol(script, &tile_size.y);
+                            have_size = 1;
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                    break;
+                }
                 case T_TEXHITSCAN:
                     flags |= PICANM_TEXHITSCAN_BIT;
                     break;
@@ -852,6 +899,26 @@ static int32_t defsparser(scriptfile *script)
                 initprintf("Error: missing or invalid 'tile number' for texture definition near line %s:%d\n",
                            script->filename, scriptfile_getlinum(script,texturetokptr));
                 break;
+            }
+
+            if (have_crc32)
+            {
+                int32_t const orig_crc32 = tileGetCRC32(tile);
+                if (orig_crc32 != tile_crc32)
+                {
+                    // initprintf("CRC32 of tile %d doesn't match! CRC32: %d, Expected: %d\n", tile, orig_crc32, tile_crc32);
+                    break;
+                }
+            }
+
+            if (have_size)
+            {
+                vec2_16_t const orig_size = tileGetSize(tile);
+                if (orig_size.x != tile_size.x && orig_size.y != tile_size.y)
+                {
+                    // initprintf("Size of tile %d doesn't match! Size: (%d, %d), Expected: (%d, %d)\n", tile, orig_size.x, orig_size.y, tile_size.x, tile_size.y);
+                    break;
+                }
             }
 
             if (!fn)
@@ -1058,8 +1125,8 @@ static int32_t defsparser(scriptfile *script)
         {
             int32_t tile1,tile2,xsiz,ysiz,i;
 
-            if (scriptfile_getnumber(script,&tile1)) break;
-            if (scriptfile_getnumber(script,&tile2)) break;
+            if (scriptfile_getsymbol(script,&tile1)) break;
+            if (scriptfile_getsymbol(script,&tile2)) break;
             if (scriptfile_getnumber(script,&xsiz)) break;
             if (scriptfile_getnumber(script,&ysiz)) break;
 
@@ -1103,8 +1170,8 @@ static int32_t defsparser(scriptfile *script)
         {
             int32_t tile1, tile2;
 
-            if (scriptfile_getnumber(script,&tile1)) break;
-            if (scriptfile_getnumber(script,&tile2)) break;
+            if (scriptfile_getsymbol(script,&tile1)) break;
+            if (scriptfile_getsymbol(script,&tile2)) break;
 
             if (check_tile_range("undefinetilerange", &tile1, &tile2, script, cmdtokptr))
                 break;
@@ -1152,8 +1219,8 @@ static int32_t defsparser(scriptfile *script)
             int32_t ftilenume, ltilenume;
 
             if (scriptfile_getstring(script,&framename)) break;
-            if (scriptfile_getnumber(script,&ftilenume)) break; //first tile number
-            if (scriptfile_getnumber(script,&ltilenume)) break; //last tile number (inclusive)
+            if (scriptfile_getsymbol(script,&ftilenume)) break; //first tile number
+            if (scriptfile_getsymbol(script,&ltilenume)) break; //last tile number (inclusive)
 
             if (check_tile_range("definemodelframe", &ftilenume, &ltilenume, script, cmdtokptr))
                 break;
@@ -1311,8 +1378,8 @@ static int32_t defsparser(scriptfile *script)
         {
             int32_t ftilenume, ltilenume, tilex;
 
-            if (scriptfile_getnumber(script,&ftilenume)) break; //1st tile #
-            if (scriptfile_getnumber(script,&ltilenume)) break; //last tile #
+            if (scriptfile_getsymbol(script,&ftilenume)) break; //1st tile #
+            if (scriptfile_getsymbol(script,&ltilenume)) break; //last tile #
 
             if (check_tile_range("definevoxeltiles", &ftilenume, &ltilenume, script, cmdtokptr))
                 break;
@@ -1334,7 +1401,7 @@ static int32_t defsparser(scriptfile *script)
             char *modelend, *modelfn;
             double scale=1.0, mzadd=0.0, myoffset=0.0;
             int32_t shadeoffs=0, pal=0, flags=0;
-            uint8_t usedframebitmap[1024>>3];
+            uint8_t usedframebitmap[(1024+7)>>3];
 
             int32_t model_ok = 1;
 
@@ -1415,7 +1482,7 @@ static int32_t defsparser(scriptfile *script)
                         switch (getatoken(script,modelframetokens,ARRAY_SIZE(modelframetokens)))
                         {
                         case T_PAL:
-                            scriptfile_getnumber(script,&pal); break;
+                            scriptfile_getsymbol(script,&pal); break;
                         case T_FRAME:
                             scriptfile_getstring(script,&framename); break;
                         case T_TILE:
@@ -1470,7 +1537,7 @@ static int32_t defsparser(scriptfile *script)
                             break;
                         default:
                             if (framei >= 0 && framei<1024)
-                                usedframebitmap[framei>>3] |= (1<<(framei&7));
+                                usedframebitmap[framei>>3] |= pow2char[framei&7];
                         }
 
                         model_ok &= happy;
@@ -1966,7 +2033,7 @@ static int32_t defsparser(scriptfile *script)
             char *fn = NULL;
             char *highpalend;
 #ifdef POLYMER
-            int32_t fd;
+            buildvfs_kfd fd;
             char *highpaldata;
 #endif
             static const tokenlist highpaltokens[] =
@@ -2029,7 +2096,7 @@ static int32_t defsparser(scriptfile *script)
 
                 klseek(fd, 0, SEEK_SET);
                 if (kread(fd, filebuf, filesize)!=filesize)
-                    { kclose(fd); Bfree(highpaldata); initprintf("Error: didn't read all of \"%s\".\n", fn); break; }
+                    { kclose(fd); Xfree(highpaldata); initprintf("Error: didn't read all of \"%s\".\n", fn); break; }
 
                 kclose(fd);
                 kpgetdim(filebuf, filesize, &xsiz, &ysiz);
@@ -2038,19 +2105,19 @@ static int32_t defsparser(scriptfile *script)
                 {
                     initprintf("Error: image dimensions of \"%s\" must be %dx%d.\n",
                                fn, PR_HIGHPALOOKUP_DIM*PR_HIGHPALOOKUP_DIM, PR_HIGHPALOOKUP_DIM);
-                    Bfree(filebuf); Bfree(highpaldata);
+                    Xfree(filebuf); Xfree(highpaldata);
                     break;
                 }
 
                 i = kprender(filebuf, filesize, (intptr_t)highpaldata, xsiz*sizeof(coltype), xsiz, ysiz);
-                Bfree(filebuf);
+                Xfree(filebuf);
                 if (EDUKE32_PREDICT_FALSE(i))
-                    { Bfree(highpaldata); initprintf("Error: failed rendering \"%s\".\n", fn); break; }
+                    { Xfree(highpaldata); initprintf("Error: failed rendering \"%s\".\n", fn); break; }
             }
 
             polymer_definehighpalookup(basepal, pal, highpaldata);
 
-            Bfree(highpaldata);
+            Xfree(highpaldata);
 #endif
         }
         break;
@@ -2539,8 +2606,8 @@ static int32_t defsparser(scriptfile *script)
         {
             int32_t b,e, i;
 
-            if (EDUKE32_PREDICT_FALSE(scriptfile_getnumber(script,&b))) break;
-            if (EDUKE32_PREDICT_FALSE(scriptfile_getnumber(script,&e))) break;
+            if (EDUKE32_PREDICT_FALSE(scriptfile_getsymbol(script,&b))) break;
+            if (EDUKE32_PREDICT_FALSE(scriptfile_getsymbol(script,&e))) break;
 
             b = max(b, 0);
             e = min(e, MAXUSERTILES-1);
@@ -2626,8 +2693,8 @@ static int32_t defsparser(scriptfile *script)
 
             for (; previous_usermaphacks < num_usermaphacks; previous_usermaphacks++)
             {
-                usermaphacks[previous_usermaphacks].mhkfile = mhkfile ? Bstrdup(mhkfile) : NULL;
-                usermaphacks[previous_usermaphacks].title = title ? Bstrdup(title) : NULL;
+                usermaphacks[previous_usermaphacks].mhkfile = mhkfile ? Xstrdup(mhkfile) : NULL;
+                usermaphacks[previous_usermaphacks].title = title ? Xstrdup(title) : NULL;
             }
         }
         break;
@@ -2675,7 +2742,7 @@ static int32_t defsparser(scriptfile *script)
 
             if (tile != DEFAULTPSKY && (unsigned)tile >= MAXUSERTILES)
             {
-                script->textptr = blockend;
+                script->textptr = blockend+1;
                 break;
             }
 
@@ -2763,7 +2830,7 @@ static int32_t defsparser(scriptfile *script)
             {
                 initprintf("Error: basepalette: Invalid basepal number on line %s:%d\n",
                            script->filename, scriptfile_getlinum(script,cmdtokptr));
-                script->textptr = blockend;
+                script->textptr = blockend+1;
                 break;
             }
 
@@ -2838,8 +2905,8 @@ static int32_t defsparser(scriptfile *script)
                         break;
                     }
 
-                    int32_t const fil = kopen4load(fn, 0);
-                    if (EDUKE32_PREDICT_FALSE(fil == -1))
+                    buildvfs_kfd const fil = kopen4load(fn, 0);
+                    if (EDUKE32_PREDICT_FALSE(fil == buildvfs_kfd_invalid))
                     {
                         initprintf("Error: basepalette: Failed opening \"%s\" on line %s:%d\n", fn,
                                    script->filename, scriptfile_getlinum(script,cmdtokptr));
@@ -2859,7 +2926,7 @@ static int32_t defsparser(scriptfile *script)
                     {
                         initprintf("Error: basepalette: Read failed on line %s:%d\n",
                                    script->filename, scriptfile_getlinum(script,cmdtokptr));
-                        Bfree(palbuf);
+                        Xfree(palbuf);
                         kclose(fil);
                         break;
                     }
@@ -2873,7 +2940,7 @@ static int32_t defsparser(scriptfile *script)
                     paletteSetColorTable(id, palbuf);
                     didLoadPal = 1;
 
-                    Bfree(palbuf);
+                    Xfree(palbuf);
                     kclose(fil);
                     break;
                 }
@@ -2917,7 +2984,7 @@ static int32_t defsparser(scriptfile *script)
 
             if (didLoadPal && id == 0)
             {
-                initfastcolorlookup_palette(palette);
+                paletteInitClosestColorMap(palette);
 
                 paletteloaded |= PALETTE_MAIN;
             }
@@ -2950,7 +3017,7 @@ static int32_t defsparser(scriptfile *script)
             {
                 initprintf("Error: palookup: Invalid pal number on line %s:%d\n",
                            script->filename, scriptfile_getlinum(script,cmdtokptr));
-                script->textptr = blockend;
+                script->textptr = blockend+1;
                 break;
             }
 
@@ -3018,8 +3085,8 @@ static int32_t defsparser(scriptfile *script)
                         break;
                     }
 
-                    int32_t const fil = kopen4load(fn, 0);
-                    if (EDUKE32_PREDICT_FALSE(fil == -1))
+                    buildvfs_kfd const fil = kopen4load(fn, 0);
+                    if (EDUKE32_PREDICT_FALSE(fil == buildvfs_kfd_invalid))
                     {
                         initprintf("Error: palookup: Failed opening \"%s\" on line %s:%d\n", fn,
                                    script->filename, scriptfile_getlinum(script,cmdtokptr));
@@ -3040,7 +3107,7 @@ static int32_t defsparser(scriptfile *script)
                     {
                         initprintf("Error: palookup: Read failed on line %s:%d\n",
                                    script->filename, scriptfile_getlinum(script,cmdtokptr));
-                        Bfree(palookupbuf);
+                        Xfree(palookupbuf);
                         kclose(fil);
                         break;
                     }
@@ -3063,7 +3130,7 @@ static int32_t defsparser(scriptfile *script)
                         paletteMakeLookupTable(id, palookupbuf, 0,0,0, g_noFloorPal[id]);
                     }
 
-                    Bfree(palookupbuf);
+                    Xfree(palookupbuf);
                     kclose(fil);
                     break;
                 }
@@ -3257,7 +3324,7 @@ static int32_t defsparser(scriptfile *script)
             {
                 initprintf("Error: blendtable: Invalid blendtable number on line %s:%d\n",
                            script->filename, scriptfile_getlinum(script,cmdtokptr));
-                script->textptr = blockend;
+                script->textptr = blockend+1;
                 break;
             }
 
@@ -3318,8 +3385,8 @@ static int32_t defsparser(scriptfile *script)
                         break;
                     }
 
-                    int32_t const fil = kopen4load(fn, 0);
-                    if (EDUKE32_PREDICT_FALSE(fil == -1))
+                    buildvfs_kfd const fil = kopen4load(fn, 0);
+                    if (EDUKE32_PREDICT_FALSE(fil == buildvfs_kfd_invalid))
                     {
                         initprintf("Error: blendtable: Failed opening \"%s\" on line %s:%d\n", fn,
                                    script->filename, scriptfile_getlinum(script,cmdtokptr));
@@ -3339,7 +3406,7 @@ static int32_t defsparser(scriptfile *script)
                     {
                         initprintf("Error: blendtable: Read failed on line %s:%d\n",
                                    script->filename, scriptfile_getlinum(script,cmdtokptr));
-                        Bfree(blendbuf);
+                        Xfree(blendbuf);
                         kclose(fil);
                         break;
                     }
@@ -3347,7 +3414,7 @@ static int32_t defsparser(scriptfile *script)
                     paletteSetBlendTable(id, blendbuf);
                     didLoadTransluc = 1;
 
-                    Bfree(blendbuf);
+                    Xfree(blendbuf);
                     kclose(fil);
                     break;
                 }
@@ -3620,6 +3687,15 @@ static int32_t defsparser(scriptfile *script)
                 paletteloaded &= ~PALETTE_TRANSLUC;
         }
         break;
+
+        case T_NEWGAMECHOICES: // stub
+        {
+            char *blockend;
+            if (scriptfile_getbraces(script,&blockend))
+                break;
+            script->textptr = blockend+1;
+            break;
+        }
 
         default:
             initprintf("Unknown token.\n"); break;

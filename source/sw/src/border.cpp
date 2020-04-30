@@ -31,7 +31,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "lists.h"
 #include "game.h"
 #include "common_game.h"
-#include "net.h"
+#include "network.h"
 #include "text.h"
 
 #define BAR_HEIGHT 48
@@ -54,7 +54,7 @@ short SWBorderTest[] =
 
 #undef BORDER_TILE
 #define BORDER_TILE \
-    (isShareware ? \
+    (SW_SHAREWARE ? \
      SWBorderTest[gs.BorderTile % SIZ(SWBorderTest)] : \
      RegBorderTest[gs.BorderTile % SIZ(RegBorderTest)] \
     )
@@ -77,7 +77,6 @@ PANEL_SPRITEp
 pSpawnFullScreenSpriteBox(PLAYERp pp, short id, short pic, short pri, int x, int y, short x1, short y1, short x2, short y2)
 {
     PANEL_SPRITEp psp;
-    extern SWBOOL DrawBeforeView;
 
     psp = pSpawnSprite(pp, NULL, pri, x, y);
 
@@ -97,6 +96,7 @@ pSpawnFullScreenSpriteBox(PLAYERp pp, short id, short pic, short pri, int x, int
 
     //SET(psp->flags, PANF_STATUS_AREA | PANF_KILL_AFTER_SHOW | PANF_IGNORE_START_MOST  | PANF_DRAW_BEFORE_VIEW | PANF_NOT_ALL_PAGES);
     SET(psp->flags, PANF_STATUS_AREA | PANF_KILL_AFTER_SHOW | PANF_IGNORE_START_MOST | PANF_DRAW_BEFORE_VIEW);
+    //extern SWBOOL DrawBeforeView;
     //DrawBeforeView = TRUE;
 
     //SET(psp->flags, PANF_SCREEN_CLIP | PANF_KILL_AFTER_SHOW | PANF_IGNORE_START_MOST);
@@ -139,7 +139,6 @@ void
 SetConsoleDmost(void)
 {
     int ystart;
-    int xstart;
 
     int i;
     int adj=0;
@@ -173,7 +172,7 @@ void ClearStartMost(void)
     for (i = 0; i < xdim; i++)
         startdmost[i] = ydim;
 
-    memset(startumost, 0, sizeof(startumost));
+    memset(startumost, 0, xdim * sizeof(int16_t));
 }
 
 void
@@ -282,8 +281,7 @@ void DrawBorderShade(PLAYERp pp, short shade_num, short wx1, short wy1, short wx
 void
 BorderShade(PLAYERp pp, SWBOOL refresh)
 {
-    int i, j, k, l, wx1, wx2, wy1, wy2;
-    PANEL_SPRITEp psp;
+    int wx1, wx2, wy1, wy2;
     uint8_t lines;
 
     wx1 = windowxy1.x - 1;
@@ -417,7 +415,6 @@ void DrawPanelBorderSides(PLAYERp pp, short x, short y, short x2, short y2, shor
 static
 void BorderSetView(PLAYERp UNUSED(pp), int *Xdim, int *Ydim, int *ScreenSize)
 {
-    void setview(int scrx1, int scry1, int scrx2, int scry2);
     int x, x2, y, y2;
     BORDER_INFO *b;
 
@@ -436,13 +433,12 @@ void BorderSetView(PLAYERp UNUSED(pp), int *Xdim, int *Ydim, int *ScreenSize)
     y = DIV2(*Ydim) - DIV2((*ScreenSize **Ydim) / *Xdim);
     y2 = y + ((*ScreenSize **Ydim) / *Xdim) - 1;
 
-    if (ydim == 480 && gs.BorderNum == 2)
-    {
-        y2+=2;
-    }
+    // avoid a one-pixel tall HOM
+    if (gs.BorderNum == BORDER_BAR)
+        ++y2;
 
     // global windowxy1, windowxy2 coords set here
-    setview(x, y, x2, y2);
+    videoSetViewableArea(x, y, x2, y2);
     SetCrosshair();
 }
 
@@ -453,7 +449,6 @@ void BorderSetView(PLAYERp UNUSED(pp), int *Xdim, int *Ydim, int *ScreenSize)
 static void
 BorderRefresh(PLAYERp pp)
 {
-    int i, j;
     int x, x2, y, y2;
     BORDER_INFO *b;
 
@@ -517,9 +512,7 @@ BorderRefresh(PLAYERp pp)
 
 void SetBorder(PLAYERp pp, int value)
 {
-    int diff;
     int Xdim, Ydim, ScreenSize;
-    SWBOOL set_view = TRUE;
 
     if (pp != Player + myconnectindex)
         return;
@@ -561,9 +554,7 @@ void SetBorder(PLAYERp pp, int value)
 void
 SetRedrawScreen(PLAYERp pp)
 {
-    int i, j;
     //int x, x2, y, y2;
-    BORDER_INFO *b;
 
     if (pp != Player + myconnectindex)
         return;
@@ -576,8 +567,6 @@ SetRedrawScreen(PLAYERp pp)
 
     // Redraw the BORDER_TILE only if getting smaller
     BorderInfo = BorderInfoValues[gs.BorderNum];
-
-    b = &BorderInfo;
 
     // test at redrawing the whole screen
     RedrawScreen = TRUE;

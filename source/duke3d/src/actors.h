@@ -31,7 +31,7 @@ extern "C" {
 
 #define MAXSLEEPDIST        16384
 #define SLEEPTIME           1536
-#define ZOFFSET             (1<<8)
+#define ACTOR_FLOOR_OFFSET  (1<<8)
 #define ZOFFSET2            (16<<8)
 #define ZOFFSET3            (8<<8)
 #define ZOFFSET4            (12<<8)
@@ -57,7 +57,7 @@ extern "C" {
 #define STAT_FALLER         12
 #define STAT_DUMMYPLAYER    13
 #define STAT_LIGHT          14
-#define STAT_NETALLOC       MAXSTATUS-1
+#define STAT_NETALLOC       (MAXSTATUS-1)
 
 
 // Defines the motion characteristics of an actor
@@ -171,7 +171,7 @@ typedef struct
     vec2_t lastv;                              // 8b
     int16_t picnum, ang, extra, owner;         // 8b
     int16_t movflag, tempang, timetosleep;     // 6b
-    int16_t actorstayput;                      // 2b
+    int16_t stayput;                           // 2b
 
     uint8_t cgg, lasttransport;                // 2b
     // NOTE: 'dispicnum' is updated every frame, not in sync with game tics!
@@ -184,30 +184,171 @@ typedef struct
 #endif
 } actor_t;
 
-// this struct needs to match the beginning of actor_t above
-typedef struct
+// note: fields in this struct DO NOT have to be in this order,
+// however if you add something to this struct, please make sure
+// a field gets added to ActorFields[], otherwise the field
+// won't get synced over the network!
+//
+// I don't think the ActorFields array needs to be in the same order,
+// need to verify this...
+typedef struct netactor_s
 {
-    int32_t t_data[10];  // 40b sometimes used to hold offsets to con code
+    // actor fields
+    //--------------------------------------------
+    int32_t
+        t_data_0,
+        t_data_1,
+        t_data_2,
+        t_data_3,
+        t_data_4,
+        t_data_5,
+        t_data_6,
+        t_data_7,
+        t_data_8,
+        t_data_9;
 
 #ifdef LUNATIC
-    struct move   mv;
-    struct action ac;
-    uint16_t      actiontics;
-    uint16_t movflags;
+
+    int32_t
+        hvel,
+        vvel;
+
+
+    int32_t
+        startframe,
+        numframes;
+
+    int32_t
+        viewtype,
+        incval,
+        delay;
+
+    int32_t
+        actiontics;
 #endif
 
-    int32_t flags;                             // 4b
-    vec3_t  bpos;                              // 12b
-    int32_t floorz, ceilingz;                  // 8b
-    vec2_t lastv;                              // 8b
-    int16_t picnum, ang, extra, owner;         // 8b
-    int16_t movflag, tempang, timetosleep;     // 6b
-    int16_t actorstayput;
+    int32_t
+        flags;
 
-    uint8_t cgg, lasttransport;
 
-    spritetype sprite;
-    int16_t    netIndex;
+    int32_t
+        bpos_x,
+        bpos_y,
+        bpos_z;
+
+    int32_t
+        floorz,
+        ceilingz,
+        lastvx,
+        lastvy,
+
+        lasttransport,
+
+        picnum,
+        ang,
+        extra,
+        owner,
+
+        movflag,
+        tempang,
+        timetosleep,
+
+        stayput,
+        dispicnum;
+
+
+#if defined LUNATIC
+    int32_t movflags;
+#endif
+
+    // note: lightId, lightcount, lightmaxrange are not synchronized between client and server
+
+    int32_t
+        cgg;
+
+
+    // sprite fields
+    //-----------------------------
+
+    int32_t
+        spr_x,
+        spr_y,
+        spr_z,
+
+        spr_cstat,
+
+        spr_picnum,
+
+        spr_shade,
+
+        spr_pal,
+        spr_clipdist,
+        spr_blend,
+
+        spr_xrepeat,
+        spr_yrepeat,
+
+        spr_xoffset,
+        spr_yoffset,
+
+        spr_sectnum,
+        spr_statnum,
+
+        spr_ang,
+        spr_owner,
+        spr_xvel,
+        spr_yvel,
+        spr_zvel,
+
+        spr_lotag,
+        spr_hitag,
+
+        spr_extra;
+
+    //---------------------------------------------
+    //spriteext fields
+
+    int32_t
+        ext_mdanimtims,
+
+        ext_mdanimcur,
+        ext_angoff,
+        ext_pitch,
+        ext_roll,
+
+        ext_pivot_offset_x,
+        ext_pivot_offset_y,
+        ext_pivot_offset_z,
+
+        ext_position_offset_x,
+        ext_position_offset_y,
+        ext_position_offset_z,
+
+        ext_flags,
+        ext_xpanning,
+        ext_ypanning;
+
+    float       ext_alpha;
+
+    // DON'T send tsprites over the internet
+
+    //--------------------------------------------
+    //spritesmooth fields
+
+    float       sm_smoothduration;
+
+    int32_t
+        sm_mdcurframe,
+        sm_mdoldframe,
+
+        sm_mdsmooth;
+
+    //--------------------------------------------
+    // SpriteProjectile fields
+
+    // may want to put projectile fields here
+    int32_t netIndex;
+
 } netactor_t;
 #pragma pack(pop)
 
@@ -256,6 +397,8 @@ enum sflags_t
     SFLAG_REALCLIPDIST     = 0x01000000,
     SFLAG_WAKEUPBADGUYS    = 0x02000000,
     SFLAG_DAMAGEEVENT      = 0x04000000,
+    SFLAG_NOWATERSECTOR    = 0x08000000,
+    SFLAG_QUEUEDFORDELETE  = 0x10000000,
 };
 
 // Custom projectiles "workslike" flags.
@@ -284,6 +427,7 @@ enum pflags_t
     PROJECTILE_REALCLIPDIST      = 0x00080000,
     PROJECTILE_ACCURATE          = 0x00100000,
     PROJECTILE_NOSETOWNERSHADE   = 0x00200000,
+    PROJECTILE_RPG_IMPACT_DAMAGE = 0x00400000,
     PROJECTILE_MOVED             = 0x80000000,  // internal flag, do not document
     PROJECTILE_TYPE_MASK         = PROJECTILE_HITSCAN | PROJECTILE_RPG | PROJECTILE_KNEE | PROJECTILE_BLOOD,
 };
@@ -295,32 +439,33 @@ extern int32_t      g_noEnemies;
 extern int32_t      otherp;
 extern int32_t      ticrandomseed;
 extern projectile_t SpriteProjectile[MAXSPRITES];
+extern uint8_t      g_radiusDmgStatnums[(MAXSTATUS+7)>>3];
 
-
-int  A_CheckNoSE7Water(uspritetype const *const pSprite, int sectNum, int sectLotag, int32_t *pOther);
+int  A_CheckNoSE7Water(uspriteptr_t pSprite, int sectNum, int sectLotag, int32_t *pOther);
 int  A_CheckSwitchTile(int spriteNum);
-int A_IncurDamage(int const spriteNum);
+int A_IncurDamage(int spriteNum);
 void A_AddToDeleteQueue(int spriteNum);
 void A_DeleteSprite(int spriteNum);
 void A_DoGuts(int spriteNum, int tileNum, int spawnCnt);
 void A_DoGutsDir(int spriteNum, int tileNum, int spawnCnt);
+int A_GetClipdist(int spriteNum, int clipDist);
 void A_MoveCyclers(void);
 void A_MoveDummyPlayers(void);
-void A_MoveSector(int i);
+void A_MoveSector(int spriteNum);
 void A_PlayAlertSound(int spriteNum);
 void A_RadiusDamage(int spriteNum, int blastRadius, int dmg1, int dmg2, int dmg3, int dmg4);
 void A_SpawnMultiple(int spriteNum, int tileNum, int spawnCnt);
 
-int  G_SetInterpolation(int32_t *const posptr);
+int  G_SetInterpolation(int32_t *posptr);
 void G_AddGameLight(int lightRadius, int spriteNum, int zOffset, int lightRange, int lightColor, int lightPrio);
 void G_ClearCameraView(DukePlayer_t *ps);
 void G_DoInterpolations(int smoothRatio);
 void G_MoveWorld(void);
 void G_RefreshLights(void);
-void G_StopInterpolation(int32_t *const posptr);
+void G_StopInterpolation(const int32_t *posptr);
 
 // PK 20110701: changed input argument: int32_t i (== sprite, whose sectnum...) --> sectnum directly
-void                Sect_ToggleInterpolation(int sectnum, int doset);
+void                Sect_ToggleInterpolation(int sectnum, int setInterpolation);
 static FORCE_INLINE void   Sect_ClearInterpolation(int sectnum) { Sect_ToggleInterpolation(sectnum, 0); }
 static FORCE_INLINE void   Sect_SetInterpolation(int sectnum) { Sect_ToggleInterpolation(sectnum, 1); }
 
@@ -336,15 +481,15 @@ int32_t G_ToggleWallInterpolation(int32_t w, int32_t doset);
 # define ACTOR_INLINE_HEADER EXTERN_INLINE_HEADER
 #endif
 
-extern int32_t A_MoveSpriteClipdist(int32_t spritenum, vec3_t const * const change, uint32_t cliptype, int32_t clipdist);
-ACTOR_INLINE_HEADER int A_CheckEnemyTile(int const tileNum);
-ACTOR_INLINE_HEADER int A_SetSprite(int const spriteNum, uint32_t cliptype);
-ACTOR_INLINE_HEADER int32_t A_MoveSprite(int const spriteNum, vec3_t const * const change, uint32_t cliptype);
+extern int32_t A_MoveSpriteClipdist(int32_t spritenum, vec3_t const * change, uint32_t cliptype, int32_t clipdist);
+ACTOR_INLINE_HEADER int A_CheckEnemyTile(int tileNum);
+ACTOR_INLINE_HEADER int A_SetSprite(int spriteNum, uint32_t cliptype);
+ACTOR_INLINE_HEADER int32_t A_MoveSprite(int spriteNum, vec3_t const * change, uint32_t cliptype);
 
-EXTERN_INLINE_HEADER int G_CheckForSpaceCeiling(int const sectnum);
-EXTERN_INLINE_HEADER int G_CheckForSpaceFloor(int const sectnum);
+EXTERN_INLINE_HEADER int G_CheckForSpaceCeiling(int sectnum);
+EXTERN_INLINE_HEADER int G_CheckForSpaceFloor(int sectnum);
 
-EXTERN_INLINE_HEADER int A_CheckEnemySprite(void const * const s);
+EXTERN_INLINE_HEADER int A_CheckEnemySprite(void const * s);
 
 #ifdef __cplusplus
 }
@@ -361,8 +506,15 @@ ACTOR_INLINE int A_CheckEnemyTile(int const tileNum)
 
 ACTOR_INLINE int A_SetSprite(int const spriteNum, uint32_t cliptype)
 {
-    vec3_t davect = { (sprite[spriteNum].xvel * (sintable[(sprite[spriteNum].ang + 512) & 2047])) >> 14,
+    vec3_t const davect = { (sprite[spriteNum].xvel * (sintable[(sprite[spriteNum].ang + 512) & 2047])) >> 14,
                       (sprite[spriteNum].xvel * (sintable[sprite[spriteNum].ang & 2047])) >> 14, sprite[spriteNum].zvel };
+    return (A_MoveSprite(spriteNum, &davect, cliptype) == 0);
+}
+
+ACTOR_INLINE int A_SetSpriteNoZ(int const spriteNum, uint32_t cliptype)
+{
+    vec3_t const davect = { (sprite[spriteNum].xvel * (sintable[(sprite[spriteNum].ang + 512) & 2047])) >> 14,
+                      (sprite[spriteNum].xvel * (sintable[sprite[spriteNum].ang & 2047])) >> 14, 0 };
     return (A_MoveSprite(spriteNum, &davect, cliptype) == 0);
 }
 
@@ -389,7 +541,7 @@ EXTERN_INLINE int G_CheckForSpaceFloor(int const sectnum)
 
 EXTERN_INLINE int A_CheckEnemySprite(void const * const pSprite)
 {
-    return A_CheckEnemyTile(((uspritetype const *) pSprite)->picnum);
+    return A_CheckEnemyTile(((uspriteptr_t) pSprite)->picnum);
 }
 
 #endif

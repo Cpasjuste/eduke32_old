@@ -5,9 +5,9 @@
 #ifndef build_interface_layer_
 #define build_interface_layer_ SDL
 
-#include "sdl_inc.h"
-#include "compat.h"
 #include "baselayer.h"
+#include "compat.h"
+#include "sdl_inc.h"
 
 #define EDUKE32_SDL_LINKED_PREREQ(x, a, b, c) ((x).major > (a) || ((x).major == (a) && ((x).minor > (b) || ((x).minor == (b) && (x).patch >= (c)))))
 
@@ -27,12 +27,7 @@ int32_t SDL_WaitEventTimeout(SDL_Event *event, int32_t timeout);
 #define SDL_GL_ATTRIBUTES(iter, attrib)                                                                                \
     for (iter = 0; iter < (int32_t)ARRAY_SIZE(attrib); iter++)                                                         \
     {                                                                                                                  \
-        j = attrib[iter].value;                                                                                        \
-        if (!multisamplecheck &&                                                                                       \
-            (attrib[iter].attr == SDL_GL_MULTISAMPLEBUFFERS || attrib[iter].attr == SDL_GL_MULTISAMPLESAMPLES))        \
-        {                                                                                                              \
-            j = 0;                                                                                                     \
-        }                                                                                                              \
+        int32_t j = attrib[iter].value;                                                                                \
         SDL_GL_SetAttribute(attrib[iter].attr, j);                                                                     \
     }
 
@@ -90,12 +85,13 @@ static inline void idle_waitevent(void)
     SDL_WaitEvent(NULL);
 }
 
-static inline void idle(void)
+static inline void idle(int const msec = 1)
 {
-#ifndef _WIN32
-    usleep(1000);
+#ifdef _WIN32
+    Sleep(msec);
 #else
-    Sleep(1);
+    timespec req = { 0, msec * 1000000 };
+    do { } while (nanosleep(&req, &req));
 #endif
 }
 

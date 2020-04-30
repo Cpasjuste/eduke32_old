@@ -29,12 +29,6 @@ AUDIOLIB_OBJ=$(obj)\$(AUDIOLIB)
 AUDIOLIB_INC=$(AUDIOLIB_ROOT)\include
 AUDIOLIB_SRC=$(AUDIOLIB_ROOT)\src
 
-ENET=enet
-ENET_ROOT=$(source)\$(ENET)
-ENET_OBJ=$(obj)\$(ENET)
-ENET_INC=$(ENET_ROOT)\include
-ENET_SRC=$(ENET_ROOT)\src
-
 GLAD=glad
 GLAD_ROOT=$(source)\$(GLAD)
 GLAD_OBJ=$(obj)\$(GLAD)
@@ -107,15 +101,14 @@ AS=ml
 LINK=link /nologo /opt:ref
 MT=mt
 CFLAGS= /MT /J /nologo /std:c++latest $(flags_cl)  \
-	/I$(DUKE3D_SRC) /I$(ENGINE_INC)\msvc /I$(ENGINE_INC) /I$(MACT_INC) /I$(AUDIOLIB_INC) /I$(ENET_INC) /I$(GLAD_INC) /I$(LIBXMPLITE_INC) \
+	/I$(DUKE3D_SRC) /I$(ENGINE_INC)\msvc /I$(ENGINE_INC) /I$(MACT_INC) /I$(AUDIOLIB_INC) /I$(GLAD_INC) /I$(LIBXMPLITE_INC) \
 	/W2 $(ENGINEOPTS) \
 	/I$(PLATFORM)\include /DRENDERTYPE$(RENDERTYPE)=1 /DMIXERTYPE$(MIXERTYPE)=1 /DSDL_USEFOLDER /DSDL_TARGET=2
 
-ENET_CFLAGS=/I$(ENET_INC) /I$(ENET_SRC)
 LIBXMPLITE_CFLAGS=/I$(LIBXMPLITE_INC) /I$(LIBXMPLITE_INC)/libxmp-lite /I$(LIBXMPLITE_SRC) -DHAVE_ROUND -DLIBXMP_CORE_PLAYER -DBUILDING_STATIC
 AUDIOLIB_CFLAGS=/I$(AUDIOLIB_INC) /I$(AUDIOLIB_SRC)
 
-LIBS=user32.lib gdi32.lib shell32.lib winmm.lib ws2_32.lib comctl32.lib shlwapi.lib oleaut32.lib ole32.lib imm32.lib version.lib \
+LIBS=user32.lib gdi32.lib shell32.lib winmm.lib ws2_32.lib comctl32.lib shlwapi.lib oleaut32.lib ole32.lib imm32.lib SetupAPI.Lib version.lib \
      libogg.a libvorbis.a libvorbisfile.a libxmp-lite.a libvpx.a dxguid.lib dsound.lib advapi32.lib libcompat-to-msvc.a
 
 !if ("$(RENDERTYPE)"=="SDL")
@@ -149,6 +142,7 @@ ENGINE_OBJS= \
 	$(ENGINE_OBJ)\animvpx.$o \
 	$(ENGINE_OBJ)\baselayer.$o \
 	$(ENGINE_OBJ)\cache1d.$o \
+	$(ENGINE_OBJ)\klzw.$o \
 	$(ENGINE_OBJ)\common.$o \
 	$(ENGINE_OBJ)\compat.$o \
 	$(ENGINE_OBJ)\crc32.$o \
@@ -161,6 +155,7 @@ ENGINE_OBJS= \
 	$(ENGINE_OBJ)\hash.$o \
 	$(ENGINE_OBJ)\palette.$o \
         $(ENGINE_OBJ)\glbuild.$o \
+	$(ENGINE_OBJ)\glsurface.$o \
         $(ENGINE_OBJ)\texcache.$o \
         $(ENGINE_OBJ)\kplib.$o \
         $(ENGINE_OBJ)\hightile.$o \
@@ -168,12 +163,13 @@ ENGINE_OBJS= \
         $(ENGINE_OBJ)\polymer.$o \
         $(ENGINE_OBJ)\mdsprite.$o \
         $(ENGINE_OBJ)\voxmodel.$o \
+	$(ENGINE_OBJ)\tilepacker.$o \
 	$(ENGINE_OBJ)\dxtfilter.$o \
 	$(ENGINE_OBJ)\textfont.$o \
 	$(ENGINE_OBJ)\smalltextfont.$o \
 	$(ENGINE_OBJ)\lz4.$o \
 	$(ENGINE_OBJ)\md4.$o \
-	$(ENGINE_OBJ)\mmulti_null.$o \
+	$(ENGINE_OBJ)\mmulti.$o \
 	$(ENGINE_OBJ)\osd.$o \
 	$(ENGINE_OBJ)\pragmas.$o \
 	$(ENGINE_OBJ)\rev.$o \
@@ -182,27 +178,21 @@ ENGINE_OBJS= \
 	$(ENGINE_OBJ)\winbits.$o \
 	$(ENGINE_OBJ)\xxhash.$o \
 	$(ENGINE_OBJ)\screenshot.$o \
+	$(ENGINE_OBJ)\softsurface.$o \
 	$(ENGINE_OBJ)\mhk.$o \
 	$(ENGINE_OBJ)\pngwrite.$o \
 	$(ENGINE_OBJ)\miniz.$o \
 	$(ENGINE_OBJ)\miniz_tinfl.$o \
 	$(ENGINE_OBJ)\miniz_tdef.$o \
 	$(ENGINE_OBJ)\fix16.$o \
-	$(ENGINE_OBJ)\fix16_str.$o
+	$(ENGINE_OBJ)\fix16_str.$o \
+	$(ENGINE_OBJ)\sjson.$o \
+	$(ENGINE_OBJ)\enet.$o \
 
 
 ENGINE_EDITOR_OBJS=$(ENGINE_OBJ)\build.$o \
 	$(ENGINE_OBJ)\startwin.editor.$o \
 	$(ENGINE_OBJ)\config.$o
-
-ENET_OBJS=$(ENET_OBJ)\callbacks.$o \
-	$(ENET_OBJ)\host.$o \
-	$(ENET_OBJ)\list.$o \
-	$(ENET_OBJ)\packet.$o \
-	$(ENET_OBJ)\peer.$o \
-	$(ENET_OBJ)\protocol.$o \
-	$(ENET_OBJ)\win32.$o \
-	$(ENET_OBJ)\compress.$o
 
 GLAD_OBJS=$(GLAD_OBJ)\glad.$o \
 !if ("$(RENDERTYPE)"=="WIN")
@@ -249,7 +239,7 @@ AUDIOLIB_OBJS=$(AUDIOLIB_OBJ)\drivers.$o \
 	$(AUDIOLIB_OBJ)\xmp.$o \
 	$(AUDIOLIB_OBJ)\driver_nosound.$o
 
-MACT_OBJS=$(MACT_OBJ)\file_lib.$o \
+MACT_OBJS= \
 	$(MACT_OBJ)\control.$o \
 	$(MACT_OBJ)\keyboard.$o \
 	$(MACT_OBJ)\joystick.$o \
@@ -261,7 +251,7 @@ DUKE3D_OBJS=$(DUKE3D_OBJ)\game.$o \
 	$(DUKE3D_OBJ)\anim.$o \
         $(DUKE3D_OBJ)\cheats.$o \
         $(DUKE3D_OBJ)\sbar.$o \
-        $(DUKE3D_OBJ)\screentext.$o \
+        $(DUKE3D_OBJ)\text.$o \
         $(DUKE3D_OBJ)\screens.$o \
         $(DUKE3D_OBJ)\cmdline.$o \
 	$(DUKE3D_OBJ)\common.$o \
@@ -273,7 +263,7 @@ DUKE3D_OBJS=$(DUKE3D_OBJ)\game.$o \
 	$(DUKE3D_OBJ)\input.$o \
 	$(DUKE3D_OBJ)\menus.$o \
 	$(DUKE3D_OBJ)\namesdyn.$o \
-    $(DUKE3D_OBJ)\net.$o \
+    $(DUKE3D_OBJ)\network.$o \
 	$(DUKE3D_OBJ)\player.$o \
 	$(DUKE3D_OBJ)\premap.$o \
 	$(DUKE3D_OBJ)\savegame.$o \
@@ -329,7 +319,6 @@ DUKE3D_EDITOR_OBJS=$(DUKE3D_EDITOR_OBJS) $(MUSICOBJ)
 
 CHECKDIR_ENGINE=@if not exist "$(ENGINE_OBJ)" mkdir "$(ENGINE_OBJ)"
 CHECKDIR_DUKE3D=@if not exist "$(DUKE3D_OBJ)" mkdir "$(DUKE3D_OBJ)"
-CHECKDIR_ENET=@if not exist "$(ENET_OBJ)" mkdir "$(ENET_OBJ)"
 CHECKDIR_GLAD=@if not exist "$(GLAD_OBJ)" mkdir "$(GLAD_OBJ)"
 CHECKDIR_MACT=@if not exist "$(MACT_OBJ)" mkdir "$(MACT_OBJ)"
 CHECKDIR_AUDIOLIB=@if not exist "$(AUDIOLIB_OBJ)" mkdir "$(AUDIOLIB_OBJ)"
@@ -352,10 +341,6 @@ MAPSTER32_TARGET=$(root)\mapster32$(EXESUFFIX)
 {$(ENGINE_SRC)}.c{$(ENGINE_OBJ)}.$o:
 	$(CHECKDIR_ENGINE)
 	$(CC) /c $(CFLAGS) /Fo$@ $<
-
-{$(ENET_SRC)}.c{$(ENET_OBJ)}.$o:
-	$(CHECKDIR_ENET)
-	$(CC) /c $(CFLAGS) $(ENET_CFLAGS) /Fo$@ $<
 
 {$(GLAD_SRC)}.c{$(GLAD_OBJ)}.$o:
 	$(CHECKDIR_GLAD)
@@ -391,7 +376,7 @@ MAPSTER32_TARGET=$(root)\mapster32$(EXESUFFIX)
 
 all: $(EDUKE32_TARGET) $(MAPSTER32_TARGET)
 
-$(EDUKE32_TARGET): $(DUKE3D_OBJS) $(ENGINE_OBJS) $(AUDIOLIB_OBJS) $(MACT_OBJS) $(ENET_OBJS) $(GLAD_OBJS) $(LIBXMPLITE_OBJS)
+$(EDUKE32_TARGET): $(DUKE3D_OBJS) $(ENGINE_OBJS) $(AUDIOLIB_OBJS) $(MACT_OBJS) $(GLAD_OBJS) $(LIBXMPLITE_OBJS)
 	$(LINK) /OUT:$@ /SUBSYSTEM:WINDOWS $(WINMACHINE) /LIBPATH:$(PLATFORM)\lib$(WINLIB) $(flags_link) /MAP $** $(LIBS)
 	$(MT) -manifest $(DUKE3D_RSRC)\manifest.game.xml -hashupdate -outputresource:$@ -out:$@.manifest
 
@@ -406,5 +391,5 @@ $(MAPSTER32_TARGET): $(DUKE3D_EDITOR_OBJS) $(ENGINE_OBJS) $(ENGINE_EDITOR_OBJS) 
 
 clean:
 	-del /Q $(EDUKE32_TARGET) $(MAPSTER32_TARGET) $(DUKE3D_OBJS) $(DUKE3D_EDITOR_OBJS) $(ENGINE_OBJS) $(ENGINE_EDITOR_OBJS) *.pdb $(root)\*.pdb $(root)\*.map $(root)\*.manifest
-    -del /Q $(ENET_OBJS) $(LIBXMPLITE_OBJS) $(MACT_OBJS) $(AUDIOLIB_OBJS) $(GLAD_OBJS)
+    -del /Q $(LIBXMPLITE_OBJS) $(MACT_OBJS) $(AUDIOLIB_OBJS) $(GLAD_OBJS)
 veryclean: clean

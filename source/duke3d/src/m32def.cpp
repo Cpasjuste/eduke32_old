@@ -30,6 +30,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //#include "osd.h"
 #include "keys.h"
 
+#include "vfs.h"
+
 char        g_szScriptFileName[BMAX_PATH]   = "(none)";  // file we're currently compiling
 static char g_szCurrentBlockName[BMAX_PATH] = "(none)";
 static char g_szLastBlockName[BMAX_PATH]    = "NULL";
@@ -339,6 +341,8 @@ const char *keyw[] =
     "updatecursectnum",
     "updatesector",
     "updatesectorz",
+    "updatesectorneighbor",
+    "updatesectorneighborz",
     "getzrange",
     "clipmove",
     "lineintersect",
@@ -444,7 +448,7 @@ const char *keyw[] =
     "<null>"
 };
 
-const memberlabel_t SectorLabels[]=
+memberlabel_t const SectorLabels[]=
 {
     { "wallptr", SECTOR_WALLPTR, 1, 0, 0 },
     { "wallnum", SECTOR_WALLNUM, 1, 0, 0 },
@@ -477,7 +481,7 @@ const memberlabel_t SectorLabels[]=
     { "", -1, 0, 0, 0  }     // END OF LIST
 };
 
-const memberlabel_t WallLabels[]=
+memberlabel_t const WallLabels[]=
 {
     { "x", WALL_X, 0, -BXY_MAX, BXY_MAX },
     { "y", WALL_Y, 0, -BXY_MAX, BXY_MAX },
@@ -499,7 +503,7 @@ const memberlabel_t WallLabels[]=
     { "", -1, 0, 0, 0  }     // END OF LIST
 };
 
-const memberlabel_t SpriteLabels[]=
+memberlabel_t const SpriteLabels[]=
 {
     { "x", SPRITE_X, 0, -BXY_MAX, BXY_MAX },
     { "y", SPRITE_Y, 0, -BXY_MAX, BXY_MAX },
@@ -514,8 +518,8 @@ const memberlabel_t SpriteLabels[]=
     { "yrepeat", SPRITE_YREPEAT, 0, 0, 0 },
     { "xoffset", SPRITE_XOFFSET, 0, 0, 0 },
     { "yoffset", SPRITE_YOFFSET, 0, 0, 0 },
-    { "sectnum", SPRITE_SECTNUM, 1, 0, 0 },
-    { "statnum", SPRITE_STATNUM, 1, 0, 0 },
+    { "sectnum", SPRITE_SECTNUM, 0, 0, 0 },
+    { "statnum", SPRITE_STATNUM, 0, 0, 0 },
     { "ang", SPRITE_ANG, 0, 0, 0 },
     { "owner", SPRITE_OWNER, 0, 0, 0 },
     { "xvel", SPRITE_XVEL, 0, 0, 0 },
@@ -531,7 +535,7 @@ const memberlabel_t SpriteLabels[]=
 # define PR_MAXLIGHTPRIORITY 6
 #endif
 
-const memberlabel_t LightLabels[]=
+memberlabel_t const LightLabels[]=
 {
     { "x", LIGHT_X, 0, -BXY_MAX, BXY_MAX },
     { "y", LIGHT_Y, 0, -BXY_MAX, BXY_MAX },
@@ -726,13 +730,13 @@ static int32_t C_SkipComments(void)
     // Be sure to have enough space allocated for the command to be parsed next.
     // Currently, the commands that potentially need the most space are
     // various string handling function that accept inline strings.
-    if ((unsigned)(g_scriptPtr-apScript) > (unsigned)(g_scriptSize - max(40, MAXQUOTELEN/sizeof(instype)+8)))
+    if ((unsigned)(g_scriptPtr-apScript) > (unsigned)(g_scriptSize - max<int>(40, MAXQUOTELEN/sizeof(instype)+8)))
         return C_SetScriptSize(g_scriptSize<<1);
 
     return 0;
 }
 
-static inline int32_t C_GetLabelNameID(const memberlabel_t *pLabel, hashtable_t *tH, const char *psz)
+static inline int32_t C_GetLabelNameID(memberlabel_t const *pLabel, hashtable_t *tH, const char *psz)
 {
     // find the label psz in the table pLabel.
     // returns the ID for the label, or -1
@@ -958,7 +962,7 @@ static int32_t GetGamearrayID(const char *szGameLabel, int32_t searchlocals)
 static int32_t parse_integer_literal(int32_t *num)
 {
     if (textptr[0] == '0' && tolower(textptr[1])=='x')
-        sscanf(textptr+2, "%" SCNx32, num);
+        sscanf(textptr+2, "%" SCNx32, (uint32_t *)&num);
     else
     {
         long lnum;
@@ -1468,7 +1472,7 @@ static int32_t C_GetNextValue(int32_t type)
 //            {
 //                gl = (char *)C_GetLabelType(labeltype[i]);
 //                initprintf("%s:%d: debug: accepted %s label `%s'.\n",g_szScriptFileName,g_lineNumber,gl,label+(i*MAXLABELLEN));
-//                Bfree(gl);
+//                Xfree(gl);
 //            }
 
             *(g_scriptPtr++) = thesign*labelval[i];
@@ -1484,8 +1488,8 @@ static int32_t C_GetNextValue(int32_t type)
         gl = C_GetLabelType(labeltype[i]);
         C_CUSTOMERROR("expected %s, found %s.", el, gl);
 //        initprintf("i=%d, %s!!! lt:%d t:%d\n", i, label+(i*MAXLABELLEN), labeltype[i], type);
-        Bfree(el);
-        Bfree(gl);
+        Xfree(el);
+        Xfree(gl);
 
         return -1;  // valid label name, but wrong type
     }
@@ -1736,10 +1740,10 @@ static int32_t C_ParseCommand(void)
             const char *origtptr;
             char *mptr;
             char parentScriptFileName[255];
-            int32_t fp;
+            buildvfs_kfd fp;
 
             fp = kopen4load(tempbuf, 0 /*g_loadFromGroupOnly*/);
-            if (fp < 0)
+            if (fp == buildvfs_kfd_invalid)
             {
                 g_numCompilerErrors++;
                 initprintf("%s:%d: error: could not find file `%s'.\n",g_szScriptFileName,g_lineNumber,tempbuf);
@@ -1777,7 +1781,7 @@ static int32_t C_ParseCommand(void)
 
             textptr = origtptr;
 
-            Bfree(mptr);
+            Xfree(mptr);
         }
         return 0;
 
@@ -2027,7 +2031,7 @@ static int32_t C_ParseCommand(void)
             *g_scriptPtr++ = -1;
             return 0;
         }
-        // fall-through
+        fallthrough__;
     case CON_STATE:
         if (C_GetNextLabelName(1))
             return 1;
@@ -2622,7 +2626,7 @@ repeatcase:
             return 1;
         }
         textptr++;
-        // fall-through
+        fallthrough__;
     case CON_SETARRAY:
         if (C_GetNextLabelName(1))
             return 1;
@@ -3061,8 +3065,10 @@ repeatcase:
 
     case CON_UPDATESECTOR:
     case CON_UPDATESECTORZ:
+    case CON_UPDATESECTORNEIGHBOR:
+    case CON_UPDATESECTORNEIGHBORZ:
         C_GetManyVars(2);
-        if (tw==CON_UPDATESECTORZ)
+        if (tw==CON_UPDATESECTORZ || tw==CON_UPDATESECTORNEIGHBORZ)
             C_GetNextVar();
         C_GetNextVarType(GV_WRITABLE);
         break;
@@ -3664,7 +3670,8 @@ void C_Compile(const char *filenameortext, int32_t isfilename)
     char *mptr = NULL;
     static char firstime=1;
     int32_t i,j;
-    int32_t fs=0,fp=0;
+    int32_t fs=0;
+    buildvfs_kfd fp = buildvfs_kfd_invalid;
     int32_t startcompiletime;
     instype *oscriptPtr;
     int32_t ostateCount = g_stateCount;
@@ -3707,7 +3714,7 @@ void C_Compile(const char *filenameortext, int32_t isfilename)
         Bmemcpy(mptr, filenameortext, fs+1);
 
         fp = kopen4load(mptr, 0 /*g_loadFromGroupOnly*/);
-        if (fp == -1) // JBF: was 0
+        if (fp == buildvfs_kfd_invalid) // JBF: was 0
         {
             if (fs < 4 || Bmemcmp(&mptr[fs-4], ".m32", 4) != 0)
             {
@@ -3715,10 +3722,10 @@ void C_Compile(const char *filenameortext, int32_t isfilename)
                 fp = kopen4load(mptr, 0 /*g_loadFromGroupOnly*/);
             }
 
-            if (fp == -1)
+            if (fp == buildvfs_kfd_invalid)
             {
                 initprintf("M32 file `%s' not found.\n", mptr);
-                Bfree(mptr);
+                Xfree(mptr);
                 //g_loadFromGroupOnly = 1;
                 return;
             }
@@ -3728,7 +3735,7 @@ void C_Compile(const char *filenameortext, int32_t isfilename)
         initprintf(" \n");
         initprintf("--- Compiling: %s (%d bytes)\n",mptr,fs);
         Bstrcpy(g_szScriptFileName, mptr);   // JBF 20031130: Store currently compiling file name
-        Bfree(mptr);
+        Xfree(mptr);
     }
     else
     {
@@ -3776,7 +3783,7 @@ void C_Compile(const char *filenameortext, int32_t isfilename)
 
     //*script = g_scriptPtr-script;
 
-    Bfree(mptr);
+    Xfree(mptr);
 
     if (g_stateCount > ostateCount)
     {
@@ -3964,7 +3971,7 @@ void C_PrintErrorPosition()
 {
     const char *b = g_curkwptr, *e=textptr;
     int32_t i, nchars;
-    int32_t osdcols = OSD_GetCols();
+    int osdcols = OSD_GetCols();
 
     if (!(b<e+1))
         return;
@@ -4008,6 +4015,6 @@ void C_PrintErrorPosition()
 
         initprintf("%s\n", buf);
 
-        Bfree(buf);
+        Xfree(buf);
     }
 }

@@ -38,12 +38,12 @@ extern int qsetmode;
 
 SWBOOL FindCeilingView(short match, int32_t* x, int32_t* y, int32_t z, int16_t* sectnum);
 SWBOOL FindFloorView(short match, int32_t* x, int32_t* y, int32_t z, int16_t* sectnum);
-short ViewSectorInScene(short cursectnum, short type, short level);
-void Message(char *string, char color);
+short ViewSectorInScene(short cursectnum, short level);
+void Message(const char *string, char color);
 
 
 void
-_Assert(char *expr, char *strFile, unsigned uLine)
+_Assert(const char *expr, const char *strFile, unsigned uLine)
 {
     printf(ds, "Assertion failed: %s %s, line %u\n", expr, strFile, uLine);
     //DSPRINTF(ds, "Assertion failed: %s %s, line %u", expr, strFile, uLine);
@@ -70,7 +70,6 @@ typedef struct
 
 SAVE save;
 
-SWBOOL FAF_DebugView = 0;
 SWBOOL FAFon = 0;
 SWBOOL FAF_DontMoveSectors = FALSE;
 
@@ -114,7 +113,6 @@ void ToggleFAF(void)
         short match;
         int tx,ty,tz;
         short tsectnum;
-        short i;
         keystatus[KEYSC_4] = FALSE;
 
         tx = pos.x;
@@ -126,7 +124,7 @@ void ToggleFAF(void)
 
         if (sector[cursectnum].ceilingpicnum == FAF_MIRROR_PIC)
         {
-            match = ViewSectorInScene(tsectnum, VIEW_THRU_CEILING, VIEW_LEVEL1);
+            match = ViewSectorInScene(tsectnum, VIEW_LEVEL1);
 
             FAF_DontMoveSectors = TRUE;
             FindCeilingView(match, &tx, &ty, tz, &tsectnum);
@@ -139,7 +137,7 @@ void ToggleFAF(void)
         }
         else if (sector[cursectnum].floorpicnum == FAF_MIRROR_PIC)
         {
-            match = ViewSectorInScene(tsectnum, VIEW_THRU_FLOOR, VIEW_LEVEL2);
+            match = ViewSectorInScene(tsectnum, VIEW_LEVEL2);
 
             FAF_DontMoveSectors = TRUE;
             FindFloorView(match, &tx, &ty, tz, &tsectnum);
@@ -174,11 +172,8 @@ void
 SetupBuildFAF(void)
 {
     short i, nexti;
-    SPRITEp sp,vc_sp,vf_sp,vl_sp;
+    SPRITEp sp;
     short SpriteNum, NextSprite;
-    short vc,nextvc,vf,nextvf,l,nextl;
-    int zdiff;
-
     // move every sprite to the correct list
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_DEFAULT], SpriteNum, NextSprite)
     {
@@ -198,7 +193,7 @@ SetupBuildFAF(void)
             {
                 if (sprite[i].hitag == sp->hitag && sprite[i].lotag == sp->lotag)
                 {
-                    sprintf(ds,"Two VIEW_THRU_ tags with same match found on level\n1: x %d, y %d \n2: x %d, y %d", sp->x, sp->y, sprite[i].x, sprite[i].y);
+                    sprintf(ds,"Two VIEW_THRU_ tags with same match found on level\n1: x %d, y %d \n2: x %d, y %d", TrackerCast(sp->x), TrackerCast(sp->y), TrackerCast(sprite[i].x), TrackerCast(sprite[i].y));
                     Message(ds,0);
                 }
             }
@@ -229,7 +224,7 @@ SetupBuildFAF(void)
             sector[sp->sectnum].ceilingpicnum = FAF_MIRROR_PIC;
             if (sector[sp->sectnum].floorz == sector[sp->sectnum].ceilingz)
             {
-                sprintf(ds, "Mirror used for non-connect area. Use tile 342. Sect %d, x %d, y %d\n", sp->sectnum, wall[sector[sp->sectnum].wallptr].x, wall[sector[sp->sectnum].wallptr].y);
+                sprintf(ds, "Mirror used for non-connect area. Use tile 342. Sect %d, x %d, y %d\n", TrackerCast(sp->sectnum), TrackerCast(wall[sector[sp->sectnum].wallptr].x), TrackerCast(wall[sector[sp->sectnum].wallptr].y));
                 Message(ds,0);
             }
         }
@@ -239,7 +234,7 @@ SetupBuildFAF(void)
             sector[sp->sectnum].floorpicnum = FAF_MIRROR_PIC;
             if (sector[sp->sectnum].floorz == sector[sp->sectnum].ceilingz)
             {
-                sprintf(ds, "Mirror used for non-connect area. Use tile 342. Sect %d, x %d, y %d\n", sp->sectnum, wall[sector[sp->sectnum].wallptr].x, wall[sector[sp->sectnum].wallptr].y);
+                sprintf(ds, "Mirror used for non-connect area. Use tile 342. Sect %d, x %d, y %d\n", TrackerCast(sp->sectnum), TrackerCast(wall[sector[sp->sectnum].wallptr].x), TrackerCast(wall[sector[sp->sectnum].wallptr].y));
                 Message(ds,0);
             }
         }
@@ -263,6 +258,10 @@ SetupBuildFAF(void)
 
 #if 0
     // check ceiling and floor heights
+    SPRITEp vc_sp,vf_sp,vl_sp;
+    short vc,nextvc,vf,nextvf,l,nextl;
+    int zdiff;
+
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_FAF], vc, nextvc)
     {
         vc_sp = &sprite[vc];
@@ -367,7 +366,7 @@ PicInView(short tile_num, SWBOOL reset)
 void
 GetUpperLowerSector(short match, int x, int y, short *upper, short *lower)
 {
-    int i, j;
+    int i;
     short sectorlist[16];
     short sln = 0;
     short SpriteNum, Next;
@@ -398,7 +397,8 @@ GetUpperLowerSector(short match, int x, int y, short *upper, short *lower)
                 if (!found)
                     continue;
 
-                sectorlist[sln] = i;
+                if (sln < (int)SIZ(sectorlist))
+                    sectorlist[sln] = i;
                 sln++;
             }
         }
@@ -410,23 +410,20 @@ GetUpperLowerSector(short match, int x, int y, short *upper, short *lower)
         *lower = -1;
         return;
     }
-
     // Map rooms have NOT been dragged on top of each other
-    if (sln == 1)
+    else if (sln == 1)
     {
         *lower = sectorlist[0];
         *upper = sectorlist[0];
         return;
     }
-    else
     // Map rooms HAVE been dragged on top of each other
-    if (sln > 2)
+    else if (sln > 2)
     {
         // try again moving the x,y pos around until you only get two sectors
         GetUpperLowerSector(match, x - 1, y, upper, lower);
     }
-
-    if (sln == 2)
+    else if (sln == 2)
     {
         if (sector[sectorlist[0]].floorz < sector[sectorlist[1]].floorz)
         {
@@ -451,7 +448,6 @@ FindCeilingView(short match, int32_t* x, int32_t* y, int32_t z, int16_t* sectnum
     int yoff = 0;
     short i, nexti;
     SPRITEp sp = NULL;
-    short top_sprite = -1;
     int pix_diff;
     int newz;
 
@@ -640,13 +636,10 @@ SectorInScene(short tile_num)
 }
 
 short
-ViewSectorInScene(short cursectnum, short type, short level)
+ViewSectorInScene(short cursectnum, short level)
 {
     int i, nexti;
-    int j, nextj;
     SPRITEp sp;
-    SPRITEp sp2;
-    int cz, fz;
     short match;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_FAF], i, nexti)
@@ -681,7 +674,7 @@ DrawOverlapRoom(int tx, int ty, int tz, short tang, int thoriz, short tsectnum)
 
     save.zcount = 0;
 
-    match = ViewSectorInScene(tsectnum, VIEW_THRU_CEILING, VIEW_LEVEL1);
+    match = ViewSectorInScene(tsectnum, VIEW_LEVEL1);
     if (match != -1)
     {
         FindCeilingView(match, &tx, &ty, tz, &tsectnum);
@@ -694,7 +687,7 @@ DrawOverlapRoom(int tx, int ty, int tz, short tang, int thoriz, short tsectnum)
         }
 
         drawrooms(tx, ty, tz, tang, thoriz, tsectnum);
-        drawmasks();
+        renderDrawMasks();
 
         // reset Z's
         for (i = 0; i < save.zcount; i++)
@@ -706,7 +699,7 @@ DrawOverlapRoom(int tx, int ty, int tz, short tang, int thoriz, short tsectnum)
     }
     else
     {
-        match = ViewSectorInScene(tsectnum, VIEW_THRU_FLOOR, VIEW_LEVEL2);
+        match = ViewSectorInScene(tsectnum, VIEW_LEVEL2);
         if (match != -1)
         {
             FindFloorView(match, &tx, &ty, tz, &tsectnum);
@@ -719,7 +712,7 @@ DrawOverlapRoom(int tx, int ty, int tz, short tang, int thoriz, short tsectnum)
             }
 
             drawrooms(tx, ty, tz, tang, thoriz, tsectnum);
-            drawmasks();
+            renderDrawMasks();
 
             // reset Z's
             for (i = 0; i < save.zcount; i++)

@@ -1,18 +1,28 @@
-// mmulti.h
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
 
-#ifndef mmulti_h_
-#define mmulti_h_
+#ifndef mmulti_h
+#define mmulti_h
 
-#define MAXMULTIPLAYERS 16
+#include "build.h"
 
-extern int myconnectindex, numplayers;
-extern int connecthead, connectpoint2[MAXMULTIPLAYERS];
+#define MMULTI_MODE_MS  0
+#define MMULTI_MODE_P2P 1
+
+extern int myconnectindex, numplayers, networkmode;
+extern int connecthead, connectpoint2[MAXPLAYERS];
 extern unsigned char syncstate;
 
+void initsingleplayers(void);
+void initmultiplayers(int argc, char const * const argv[]);
 int initmultiplayersparms(int argc, char const * const argv[]);
 int initmultiplayerscycle(void);
 
-void initmultiplayers(int argc, char const * const argv[], unsigned char damultioption, unsigned char dacomrateoption, unsigned char dapriority);
 void setpackettimeout(int datimeoutcount, int daresendagaincount);
 void uninitmultiplayers(void);
 void sendlogon(void);
@@ -23,7 +33,6 @@ void sendpacket(int other, unsigned char *bufptr, int messleng);
 int getpacket(int *other, unsigned char *bufptr);
 void flushpackets(void);
 void genericmultifunction(int other, unsigned char *bufptr, int messleng, int command);
-int isvalidipaddress(const char *st);
 
-#endif  // mmulti_h_
+#endif	// mmulti_h
 

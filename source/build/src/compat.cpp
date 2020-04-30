@@ -1,5 +1,5 @@
 /*
- * Playing-field leveller for Build
+ * Playing-field leveler for Build
  */
 
 #define LIBDIVIDE_BODY
@@ -12,10 +12,12 @@
 # include "osxbits.h"
 #endif
 
+#ifndef USE_PHYSFS
 #if defined(_MSC_VER)
 # include <io.h>
 #else
 # include <dirent.h>
+#endif
 #endif
 
 #if defined __linux || defined EDUKE32_BSD
@@ -27,6 +29,8 @@
 #endif
 
 #include "baselayer.h"
+
+#include "vfs.h"
 
 ////////// PANICKING ALLOCATION FUNCTIONS //////////
 
@@ -47,8 +51,11 @@ void xalloc_set_location(int32_t line, const char *file, const char *func)
 }
 #endif
 
-void handle_memerr(void)
+void *handle_memerr(void *p)
 {
+    UNREFERENCED_PARAMETER(p);
+    debug_break();
+
     if (g_MemErrHandler)
     {
 #ifdef DEBUGGINGAIDS
@@ -59,6 +66,7 @@ void handle_memerr(void)
     }
 
     Bexit(EXIT_FAILURE);
+    EDUKE32_UNREACHABLE_SECTION(return &handle_memerr);
 }
 
 void set_memerr_handler(void(*handlerfunc)(int32_t, const char *, const char *))
@@ -69,17 +77,11 @@ void set_memerr_handler(void(*handlerfunc)(int32_t, const char *, const char *))
 //
 // Stuff which must be a function
 //
-#ifdef _WIN32
-typedef BOOL (WINAPI * aSHGetSpecialFolderPathAtype)(HWND, LPTSTR, int, BOOL);
-#endif
-
 char *Bgethomedir(void)
 {
 #ifdef _WIN32
-    aSHGetSpecialFolderPathAtype aSHGetSpecialFolderPathA;
-    TCHAR appdata[MAX_PATH];
     int32_t loaded = 0;
-    HMODULE hShell32 = GetModuleHandle("shell32.dll");
+    auto hShell32 = GetModuleHandle("shell32.dll");
 
     if (hShell32 == NULL)
     {
@@ -90,14 +92,20 @@ char *Bgethomedir(void)
     if (hShell32 == NULL)
         return NULL;
 
-    aSHGetSpecialFolderPathA = (aSHGetSpecialFolderPathAtype)GetProcAddress(hShell32, "SHGetSpecialFolderPathA");
+    using SHGSFPA_t = BOOL (WINAPI *)(HWND, LPTSTR, int, BOOL);
+    auto aSHGetSpecialFolderPathA = (SHGSFPA_t)(void (*)(void))GetProcAddress(hShell32, "SHGetSpecialFolderPathA");
+
     if (aSHGetSpecialFolderPathA != NULL)
+    {
+        TCHAR appdata[MAX_PATH];
+
         if (SUCCEEDED(aSHGetSpecialFolderPathA(NULL, appdata, CSIDL_APPDATA, FALSE)))
         {
             if (loaded)
                 FreeLibrary(hShell32);
-            return Bstrdup(appdata);
+            return Xstrdup(appdata);
         }
+    }
 
     if (loaded)
         FreeLibrary(hShell32);
@@ -107,15 +115,15 @@ char *Bgethomedir(void)
 #elif defined(GEKKO)
     // return current drive's name
     char *drv, cwd[BMAX_PATH] = {0};
-    getcwd(cwd, BMAX_PATH);
+    buildvfs_getcwd(cwd, BMAX_PATH);
     drv = strchr(cwd, ':');
     if (drv)
         drv[1] = '\0';
-    return Bstrdup(cwd);
+    return Xstrdup(cwd);
 #else
     char *e = getenv("HOME");
     if (!e) return NULL;
-    return Bstrdup(e);
+    return Xstrdup(e);
 #endif
 }
 
@@ -124,13 +132,13 @@ char *Bgetappdir(void)
     char *dir = NULL;
 
 #ifdef _WIN32
-	TCHAR appdir[MAX_PATH];
+    TCHAR appdir[MAX_PATH];
 
-	if (GetModuleFileName(NULL, appdir, MAX_PATH) > 0) {
-		// trim off the filename
-		char *slash = Bstrrchr(appdir, '\\');
-		if (slash) slash[0] = 0;
-		dir = Bstrdup(appdir);
+    if (GetModuleFileName(NULL, appdir, MAX_PATH) > 0) {
+        // trim off the filename
+        char *slash = Bstrrchr(appdir, '\\');
+        if (slash) slash[0] = 0;
+        dir = Xstrdup(appdir);
     }
 
 #elif defined EDUKE32_OSX
@@ -138,14 +146,16 @@ char *Bgetappdir(void)
 #elif defined __FreeBSD__
     // the sysctl should also work when /proc/ is not mounted (which seems to
     // be common on FreeBSD), so use it..
-    char buf[PATH_MAX] = {0};
-    int name[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1};
-    size_t len = sizeof(buf)-1;
-    int ret = sysctl(name, sizeof(name)/sizeof(name[0]), buf, &len, NULL, 0);
-    if(ret == 0 && buf[0] != '\0') {
+    char   buf[PATH_MAX] = {0};
+    int    name[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+    size_t len     = sizeof(buf) - 1;
+    int    ret     = sysctl(name, ARRAY_SIZE(name), buf, &len, NULL, 0);
+
+    if (ret == 0 && buf[0] != '\0')
+    {
         // again, remove executable name with dirname()
         // on FreeBSD dirname() seems to use some internal buffer
-        dir = strdup(dirname(buf));
+        dir = Xstrdup(dirname(buf));
     }
 #elif defined __linux || defined EDUKE32_BSD
     char buf[PATH_MAX] = {0};
@@ -160,7 +170,7 @@ char *Bgetappdir(void)
         // remove executable name with dirname(3)
         // on Linux, dirname() will modify buf2 (cutting off executable name) and return it
         // on FreeBSD it seems to use some internal buffer instead.. anyway, just strdup()
-        dir = Bstrdup(dirname(buf2));
+        dir = Xstrdup(dirname(buf2));
     }
 #endif
 
@@ -169,12 +179,8 @@ char *Bgetappdir(void)
 
 int32_t Bcorrectfilename(char *filename, int32_t removefn)
 {
-    char *fn;
-    char *tokarr[64], *first, *next = NULL, *token;
-    int32_t i, ntok = 0, leadslash = 0, trailslash = 0;
-
-    fn = Bstrdup(filename);
-    if (!fn) return -1;
+    char *fn = Xstrdup(filename);
+    char *tokarr[64], *first, *next = NULL;
 
     for (first=fn; *first; first++)
     {
@@ -182,13 +188,15 @@ int32_t Bcorrectfilename(char *filename, int32_t removefn)
         if (*first == '\\') *first = '/';
 #endif
     }
-    leadslash = (*fn == '/');
-    trailslash = (first>fn && first[-1] == '/');
+
+    int leadslash = (*fn == '/');
+    int trailslash = (first>fn && first[-1] == '/');
+    int ntok = 0;
 
     first = fn;
     do
     {
-        token = Bstrtoken(first, "/", &next, 1);
+        char *token = Bstrtoken(first, "/", &next, 1);
         first = NULL;
         if (!token) break;
         else if (token[0] == 0) continue;
@@ -203,19 +211,20 @@ int32_t Bcorrectfilename(char *filename, int32_t removefn)
 
     first = filename;
     if (leadslash) *(first++) = '/';
-    for (i=0; i<ntok; i++)
+    for (int i=0; i<ntok; i++)
     {
         if (i>0) *(first++) = '/';
-        for (token=tokarr[i]; *token; token++)
+        for (char *token=tokarr[i]; *token; token++)
             *(first++) = *token;
     }
     if (trailslash) *(first++) = '/';
     *(first++) = 0;
 
-    Bfree(fn);
+    Xfree(fn);
     return 0;
 }
 
+#ifndef USE_PHYSFS
 int32_t Bcanonicalisefilename(char *filename, int32_t removefn)
 {
     char cwd[BMAX_PATH];
@@ -238,7 +247,7 @@ int32_t Bcanonicalisefilename(char *filename, int32_t removefn)
         if (*p == '\\')
             *p = '/';
 #else
-    if (!getcwd(cwd, sizeof(cwd)))
+    if (!buildvfs_getcwd(cwd, sizeof(cwd)))
         return -1;
 #endif
 
@@ -279,6 +288,7 @@ int32_t Bcanonicalisefilename(char *filename, int32_t removefn)
     UNREFERENCED_PARAMETER(removefn);  // change the call below to use removefn instead of 1?
     return Bcorrectfilename(fnp, 1);
 }
+#endif
 
 char *Bgetsystemdrives(void)
 {
@@ -298,10 +308,7 @@ char *Bgetsystemdrives(void)
         number++;
     }
 
-    str = p = (char *)Bmalloc(1 + (3 * number));
-    if (!str)
-        return NULL;
-
+    str = p = (char *)Xmalloc(1 + (3 * number));
     number = 0;
     for (mask = 1; mask < 0x8000000l; mask <<= 1, number++)
     {
@@ -321,13 +328,7 @@ char *Bgetsystemdrives(void)
 }
 
 
-int32_t Bfilelength(int32_t fd)
-{
-    struct Bstat st;
-    return (Bfstat(fd, &st) < 0) ? -1 : (int32_t)(st.st_size);
-}
-
-
+#ifndef USE_PHYSFS
 typedef struct
 {
 #ifdef _MSC_VER
@@ -346,19 +347,10 @@ BDIR *Bopendir(const char *name)
     BDIR_real *dirr;
 #ifdef _MSC_VER
     char *t, *tt;
-    t = (char *)Bmalloc(Bstrlen(name) + 1 + 4);
-    if (!t)
-        return NULL;
+    t = (char *)Xmalloc(Bstrlen(name) + 1 + 4);
 #endif
 
-    dirr = (BDIR_real *)Bmalloc(sizeof(BDIR_real) + Bstrlen(name));
-    if (!dirr)
-    {
-#ifdef _MSC_VER
-        Bfree(t);
-#endif
-        return NULL;
-    }
+    dirr = (BDIR_real *)Xmalloc(sizeof(BDIR_real) + Bstrlen(name));
 
 #ifdef _MSC_VER
     Bstrcpy(t, name);
@@ -372,17 +364,17 @@ BDIR *Bopendir(const char *name)
     *(++tt) = 0;
 
     dirr->dir = _findfirst(t, &dirr->fid);
-    Bfree(t);
+    Xfree(t);
     if (dirr->dir == -1)
     {
-        Bfree(dirr);
+        Xfree(dirr);
         return NULL;
     }
 #else
     dirr->dir = opendir(name);
     if (dirr->dir == NULL)
     {
-        Bfree(dirr);
+        Xfree(dirr);
         return NULL;
     }
 #endif
@@ -427,19 +419,28 @@ struct Bdirent *Breaddir(BDIR *dir)
     dirr->info.size = 0;
     dirr->info.mtime = 0;
 
-    char *fn = (char *)Bmalloc(Bstrlen(dirr->name) + 1 + dirr->info.namlen + 1);
-    if (fn)
+    char *fn = (char *)Xmalloc(Bstrlen(dirr->name) + 1 + dirr->info.namlen + 1);
+    Bsprintf(fn, "%s/%s", dirr->name, dirr->info.name);
+
+#ifdef USE_PHYSFS
+    PHYSFS_Stat st;
+    if (PHYSFS_stat(fn, &st))
     {
-        Bsprintf(fn, "%s/%s", dirr->name, dirr->info.name);
-        struct Bstat st;
-        if (!Bstat(fn, &st))
-        {
-            dirr->info.mode = st.st_mode;
-            dirr->info.size = st.st_size;
-            dirr->info.mtime = st.st_mtime;
-        }
-        Bfree(fn);
+        // dirr->info.mode = TODO;
+        dirr->info.size = st.filesize;
+        dirr->info.mtime = st.modtime;
     }
+#else
+    struct Bstat st;
+    if (!Bstat(fn, &st))
+    {
+        dirr->info.mode = st.st_mode;
+        dirr->info.size = st.st_size;
+        dirr->info.mtime = st.st_mtime;
+    }
+#endif
+
+    Xfree(fn);
 
     return &dirr->info;
 }
@@ -453,10 +454,11 @@ int32_t Bclosedir(BDIR *dir)
 #else
     closedir(dirr->dir);
 #endif
-    Bfree(dirr);
+    Xfree(dirr);
 
     return 0;
 }
+#endif
 
 
 char *Bstrtoken(char *s, const char *delim, char **ptrptr, int chop)
@@ -574,6 +576,25 @@ char *Bstrupr(char *s)
 }
 #endif
 
+#define BMAXPAGESIZE 16384
+
+int Bgetpagesize(void)
+{
+    static int pageSize = -1;
+
+    if (pageSize == -1)
+    {
+#ifdef _WIN32
+        SYSTEM_INFO system_info;
+        GetSystemInfo(&system_info);
+        pageSize = system_info.dwPageSize;
+#else
+        pageSize = sysconf(_SC_PAGESIZE);
+#endif
+    }
+
+    return (unsigned)pageSize < BMAXPAGESIZE ? pageSize : BMAXPAGESIZE;
+}
 
 //
 // Bgetsysmemsize() -- gets the amount of system memory in the machine
@@ -582,16 +603,17 @@ char *Bstrupr(char *s)
 typedef BOOL (WINAPI *aGlobalMemoryStatusExType)(LPMEMORYSTATUSEX);
 #endif
 
-uint32_t Bgetsysmemsize(void)
+size_t Bgetsysmemsize(void)
 {
+    size_t siz = UINT32_MAX;
+
 #ifdef _WIN32
-    uint32_t siz = UINT32_MAX;
     HMODULE lib = LoadLibrary("KERNEL32.DLL");
 
     if (lib)
     {
         aGlobalMemoryStatusExType aGlobalMemoryStatusEx =
-            (aGlobalMemoryStatusExType)GetProcAddress(lib, "GlobalMemoryStatusEx");
+            (aGlobalMemoryStatusExType)(void (*)(void))GetProcAddress(lib, "GlobalMemoryStatusEx");
 
         if (aGlobalMemoryStatusEx)
         {
@@ -599,39 +621,35 @@ uint32_t Bgetsysmemsize(void)
             MEMORYSTATUSEX memst;
             memst.dwLength = sizeof(MEMORYSTATUSEX);
             if (aGlobalMemoryStatusEx(&memst))
-                siz = (uint32_t)min(UINT32_MAX, memst.ullTotalPhys);
+                siz = min<decltype(memst.ullTotalPhys)>(SIZE_MAX, memst.ullTotalPhys);
         }
-        else
+
+        if (!aGlobalMemoryStatusEx || siz == 0)
         {
-            // Yeah, there's enough Win9x hatred here that a perfectly good workaround
-            // has been replaced by an error message.  Oh well, we don't support 9x anyway.
             initprintf("Bgetsysmemsize(): error determining system memory size!\n");
+            siz = UINT32_MAX;
         }
 
         FreeLibrary(lib);
     }
-
-    return siz;
+    else initprintf("Bgetsysmemsize(): unable to load KERNEL32.DLL!\n");
 #elif (defined(_SC_PAGE_SIZE) || defined(_SC_PAGESIZE)) && defined(_SC_PHYS_PAGES) && !defined(GEKKO)
-    uint32_t siz = UINT32_MAX;
-    int64_t scpagesiz, scphyspages;
-
 #ifdef _SC_PAGE_SIZE
-    scpagesiz = sysconf(_SC_PAGE_SIZE);
+    int64_t const scpagesiz = sysconf(_SC_PAGE_SIZE);
 #else
-    scpagesiz = sysconf(_SC_PAGESIZE);
+    int64_t const scpagesiz = sysconf(_SC_PAGESIZE);
 #endif
-    scphyspages = sysconf(_SC_PHYS_PAGES);
+    int64_t const scphyspages = sysconf(_SC_PHYS_PAGES);
+
     if (scpagesiz >= 0 && scphyspages >= 0)
-        siz = (uint32_t)min(UINT32_MAX, (int64_t)scpagesiz * (int64_t)scphyspages);
+        siz = (size_t)min<uint64_t>(SIZE_MAX, scpagesiz * scphyspages);
 
     //initprintf("Bgetsysmemsize(): %d pages of %d bytes, %d bytes of system memory\n",
     //		scphyspages, scpagesiz, siz);
 
-    return siz;
-#else
-    return UINT32_MAX;
 #endif
+
+    return siz;
 }
 
 #ifdef GEKKO

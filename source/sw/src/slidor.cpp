@@ -28,7 +28,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "names2.h"
 #include "panel.h"
 #include "game.h"
-#include "net.h"
+#include "network.h"
 #include "tags.h"
 #include "slidor.h"
 #include "sector.h"
@@ -39,7 +39,6 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 void ReverseSlidor(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = u->SpriteP;
     ROTATORp r;
 
     r = u->rotator;
@@ -91,7 +90,6 @@ void SetSlidorActive(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = u->SpriteP;
-    SECTORp sectp = &sector[sp->sectnum];
     ROTATORp r;
 
     r = u->rotator;
@@ -115,7 +113,6 @@ void SetSlidorInactive(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = u->SpriteP;
-    SECTORp sectp = &sector[sp->sectnum];
 
     DoSlidorInterp(SpriteNum, stopinterpolation);
 
@@ -128,10 +125,7 @@ void SetSlidorInactive(short SpriteNum)
 // called for operation from the space bar
 short DoSlidorOperate(PLAYERp pp, short sectnum)
 {
-    USERp fu;
-    SPRITEp fsp;
     short match;
-    short i,nexti;
 
     match = sector[sectnum].hitag;
 
@@ -234,7 +228,6 @@ TestSlidorMatchActive(short match)
 {
     USERp fu;
     SPRITEp fsp;
-    short sectnum;
 
     short i,nexti;
 
@@ -270,13 +263,14 @@ void DoSlidorInterp(short SpriteNum, INTERP_FUNCp interp_func)
         switch (wall[w].lotag)
         {
         case TAG_WALL_SLIDOR_LEFT:
-
+        {
             // prev wall
             pw = w - 1;
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            uint16_t const nextwall = wall[w].nextwall;
+            if (nextwall >= MAXWALLS)
             {
                 // white wall - move 4 points
                 interp_func(&wall[w].x);
@@ -288,21 +282,23 @@ void DoSlidorInterp(short SpriteNum, INTERP_FUNCp interp_func)
             {
                 // red wall - move 2 points
                 interp_func(&wall[w].x);
-                interp_func(&wall[DRAG_WALL(w)].x);
+                interp_func(&wall[wall[nextwall].point2].x);
                 interp_func(&wall[wall[w].point2].x);
-                interp_func(&wall[DRAG_WALL(wall[w].point2)].x);
+                interp_func(&wall[wall[wall[wall[w].point2].nextwall].point2].x);
             }
 
             break;
+        }
 
         case TAG_WALL_SLIDOR_RIGHT:
-
+        {
             // prev wall
             pw = w - 1;
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            uint16_t const nextwall = wall[w].nextwall;
+            if (nextwall >= MAXWALLS)
             {
                 // white wall - move 4 points
                 interp_func(&wall[w].x);
@@ -314,21 +310,23 @@ void DoSlidorInterp(short SpriteNum, INTERP_FUNCp interp_func)
             {
                 // red wall - move 2 points
                 interp_func(&wall[w].x);
-                interp_func(&wall[DRAG_WALL(w)].x);
+                interp_func(&wall[wall[nextwall].point2].x);
                 interp_func(&wall[wall[w].point2].x);
-                interp_func(&wall[DRAG_WALL(wall[w].point2)].x);
+                interp_func(&wall[wall[wall[wall[w].point2].nextwall].point2].x);
             }
 
             break;
+        }
 
         case TAG_WALL_SLIDOR_UP:
-
+        {
             // prev wall
             pw = w - 1;
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            uint16_t const nextwall = wall[w].nextwall;
+            if (nextwall >= MAXWALLS)
             {
                 interp_func(&wall[w].y);
                 interp_func(&wall[pw].y);
@@ -338,21 +336,23 @@ void DoSlidorInterp(short SpriteNum, INTERP_FUNCp interp_func)
             else
             {
                 interp_func(&wall[w].y);
-                interp_func(&wall[DRAG_WALL(w)].y);
+                interp_func(&wall[wall[nextwall].point2].y);
                 interp_func(&wall[wall[w].point2].y);
-                interp_func(&wall[DRAG_WALL(wall[w].point2)].y);
+                interp_func(&wall[wall[wall[wall[w].point2].nextwall].point2].y);
             }
 
             break;
+        }
 
         case TAG_WALL_SLIDOR_DOWN:
-
+        {
             // prev wall
             pw = w - 1;
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            uint16_t const nextwall = wall[w].nextwall;
+            if (nextwall >= MAXWALLS)
             {
                 interp_func(&wall[w].y);
                 interp_func(&wall[pw].y);
@@ -362,13 +362,13 @@ void DoSlidorInterp(short SpriteNum, INTERP_FUNCp interp_func)
             else
             {
                 interp_func(&wall[w].y);
-                interp_func(&wall[DRAG_WALL(w)].y);
+                interp_func(&wall[wall[nextwall].point2].y);
                 interp_func(&wall[wall[w].point2].y);
-                interp_func(&wall[DRAG_WALL(wall[w].point2)].y);
+                interp_func(&wall[wall[wall[wall[w].point2].nextwall].point2].y);
             }
 
-
             break;
+        }
         }
 
         w = wall[w].point2;
@@ -394,7 +394,7 @@ int DoSlidorMoveWalls(short SpriteNum, int amt)
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            if ((uint16_t)wall[w].nextwall >= MAXWALLS)
             {
                 // white wall - move 4 points
                 wall[w].x -= amt;
@@ -418,7 +418,7 @@ int DoSlidorMoveWalls(short SpriteNum, int amt)
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            if ((uint16_t)wall[w].nextwall >= MAXWALLS)
             {
                 // white wall - move 4 points
                 wall[w].x += amt;
@@ -442,7 +442,7 @@ int DoSlidorMoveWalls(short SpriteNum, int amt)
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            if ((uint16_t)wall[w].nextwall >= MAXWALLS)
             {
                 wall[w].y -= amt;
                 wall[pw].y -= amt;
@@ -464,7 +464,7 @@ int DoSlidorMoveWalls(short SpriteNum, int amt)
             if (w < startwall)
                 pw = endwall;
 
-            if (wall[w].nextwall < 0)
+            if ((uint16_t)wall[w].nextwall >= MAXWALLS)
             {
                 wall[w].y += amt;
                 wall[pw].y += amt;
@@ -491,11 +491,10 @@ int DoSlidorMoveWalls(short SpriteNum, int amt)
 int DoSlidorInstantClose(short SpriteNum)
 {
     SPRITEp sp = &sprite[SpriteNum];
-    short w, pw, startwall, endwall;
+    short w, startwall;
     int diff;
 
     w = startwall = sector[sprite[SpriteNum].sectnum].wallptr;
-    endwall = startwall + sector[sprite[SpriteNum].sectnum].wallnum - 1;
 
     do
     {
@@ -535,10 +534,6 @@ int DoSlidorMove(short SpriteNum)
     USERp u = User[SpriteNum];
     SPRITEp sp = u->SpriteP;
     ROTATORp r;
-    short ndx,w,startwall,endwall;
-    int i, nexti;
-    int nx,ny;
-    int dist,closest;
     int old_pos;
     SWBOOL kill = FALSE;
 
@@ -682,8 +677,6 @@ int DoSlidor(short SpriteNum)
     USERp u = User[SpriteNum];
     SPRITEp sp = u->SpriteP;
     SECTORp sectp = &sector[sp->sectnum];
-    int *lptr;
-    int amt;
 
     DoSlidorMove(SpriteNum);
 

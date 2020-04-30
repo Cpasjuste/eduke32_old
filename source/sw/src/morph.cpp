@@ -43,7 +43,7 @@ DoSectorObjectSetScale(short match)
 
     for (sop = SectorObject; sop < &SectorObject[MAX_SECTOR_OBJECTS]; sop++)
     {
-        if (sop->xmid == MAXLONG)
+        if (sop->xmid == INT32_MAX)
             continue;
 
         if (sop->match_event == match)
@@ -118,7 +118,7 @@ DoSOevent(short match, short state)
 
     for (sop = SectorObject; sop < &SectorObject[MAX_SECTOR_OBJECTS]; sop++)
     {
-        if (sop->xmid == MAXLONG)
+        if (sop->xmid == INT32_MAX)
             continue;
 
         if (sop->match_event == match)
@@ -510,8 +510,6 @@ SpikeFloor(SECTOR_OBJECTp sop)
 {
     int mx, my;
     int floorz;
-    SECTORp *sectp;
-    int j;
     int x,y;
 
     // z direction
@@ -549,6 +547,8 @@ SpikeFloor(SECTOR_OBJECTp sop)
     SOBJ_AlignFloorToPoint(sop, mx, my, floorz + sop->morph_z);
 
 #if 0
+    SECTORp *sectp;
+    int j;
     for (sectp = sop->sectp, j = 0; *sectp; sectp++, j++)
     {
         if (SectUser[*sectp - sector] &&

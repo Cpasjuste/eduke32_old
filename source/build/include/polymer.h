@@ -3,14 +3,14 @@
 #ifndef polymer_h_
 # define polymer_h_
 
-# include "compat.h"
 # include "baselayer.h"
-# include "glad/glad.h"
 # include "build.h"
+# include "compat.h"
+# include "glad/glad.h"
 # include "glbuild.h"
-# include "osd.h"
 # include "hightile.h"
 # include "mdsprite.h"
+# include "osd.h"
 # include "polymost.h"
 # include "pragmas.h"
 
@@ -335,11 +335,11 @@ typedef struct      s_prhighpalookup {
     GLuint          map;
 }                   _prhighpalookup;
 
-typedef void    (*animatespritesptr)(int32_t, int32_t, int32_t, int32_t);
+typedef void    (*animatespritesptr)(int32_t, int32_t, int32_t, int32_t, int32_t);
 
 typedef struct      s_pranimatespritesinfo {
     animatespritesptr animatesprites;
-    int32_t         x, y, a, smoothratio;
+    int32_t         x, y, z, a, smoothratio;
 }                   _pranimatespritesinfo;
 
 // this one has to be provided by the application
@@ -352,6 +352,8 @@ void                polymer_setaspect(int32_t);
 void                polymer_glinit(void);
 void                polymer_resetlights(void);
 void                polymer_loadboard(void);
+int32_t             polymer_printtext256(int32_t xpos, int32_t ypos, int16_t col, int16_t backcol, const char *name, char fontsize);
+void                polymer_fillpolygon(int32_t npoints);
 void polymer_drawrooms(int32_t daposx, int32_t daposy, int32_t daposz, fix16_t daang, int32_t dahoriz, int16_t dacursectnum);
 void                polymer_drawmasks(void);
 void                polymer_editorpick(void);
@@ -359,12 +361,12 @@ void                polymer_inb4rotatesprite(int16_t tilenum, char pal, int8_t s
 void                polymer_postrotatesprite(void);
 void                polymer_drawmaskwall(int32_t damaskwallcnt);
 void                polymer_drawsprite(int32_t snum);
-void                polymer_setanimatesprites(animatespritesptr animatesprites, int32_t x, int32_t y, int32_t a, int32_t smoothratio);
+void                polymer_setanimatesprites(animatespritesptr animatesprites, int32_t x, int32_t y, int32_t z, int32_t a, int32_t smoothratio);
 int16_t             polymer_addlight(_prlight* light);
 void                polymer_deletelight(int16_t lighti);
 void                polymer_invalidatelights(void);
 void                polymer_texinvalidate(void);
-void                polymer_definehighpalookup(char basepalnum, char palnum, char *fn);
+void                polymer_definehighpalookup(char basepalnum, char palnum, char *data);
 int32_t             polymer_havehighpalookup(int32_t basepalnum, int32_t palnum);
 
 
@@ -399,7 +401,7 @@ static void         polymer_emptybuckets(void);
 static _prbucket*   polymer_findbucket(int16_t tilenum, char pal);
 static void         polymer_bucketplane(_prplane* plane);
 static void         polymer_drawplane(_prplane* plane);
-static inline void  polymer_inb4mirror(_prvert* buffer, GLfloat* plane);
+static inline void  polymer_inb4mirror(_prvert* buffer, const GLfloat* plane);
 static void         polymer_animatesprites(void);
 static void         polymer_freeboard(void);
 // SECTORS
@@ -416,13 +418,13 @@ static void         polymer_updatewall(int16_t wallnum);
 static void         polymer_drawwall(int16_t sectnum, int16_t wallnum);
 // HSR
 static void         polymer_computeplane(_prplane* p);
-static inline void  polymer_crossproduct(GLfloat* in_a, GLfloat* in_b, GLfloat* out);
-static inline void  polymer_transformpoint(const float* inpos, float* pos, float* matrix);
+static inline void  polymer_crossproduct(const GLfloat* in_a, const GLfloat* in_b, GLfloat* out);
+static inline void  polymer_transformpoint(const float* inpos, float* pos, const float* matrix);
 static inline void  polymer_normalize(float* vec);
 static inline void  polymer_pokesector(int16_t sectnum);
 static void         polymer_extractfrustum(GLfloat* modelview, GLfloat* projection, float* frustum);
-static inline int32_t polymer_planeinfrustum(_prplane *plane, float* frustum);
-static inline void  polymer_scansprites(int16_t sectnum, uspritetype* tsprite, int32_t* spritesortcnt);
+static inline int32_t polymer_planeinfrustum(_prplane *plane, const float* frustum);
+static inline void  polymer_scansprites(int16_t sectnum, tspriteptr_t tsprite, int32_t* spritesortcnt);
 static void         polymer_updatesprite(int32_t snum);
 // SKIES
 static void         polymer_getsky(void);
@@ -432,12 +434,12 @@ static void         polymer_drawartsky(int16_t tilenum, char palnum, int8_t shad
 static void         polymer_drawartskyquad(int32_t p1, int32_t p2, GLfloat height);
 static void         polymer_drawskybox(int16_t tilenum, char palnum, int8_t shade);
 // MDSPRITES
-static void         polymer_drawmdsprite(uspritetype *tspr);
+static void         polymer_drawmdsprite(tspriteptr_t tspr);
 static void         polymer_loadmodelvbos(md3model_t* m);
 // MATERIALS
 static void         polymer_getscratchmaterial(_prmaterial* material);
 static _prbucket*   polymer_getbuildmaterial(_prmaterial* material, int16_t tilenum, char pal, int8_t shade, int8_t vis, int32_t cmeth);
-static int32_t      polymer_bindmaterial(const _prmaterial *material, int16_t* lights, int lightcount);
+static int32_t      polymer_bindmaterial(const _prmaterial *material, const int16_t* lights, int lightcount);
 static void         polymer_unbindmaterial(int32_t programbits);
 static void         polymer_compileprogram(int32_t programbits);
 // LIGHTS
@@ -461,17 +463,17 @@ void PR_CALLBACK    polymer_debugoutputcallback(GLenum source,GLenum type,GLuint
 
 #define SWITCH_CULL_DIRECTION { culledface = (culledface == GL_FRONT) ? GL_BACK : GL_FRONT; glCullFace(culledface); }
 
-static inline GLfloat dot2f(GLfloat *v1, GLfloat *v2)
+static inline GLfloat dot2f(const GLfloat *v1, const GLfloat *v2)
 {
     return v1[0]*v2[0] + v1[1]*v2[1];
 }
 
-static inline GLfloat dot3f(GLfloat *v1, GLfloat *v2)
+static inline GLfloat dot3f(const GLfloat *v1, const GLfloat *v2)
 {
     return v1[0]*v2[0] + v1[1]*v2[1] + v1[2]*v2[2];
 }
 
-static inline void relvec2f(GLfloat *v1, GLfloat *v2, GLfloat *out)
+static inline void relvec2f(const GLfloat *v1, const GLfloat *v2, GLfloat *out)
 {
     out[0] = v2[0]-v1[0];
     out[1] = v2[1]-v1[1];

@@ -23,6 +23,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #ifndef EDUKE32_MACROS_H_
 #define EDUKE32_MACROS_H_
 
+#include "mmulti.h"
+
 // Macros, some from SW source
 
 #define BGSTRETCH (ud.bgstretch ? 1024 : 0)
@@ -30,8 +32,11 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #define WIN_IS_PRESSED ( KB_KeyPressed( sc_RightWin ) || KB_KeyPressed( sc_LeftWin ) )
 #define ALT_IS_PRESSED ( KB_KeyPressed( sc_RightAlt ) || KB_KeyPressed( sc_LeftAlt ) )
 #define SHIFTS_IS_PRESSED ( KB_KeyPressed( sc_RightShift ) || KB_KeyPressed( sc_LeftShift ) )
+
+#ifndef EDUKE32_STANDALONE
 #define RANDOMSCRAP(s, i) A_InsertSprite(s->sectnum,s->x+(krand()&255)-128,s->y+(krand()&255)-128,s->z-ZOFFSET3-(krand()&8191),\
     SCRAP6+(krand()&15),-8,48,48,krand()&2047,(krand()&63)+64,-512-(krand()&2047),i,5)
+#endif
 
 #define GTFLAGS(x) (g_gametypeFlags[ud.coop] & x)
 
@@ -50,7 +55,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #define TEST_SYNC_KEY(bits, sync_num) (!!TEST((bits), BIT(sync_num)))
 
+#ifndef EDUKE32_STANDALONE
 #define AFLAMABLE(X) (X==BOX||X==TREE1||X==TREE2||X==TIRE||X==CONE)
+#endif
 #define rnd(X) ((krand()>>8)>=(255-(X)))
 
 //
@@ -131,18 +138,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #define FLOOR_STAT_TRANS_FLIP     (BIT(7)|BIT(8))
 #define FLOOR_STAT_FAF_BLOCK_HITSCAN      BIT(15)
 
-#define CSTAT_WALL_BLOCK            BIT(0)
-#define CSTAT_WALL_BOTTOM_SWAP      BIT(1)
-#define CSTAT_WALL_ALIGN_BOTTOM     BIT(2)
-#define CSTAT_WALL_XFLIP            BIT(3)
-#define CSTAT_WALL_MASKED           BIT(4)
-#define CSTAT_WALL_1WAY             BIT(5)
-#define CSTAT_WALL_BLOCK_HITSCAN    BIT(6)
-#define CSTAT_WALL_TRANSLUCENT      BIT(7)
-#define CSTAT_WALL_YFLIP            BIT(8)
-#define CSTAT_WALL_TRANS_FLIP       BIT(9)
-#define CSTAT_WALL_BLOCK_ACTOR (BIT(14)) // my def
-#define CSTAT_WALL_WARP_HITSCAN (BIT(15)) // my def
 
 //cstat, bit 0: 1 = Blocking sprite (use with clipmove, getzrange)    "B"
 //       bit 1: 1 = 50/50 transluscence, 0 = normal                   "T"

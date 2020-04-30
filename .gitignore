@@ -4,9 +4,9 @@ obj/
 eduke32
 mapster32
 voidsw
-voidsw-editor
-kenbuild
-kenbuild-editor
+wangulator
+ekenbuild
+ekenbuild-editor
 apps/
 *.exe
 /*.dll
@@ -17,21 +17,29 @@ apps/
 *.x86
 *.x64
 *.ppc
-*.app
+/*.app
 
 *.log
 *.cache
 *.cfg
 textures
+texturecache
+*.index
 
 *.manifest
 /*.map
 /platform/Windows/*.map
 *.pdb
+*.iobj
+*.ipdb
+*.ilk
 .vs/
 *.VC.db
 *.VC.opendb
 *.sym
+/*.grp
+/*.rts
+/*.art
 /*.con
 /platform/Windows/*.con
 *.memmap
@@ -41,6 +49,13 @@ textures
 *.vcxproj.user
 *.psess
 *.vsp
+/platform/Windows/Debug/
+/platform/Windows/Release/
+/platform/Windows/Build/
+/platform/Windows/x64/
+/platform/Windows/Win32/
+*.exp
+*.lib
 perl.exe.stackdump
 
 xcuserdata/
@@ -48,3 +63,7 @@ project.xcworkspace/
 *.dSYM/
 
 .DS_Store
+._*
+/source/voidwrap/sdk/
+
+.svn/

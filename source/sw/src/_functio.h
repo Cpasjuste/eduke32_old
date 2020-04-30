@@ -34,7 +34,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 #ifndef function_private_
 #define function_private_
-char *gamefunctions[] =
+const char *gamefunctions[] =
 {
     "Move_Forward",
     "Move_Backward",
@@ -87,11 +87,12 @@ char *gamefunctions[] =
     "Previous_Weapon",
     "Show_Menu",
     "Show_Console",
+    "Alt_Weapon_Mode",
 };
 
 #define NUMKEYENTRIES 50
 
-static char *keydefaults[] =
+static const char *keydefaults[] =
 {
     "Move_Forward", "Up", "Kpad8",
     "Move_Backward", "Down", "Kpad2",
@@ -142,28 +143,29 @@ static char *keydefaults[] =
     "Toggle_Crosshair", "I", "",
     "Next_Weapon", "'", "",
     "Previous_Weapon", ";", "",
+    "Show_Menu", "", "",
     "Show_Console", "NumLck", "",
 };
 
-static char *keydefaults_modern[] =
+static const char *keydefaults_modern[] =
 {
-    "Move_Forward", "W", "",
-    "Move_Backward", "S", "",
-    "Turn_Left", "", "",
-    "Turn_Right", "", "",
-    "Strafe", "", "",
-    "Fire", "", "",
+    "Move_Forward", "W", "Up",
+    "Move_Backward", "S", "Down",
+    "Turn_Left", "Left", "",
+    "Turn_Right", "Right", "",
+    "Strafe", "LAlt", "RAlt",
+    "Fire", "RCtrl", "",
     "Open", "E", "",
-    "Run", "LShift", "",
+    "Run", "LShift", "RShift",
     "AutoRun", "CapLck", "",
-    "Jump", "Space", "",
-    "Crouch", "LAlt", "",
-    "Look_Up", "", "",
-    "Look_Down", "", "",
-    "Strafe_Left", "A", "",
-    "Strafe_Right", "D", "",
-    "Aim_Up", "", "",
-    "Aim_Down", "", "",
+    "Jump", "Space", "/",
+    "Crouch", "LCtrl", "",
+    "Look_Up", "PgUp", "",
+    "Look_Down", "PgDn", "",
+    "Strafe_Left", "A", ",",
+    "Strafe_Right", "D", ".",
+    "Aim_Up", "Home", "",
+    "Aim_Down", "End", "",
     "Weapon_1", "1", "",
     "Weapon_2", "2", "",
     "Weapon_3", "3", "",
@@ -188,19 +190,20 @@ static char *keydefaults_modern[] =
     "Map", "Tab", "",
     "Shrink_Screen", "-", "",
     "Enlarge_Screen", "=", "",
-    "Center_View", "", "",
-    "Holster_Weapon", "H", "",
+    "Center_View", "KPad5", "",
+    "Holster_Weapon", "ScrLck", "",
     "Map_Follow_Mode", "F", "",
     "See_Co_Op_View", "K", "",
-    "Mouse_Aiming", "U", "",
-    "Toggle_Crosshair", "I", "",
-    "Next_Weapon", "", "",
-    "Previous_Weapon", "", "",
-    "Show_Console", "NumLck", "",
+    "Mouse_Aiming", "", "",
+    "Toggle_Crosshair", "", "",
+    "Next_Weapon", "'", "",
+    "Previous_Weapon", ";", "",
+    "Show_Menu", "", "",
+    "Show_Console", "`", "",
 };
 
 
-static char *mousedefaults[] =
+static const char *mousedefaults[] =
 {
     "Fire",
     "Strafe",
@@ -209,18 +212,18 @@ static char *mousedefaults[] =
     ""
 };
 
-static char *mousedefaults_modern[] =
+static const char *mousedefaults_modern[] =
 {
     "Fire",
     "Open",
-    "",
+    "Alt_Weapon_Mode",
     "",
     "Next_Weapon",
     "Previous_Weapon"
 };
 
 
-static char *mouseclickeddefaults[] =
+static const char *mouseclickeddefaults[] =
 {
     "",
     "Open",
@@ -229,7 +232,7 @@ static char *mouseclickeddefaults[] =
     ""
 };
 
-static char *mouseclickeddefaults_modern[] =
+static const char *mouseclickeddefaults_modern[] =
 {
     "",
     "",
@@ -240,142 +243,15 @@ static char *mouseclickeddefaults_modern[] =
 };
 
 
-static char *joystickdefaults[] =
-{
-    "Fire",
-    "Strafe",
-    "Run",
-    "Open",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "Aim_Down",
-    "Look_Right",
-    "Aim_Up",
-    "Look_Left",
-};
-
-
-static char *joystickclickeddefaults[] =
-{
-    "",
-    "Inventory",
-    "Jump",
-    "Crouch",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-};
-
-
-static char *mouseanalogdefaults[] =
+static const char *mouseanalogdefaults[] =
 {
     "analog_turning",
     "analog_moving",
 };
 
 
-static char *mousedigitaldefaults[] =
+static const char *mousedigitaldefaults[] =
 {
-    "",
-    "",
-    "",
-    "",
-};
-
-
-#if 0
-static char *gamepaddigitaldefaults[] =
-{
-    "Turn_Left",
-    "Turn_Right",
-    "Move_Forward",
-    "Move_Backward",
-};
-#endif
-
-
-static char *joystickanalogdefaults[] =
-{
-    "analog_turning",
-    "analog_moving",
-    "analog_strafing",
-    "",
-    "",
-    "",
-    "",
-    "",
-};
-
-
-static char *joystickdigitaldefaults[] =
-{
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "Run",
-    "",
-    "",
-    "",
-    "",
-    "",
     "",
     "",
     "",

@@ -10,7 +10,7 @@
 static BOOL rawinput_started = 0;
 static uint8_t KeyboardState[256] = {0}; // VKeys
 
-extern uint8_t g_mouseEnabled, g_mouseGrabbed;
+extern bool g_mouseEnabled, g_mouseGrabbed;
 extern void keySetState(int32_t key, int32_t state);
 
 //#define MASK_DOWN (1<<(i<<1))
@@ -259,6 +259,8 @@ void RI_PollDevices(BOOL loop)
             if (g_mouseBits & 32)
                 g_mouseCallback(6, 0);
         }
+
+        OSD_HandleWheel();
         g_mouseBits &= ~(16|32);
     }
 
@@ -279,11 +281,10 @@ void RI_PollDevices(BOOL loop)
     }
 }
 
-int32_t mouseInit(void)
+void mouseInit(void)
 {
-    if (g_mouseEnabled) return 0;
-    mouseGrabInput(g_mouseEnabled = g_mouseLockedToWindow);
-    return 0;
+    if (!g_mouseEnabled)
+        mouseGrabInput(g_mouseEnabled = g_mouseLockedToWindow);
 }
 
 void mouseUninit(void)

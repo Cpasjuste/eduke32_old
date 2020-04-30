@@ -23,6 +23,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #ifndef global_h_
 #define global_h_
 
+#include "build.h"
+#include "compat.h"
+#include "duke3d.h"
+#include "mmulti.h"
+#include "quotes.h"
+#include "sector.h"
+#include "sounds.h"
+
 #ifdef global_c_
     #define G_EXTERN
 #else
@@ -35,9 +43,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 // duke3d global soup :(
 
-// XXX: we don't #include everything we need.
-#include "compat.h"
-#include "build.h"
 
 G_EXTERN int32_t g_interpolationCnt;
 G_EXTERN int32_t g_interpolationLock;
@@ -45,11 +50,6 @@ G_EXTERN int32_t oldipos[MAXINTERPOLATIONS];
 G_EXTERN int32_t *curipos[MAXINTERPOLATIONS];
 G_EXTERN int32_t bakipos[MAXINTERPOLATIONS];
 
-#include "mmulti.h"
-
-#include "duke3d.h"
-#include "sector.h"
-#include "quotes.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -93,7 +93,6 @@ G_EXTERN int32_t g_curViewscreen;
 G_EXTERN int32_t g_frameRate;
 G_EXTERN int32_t g_cyclerCnt;
 G_EXTERN int32_t g_damageCameras;
-G_EXTERN int32_t g_defaultLabelCnt;
 G_EXTERN int32_t g_doQuickSave;
 G_EXTERN int32_t g_earthquakeTime;
 G_EXTERN int32_t g_freezerSelfDamage;
@@ -121,7 +120,7 @@ G_EXTERN int32_t g_animateVel[MAXANIMATES];
 G_EXTERN int16_t g_cloudSect[256];
 G_EXTERN int16_t g_cloudX;
 G_EXTERN int16_t g_cloudY;
-G_EXTERN int32_t g_cloudClock;
+G_EXTERN ClockTicks g_cloudClock;
 
 G_EXTERN int16_t SpriteDeletionQueue[1024];
 G_EXTERN int16_t g_cyclers[MAXCYCLERS][6];
@@ -129,8 +128,8 @@ G_EXTERN int16_t g_mirrorSector[64];
 G_EXTERN int16_t g_mirrorWall[64];
 G_EXTERN int32_t *labelcode;
 G_EXTERN int32_t *labeltype;
-G_EXTERN int32_t lockclock;
-G_EXTERN int32_t ototalclock;
+G_EXTERN ClockTicks lockclock;
+G_EXTERN ClockTicks ototalclock;
 
 G_EXTERN intptr_t *apScript;
 G_EXTERN intptr_t *g_scriptPtr;
@@ -161,6 +160,10 @@ G_EXTERN projectile_t SpriteProjectile[MAXSPRITES];
 G_EXTERN sound_t g_sounds[MAXSOUNDS];
 G_EXTERN uint32_t everyothertime;
 G_EXTERN uint32_t g_moveThingsCount;
+G_EXTERN double g_gameUpdateTime;
+G_EXTERN double g_gameUpdateAndDrawTime;
+#define GAMEUPDATEAVGTIMENUMSAMPLES 100
+extern double g_gameUpdateAvgTime;
 
 #ifndef global_c_
 extern char CheatKeys[2];

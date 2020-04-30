@@ -73,15 +73,16 @@ int32_t sbary16(int32_t y)
 
 static void G_PatchStatusBar(int32_t x1, int32_t y1, int32_t x2, int32_t y2)
 {
+    int32_t const statusTile = sbartile();
     int32_t const scl = sbarsc(65536);
-    int32_t const tx = sbarx16((160<<16) - (tilesiz[BOTTOMSTATUSBAR].x<<15)); // centered
-    int32_t const ty = sbary(200-tilesiz[BOTTOMSTATUSBAR].y);
+    int32_t const tx = sbarx16((160<<16) - (tilesiz[statusTile].x<<15)); // centered
+    int32_t const ty = sbary(200-tilesiz[statusTile].y);
 
     int32_t const clx1 = sbarsc(scale(x1, xdim, 320)), cly1 = sbarsc(scale(y1, ydim, 200));
     int32_t const clx2 = sbarsc(scale(x2, xdim, 320)), cly2 = sbarsc(scale(y2, ydim, 200));
     int32_t const clofx = (xdim - sbarsc(xdim)) >> 1, clofy = (ydim - sbarsc(ydim));
 
-    rotatesprite(tx, ty, scl, 0, BOTTOMSTATUSBAR, 4, 0, 10+16+64, clx1+clofx, cly1+clofy, clx2+clofx-1, cly2+clofy-1);
+    rotatesprite(tx, ty, scl, 0, statusTile, 4, 0, 10+16+64, clx1+clofx, cly1+clofy, clx2+clofx-1, cly2+clofy-1);
 }
 
 #define POLYMOSTTRANS (1)
@@ -330,7 +331,7 @@ void G_DrawTXDigiNumZ(int32_t starttile, int32_t x, int32_t y, int32_t n, int32_
         y <<= 16;
     }
 
-    G_ScreenText(starttile, x, y, z, 0, 0, b, s, pal, cs|2|ROTATESPRITE_FULL16, 0, (4<<16), (8<<16), (1<<16), 0, TEXT_XCENTER|TEXT_DIGITALNUMBER, x1, y1, x2, y2);
+    G_ScreenText(starttile, x, y, z, 0, 0, b, s, pal, cs|2, 0, (4<<16), (8<<16), (1<<16), 0, TEXT_XCENTER|TEXT_DIGITALNUMBER, x1, y1, x2, y2);
 }
 
 static void G_DrawAltDigiNum(int32_t x, int32_t y, int32_t n, char s, int32_t cs)
@@ -380,7 +381,7 @@ static void G_DrawAltDigiNum(int32_t x, int32_t y, int32_t n, char s, int32_t cs
 
 static int32_t invensc(int32_t maximum) // used to reposition the inventory icon selector as the HUD scales
 {
-    return scale(maximum << 16, ud.statusbarscale - 36, 100 - 36);
+    return scale(maximum << 16, ud.statusbarscale - 50, 100 - 50);
 }
 
 void G_DrawInventory(const DukePlayer_t *p)
@@ -415,10 +416,12 @@ void G_DrawInventory(const DukePlayer_t *p)
     }
     else // full HUD
     {
-        y = (200<<16) - (sbarsc(tilesiz[BOTTOMSTATUSBAR].y<<16) + (12<<16) + (tilesiz[BOTTOMSTATUSBAR].y<<(16-1)));
+        int32_t const statusTile = sbartile();
+
+        y = (200<<16) - (sbarsc(tilesiz[statusTile].y<<16) + (12<<16) + (tilesiz[statusTile].y<<(16-1)));
 
         if (!ud.statusbarmode) // original non-overlay mode
-            y += sbarsc(tilesiz[BOTTOMSTATUSBAR].y<<16)>>1; // account for the viewport y-size as the HUD scales
+            y += sbarsc(tilesiz[statusTile].y<<16)>>1; // account for the viewport y-size as the HUD scales
     }
 
     if (ud.screen_size == 4 && !ud.althud) // classic mini-HUD
@@ -480,7 +483,7 @@ void G_DrawFrags(void)
 
     for (TRAVERSE_CONNECT(i))
     {
-        const DukePlayer_t *ps = g_player[i].ps;
+        auto const ps = g_player[i].ps;
         minitext(21+(73*(i&3)), 2+((i&28)<<1), g_player[i].user_name, ps->palookup, 2+8+16);
         Bsprintf(tempbuf, "%d", ps->frag-ps->fraggedself);
         minitext(17+50+(73*(i&3)), 2+((i&28)<<1), tempbuf, ps->palookup, 2+8+16);
@@ -546,13 +549,13 @@ static inline void rotatesprite_althud(int32_t sx, int32_t sy, int32_t z, int16_
 static inline void rotatesprite_althudr(int32_t sx, int32_t sy, int32_t z, int16_t a, int16_t picnum, int8_t dashade, char dapalnum, int32_t dastat)
 {
     if (videoGetRenderMode() >= REND_POLYMOST && althud_shadows)
-        rotatesprite_(sbarxr(sx + 1), sbary(sy + 1), z, a, picnum, 127, 4, dastat + POLYMOSTTRANS2, 0, 0, 0, 0, xdim - 1, ydim - 1);
+        rotatesprite_(sbarxr(sx - 1), sbary(sy + 1), z, a, picnum, 127, 4, dastat + POLYMOSTTRANS2, 0, 0, 0, 0, xdim - 1, ydim - 1);
     rotatesprite_(sbarxr(sx), sbary(sy), z, a, picnum, dashade, dapalnum, dastat, 0, 0, 0, 0, xdim - 1, ydim - 1);
 }
 
 void G_DrawStatusBar(int32_t snum)
 {
-    const DukePlayer_t *const p = g_player[snum].ps;
+    auto const p = g_player[snum].ps;
     int32_t i, j, o, u;
     int32_t permbit = 0;
 
@@ -564,7 +567,7 @@ void G_DrawStatusBar(int32_t snum)
     const int32_t althud = ud.althud;
 #endif
 
-    const int32_t SBY = (200-tilesiz[BOTTOMSTATUSBAR].y);
+    const int32_t SBY = (200-tilesiz[sbartile()].y);
 
     const int32_t sb15 = sbarsc(32768), sb15h = sbarsc(49152);
     const int32_t sb16 = sbarsc(65536);
@@ -620,7 +623,7 @@ void G_DrawStatusBar(int32_t snum)
 
                 int32_t asprites[MAX_WEAPONS] = { -1, AMMO, SHOTGUNAMMO, BATTERYAMMO,
                     RPGAMMO, HBOMBAMMO, CRYSTALAMMO, DEVISTATORAMMO,
-                    TRIPBOMBSPRITE, FREEZEAMMO+1, HBOMBAMMO, GROWAMMO
+                    TRIPBOMBSPRITE, FREEZEAMMO+1, HBOMBAMMO, GROWAMMO, FLAMETHROWERAMMO+1,
                 };
                 Bmemcpy(ammo_sprites, asprites, sizeof(ammo_sprites));
             }
@@ -631,11 +634,11 @@ void G_DrawStatusBar(int32_t snum)
 
             if (sprite[p->i].pal == 1 && p->last_extra < 2)
                 G_DrawAltDigiNum(40, -(hudoffset-22), 1, -16, 10+16+256);
-            else if (!althud_flashing || p->last_extra >(p->max_player_health>>2) || totalclock&32)
+            else if (!althud_flashing || p->last_extra >(p->max_player_health>>2) || (int32_t) totalclock&32)
             {
                 int32_t s = -8;
                 if (althud_flashing && p->last_extra > p->max_player_health)
-                    s += (sintable[(totalclock<<5)&2047]>>10);
+                    s += (sintable[((int32_t) totalclock<<5)&2047]>>10);
                 G_DrawAltDigiNum(40, -(hudoffset-22), p->last_extra, s, 10+16+256);
             }
 
@@ -658,7 +661,7 @@ void G_DrawStatusBar(int32_t snum)
             else i = p->curr_weapon;
 
             if (PWEAPON(snum, p->curr_weapon, WorksLike) != KNEE_WEAPON &&
-                (!althud_flashing || totalclock&32 || p->ammo_amount[i] > (p->max_ammo_amount[i]/10)))
+                (!althud_flashing || (int32_t) totalclock&32 || p->ammo_amount[i] > (p->max_ammo_amount[i]/10)))
                 G_DrawAltDigiNum(-20, -(hudoffset-22), p->ammo_amount[i], -16, 10+16+512);
 
             o = 102;
@@ -841,7 +844,10 @@ void G_DrawStatusBar(int32_t snum)
             sbar.ammo_amount[i] = p->ammo_amount[i];
             if (i < 9)
                 u |= ((2<<i)+1024);
-            else u |= 65536L+1024;
+            else if (WW2GI && i == 11)
+                u |= 1024 + 128;
+            else
+                u |= 65536L+1024;
         }
 
         if ((sbar.gotweapon & (1<<i)) != (p->gotweapon & (1<<i)))
@@ -852,7 +858,8 @@ void G_DrawStatusBar(int32_t snum)
 
             if (i < 9)
                 u |= ((2<<i)+1024);
-            else u |= 65536L+1024;
+            else
+                u |= 65536L+1024;
         }
     }
 

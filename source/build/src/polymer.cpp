@@ -20,7 +20,7 @@ int32_t         pr_shadowdetail = 4;
 int32_t         pr_shadowfiltering = 1;
 int32_t         pr_maxlightpasses = 10;
 int32_t         pr_maxlightpriority = PR_MAXLIGHTPRIORITY;
-int32_t         pr_fov = 426;           // appears to be the classic setting.
+int32_t         pr_fov = 512;
 double          pr_customaspect = 0.0f;
 int32_t         pr_billboardingmode = 1;
 int32_t         pr_verbosity = 1;       // 0: silent, 1: errors and one-times, 2: multiple-times, 3: flood
@@ -41,7 +41,7 @@ float           pr_hudxadd = 0.0f;
 float           pr_hudyadd = 0.0f;
 float           pr_hudzadd = 0.0f;
 int32_t         pr_hudangadd = 0;
-int32_t         pr_hudfov = 426;
+int32_t         pr_hudfov = 512;
 float           pr_overridemodelscale = 0.0f;
 int32_t         pr_ati_fboworkaround = 0;
 int32_t         pr_ati_nodepthoffset = 0;
@@ -197,7 +197,7 @@ static const GLfloat  skyboxdata[4 * 5 * 6] =
 
 GLuint          skyboxdatavbo;
 
-GLfloat         artskydata[16];
+GLfloat         artskydata[PSKYOFF_MAX*2];
 
 // LIGHTS
 static _prplanelist *plpool;
@@ -894,7 +894,7 @@ void                polymer_uninit(void)
     {
         _prplanelist*   next = plpool->n;
 
-        Bfree(plpool);
+        Xfree(plpool);
         plpool = next;
         i++;
     }
@@ -907,6 +907,10 @@ void                polymer_setaspect(int32_t ang)
 {
     float           aspect;
     float fang = (float)ang * atanf(fviewingrange*(1.f/65536.f)) * (4.f/fPI);
+
+    // use horizontal fov instead of vertical
+    fang = atanf(tanf(fang * (fPI / 2048.f)) * float(windowxy2.y - windowxy1.y + 1) / float(windowxy2.x - windowxy1.x + 1) *
+                      float(xdim) / float(ydim) * (3.f / 4.f)) * (2048.f / fPI);
 
     if (pr_customaspect != 0.0f)
         aspect = pr_customaspect;
@@ -924,10 +928,7 @@ void                polymer_glinit(void)
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClearStencil(0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glViewport(windowxy1.x, yres-(windowxy2.y+1),windowxy2.x-windowxy1.x+1, windowxy2.y-windowxy1.y+1);
-
-    // texturing
-    glEnable(GL_TEXTURE_2D);
+    glViewport(windowxy1.x, ydim-(windowxy2.y+1),windowxy2.x-windowxy1.x+1, windowxy2.y-windowxy1.y+1);
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
@@ -1057,6 +1058,23 @@ void                polymer_loadboard(void)
     if (pr_verbosity >= 1 && numsectors) OSD_Printf("PR : Board loaded.\n");
 }
 
+int32_t polymer_printtext256(int32_t xpos, int32_t ypos, int16_t col, int16_t backcol, const char *name, char fontsize)
+{
+    //POGOTODO: Polymer should implement this so it's no longer coupled with Polymost & reliant on the fixed-function pipeline
+    glEnable(GL_TEXTURE_2D);
+    int32_t returnVal = polymost_printtext256(xpos, ypos, col, backcol, name, fontsize);
+    glDisable(GL_TEXTURE_2D);
+    return returnVal;
+}
+
+void polymer_fillpolygon(int32_t npoints)
+{
+    //POGOTODO: Polymer should implement this so it's no longer coupled with Polymost & reliant on the fixed-function pipeline
+    glEnable(GL_TEXTURE_2D);
+    polymost_fillpolygon(npoints);
+    glDisable(GL_TEXTURE_2D);
+}
+
 // The parallaxed ART sky angle divisor corresponding to a horizfrac of 32768.
 #define DEFAULT_ARTSKY_ANGDIV 4.3027f
 
@@ -1081,7 +1099,7 @@ void polymer_drawrooms(int32_t daposx, int32_t daposy, int32_t daposz, fix16_t d
     gvisibility = ((float)globalvisibility)*FOGSCALE;
 
     ang = fix16_to_float(daang) * (360.f/2048.f);
-    horizang = -(float)atan2(fix16_to_float(dahoriz)-100.f, 128.f) * (180.f*(float)M_1_PI);
+    horizang = -(float)atan2f(fix16_to_float(dahoriz) - 100.f, 128.f) * (180.f * (float)M_1_PI);
     tiltang = (gtang * 90.0f);
 
     pos[0] = (float)daposy;
@@ -1141,7 +1159,7 @@ void polymer_drawrooms(int32_t daposx, int32_t daposy, int32_t daposz, fix16_t d
     glGetFloatv(GL_MODELVIEW_MATRIX, rootmodelviewmatrix);
 
     cursectnum = dacursectnum;
-    updatesectorbreadth(daposx, daposy, &cursectnum);
+    updatesector(daposx, daposy, &cursectnum);
 
     if (cursectnum >= 0 && cursectnum < numsectors)
         dacursectnum = cursectnum;
@@ -1435,11 +1453,11 @@ void                polymer_postrotatesprite(void)
     polymer_unbindmaterial(rotatespritematerialbits);
 }
 
-static void         polymer_setupdiffusemodulation(_prplane *plane, GLubyte modulation, GLubyte *data)
+static void         polymer_setupdiffusemodulation(_prplane *plane, GLubyte modulation, const GLubyte *data)
 {
     plane->material.diffusemodulation[0] = modulation;
-    plane->material.diffusemodulation[1] = ((GLubyte *) data)[0];
-    plane->material.diffusemodulation[2] = ((GLubyte *) data)[1];
+    plane->material.diffusemodulation[1] = ((GLubyte const *) data)[0];
+    plane->material.diffusemodulation[2] = ((GLubyte const *) data)[1];
     plane->material.diffusemodulation[3] = 0xFF;
 }
 
@@ -1456,14 +1474,14 @@ static void         polymer_drawsearchplane(_prplane *plane, GLubyte *oldcolor, 
 
 void                polymer_drawmaskwall(int32_t damaskwallcnt)
 {
-    usectortype     *sec;
+    usectorptr_t      sec;
     walltype        *wal;
     _prwall         *w;
     GLubyte         oldcolor[4];
 
     if (pr_verbosity >= 3) OSD_Printf("PR : Masked wall %i...\n", damaskwallcnt);
 
-    sec = (usectortype *)&sector[sectorofwall(maskwall[damaskwallcnt])];
+    sec = (usectorptr_t)&sector[sectorofwall(maskwall[damaskwallcnt])];
     wal = &wall[maskwall[damaskwallcnt]];
     w = prwalls[maskwall[damaskwallcnt]];
 
@@ -1472,7 +1490,7 @@ void                polymer_drawmaskwall(int32_t damaskwallcnt)
     if (searchit == 2) {
         polymer_drawsearchplane(&w->mask, oldcolor, 0x04, (GLubyte *)&maskwall[damaskwallcnt]);
     } else {
-        calc_and_apply_fog(wal->picnum, fogshade(wal->shade, wal->pal), sec->visibility, get_floor_fogpal(sec));
+        calc_and_apply_fog(fogshade(wal->shade, wal->pal), sec->visibility, get_floor_fogpal(sec));
         polymer_drawplane(&w->mask);
     }
 
@@ -1484,29 +1502,31 @@ void                polymer_drawsprite(int32_t snum)
     int32_t         i, j, cs;
     _prsprite       *s;
 
-    uspritetype      *const tspr = tspriteptr[snum];
-    const usectortype *sec;
+    auto const tspr = tspriteptr[snum];
+    usectorptr_t sec;
 
     if (pr_verbosity >= 3) OSD_Printf("PR : Sprite %i...\n", snum);
 
     if (bad_tspr(tspr))
         return;
 
-    if ((tspr->cstat & 8192) && (depth && !mirrors[depth-1].plane))
+    if ((tspr->clipdist & TSPR_FLAGS_NO_SHADOW) && (depth && !mirrors[depth-1].plane))
         return;
 
-    if ((tspr->cstat & 16384) && (!depth || mirrors[depth-1].plane))
+    if ((tspr->clipdist & TSPR_FLAGS_INVISIBLE_WITH_SHADOW) && (!depth || mirrors[depth-1].plane))
         return;
 
-    DO_TILE_ANIM(tspr->picnum, tspr->owner+32768);
+    int const spritenum = tspr->owner;
+    Bassert(spritenum < MAXSPRITES+MAXUNIQHUDID);
 
-    sec = (usectortype *)&sector[tspr->sectnum];
-    calc_and_apply_fog(tspr->picnum, fogshade(tspr->shade, tspr->pal), sec->visibility,
-                       get_floor_fogpal((usectortype *)&sector[tspr->sectnum]));
+    tileUpdatePicnum(&tspr->picnum, (unsigned)spritenum < MAXSPRITES ? spritenum+32768 : 0);
+
+    sec = (usectorptr_t)&sector[tspr->sectnum];
+    calc_and_apply_fog(fogshade(tspr->shade, tspr->pal), sec->visibility, get_floor_fogpal((usectorptr_t)&sector[tspr->sectnum]));
 
     if (usemodels && tile2model[Ptile2tile(tspr->picnum,tspr->pal)].modelid >= 0 &&
         tile2model[Ptile2tile(tspr->picnum,tspr->pal)].framenum >= 0 &&
-        !(spriteext[tspr->owner].flags & SPREXT_NOTMD))
+        !(spriteext[spritenum].flags & SPREXT_NOTMD))
     {
         glEnable(GL_CULL_FACE);
         SWITCH_CULL_DIRECTION;
@@ -1522,12 +1542,12 @@ void                polymer_drawsprite(int32_t snum)
     // If not, change that to modify a temp position in updatesprite itself.
     // I don't think this flags are meant to change on the fly so it'd possibly
     // be safe to cache a plane that has them applied.
-    if (spriteext[tspr->owner].flags & SPREXT_AWAY1)
+    if (spriteext[spritenum].flags & SPREXT_AWAY1)
     {
         tspr->x += sintable[(tspr->ang + 512) & 2047] >> 13;
         tspr->y += sintable[tspr->ang & 2047] >> 13;
     }
-    else if (spriteext[tspr->owner].flags & SPREXT_AWAY2)
+    else if (spriteext[spritenum].flags & SPREXT_AWAY2)
     {
         tspr->x -= sintable[(tspr->ang + 512) & 2047] >> 13;
         tspr->y -= sintable[tspr->ang & 2047] >> 13;
@@ -1535,8 +1555,8 @@ void                polymer_drawsprite(int32_t snum)
 
     polymer_updatesprite(snum);
 
-    Bassert(tspr->owner < MAXSPRITES);
-    s = prsprites[tspr->owner];
+    Bassert(spritenum < MAXSPRITES);
+    s = prsprites[spritenum];
 
     if (s == NULL)
         return;
@@ -1586,6 +1606,9 @@ void                polymer_drawsprite(int32_t snum)
         }
     }
 
+    if (automapping == 1)
+        show2dsprite[spritenum>>3] |= pow2char[spritenum&7];
+
     if ((tspr->cstat & 64) && (tspr->cstat & SPR_ALIGN_MASK))
     {
         if ((tspr->cstat & SPR_ALIGN_MASK)==SPR_FLOOR && (tspr->cstat & SPR_YFLIP))
@@ -1609,11 +1632,12 @@ void                polymer_drawsprite(int32_t snum)
     }
 }
 
-void                polymer_setanimatesprites(animatespritesptr animatesprites, int32_t x, int32_t y, int32_t a, int32_t smoothratio)
+void                polymer_setanimatesprites(animatespritesptr animatesprites, int32_t x, int32_t y, int32_t z, int32_t a, int32_t smoothratio)
 {
     asi.animatesprites = animatesprites;
     asi.x = x;
     asi.y = y;
+    asi.z = z;
     asi.a = a;
     asi.smoothratio = smoothratio;
 }
@@ -1651,7 +1675,7 @@ int16_t             polymer_addlight(_prlight* light)
             int16_t     picnum = light->tilenum;
             pthtyp*     pth;
 
-            DO_TILE_ANIM(picnum, 0);
+            tileUpdatePicnum(&picnum, 0);
 
             if (!waloff[picnum])
                 tileLoad(picnum);
@@ -1753,7 +1777,7 @@ int32_t             polymer_havehighpalookup(int32_t basepalnum, int32_t palnum)
 // CORE
 static void         polymer_displayrooms(const int16_t dacursectnum)
 {
-    usectortype      *sec;
+    usectorptr_t      sec;
     int32_t         i;
     int16_t         bunchnum;
     int16_t         ns;
@@ -1766,7 +1790,7 @@ static void         polymer_displayrooms(const int16_t dacursectnum)
     GLfloat         localprojectionmatrix[16];
     float           frustum[5 * 4];
     int32_t         localspritesortcnt;
-    uspritetype     localtsprite[MAXSPRITESONSCREEN];
+    tspritetype     localtsprite[MAXSPRITESONSCREEN];
     int16_t         localmaskwall[MAXWALLSB];
     int16_t         localmaskwallcnt;
     _prmirror       mirrorlist[10];
@@ -1813,7 +1837,7 @@ static void         polymer_displayrooms(const int16_t dacursectnum)
 
     while (front != back)
     {
-        sec = (usectortype *)&sector[sectorqueue[front]];
+        sec = (usectorptr_t)&sector[sectorqueue[front]];
 
         polymer_pokesector(sectorqueue[front]);
         polymer_drawsector(sectorqueue[front], FALSE);
@@ -2029,7 +2053,7 @@ static void         polymer_displayrooms(const int16_t dacursectnum)
     {
         glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, prrts[0].fbo);
         glPushAttrib(GL_VIEWPORT_BIT);
-        glViewport(windowxy1.x, yres-(windowxy2.y+1),windowxy2.x-windowxy1.x+1, windowxy2.y-windowxy1.y+1);
+        glViewport(windowxy1.x, ydim-(windowxy2.y+1),windowxy2.x-windowxy1.x+1, windowxy2.y-windowxy1.y+1);
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -2050,8 +2074,8 @@ static void         polymer_displayrooms(const int16_t dacursectnum)
         //glEnable(GL_CLIP_PLANE0);
 
         if (mirrorlist[i].wallnum >= 0)
-            renderPrepareMirror(globalposx, globalposy, qglobalang,
-                          mirrorlist[i].wallnum, &gx, &gy, &viewangle);
+            renderPrepareMirror(globalposx, globalposy, globalposz, qglobalang, qglobalhoriz,
+                                mirrorlist[i].wallnum, &gx, &gy, &viewangle);
 
         gx = globalposx;
         gy = globalposy;
@@ -2105,7 +2129,7 @@ static void         polymer_displayrooms(const int16_t dacursectnum)
     }
 
     spritesortcnt = localspritesortcnt;
-    Bmemcpy(tsprite, localtsprite, sizeof(spritetype) * spritesortcnt);
+    Bmemcpy(tsprite, localtsprite, sizeof(tspritetype) * spritesortcnt);
     maskwallcnt = localmaskwallcnt;
     Bmemcpy(maskwall, localmaskwall, sizeof(int16_t) * maskwallcnt);
 
@@ -2123,8 +2147,7 @@ static void         polymer_displayrooms(const int16_t dacursectnum)
         renderDrawMasks();
         glEnable(GL_CULL_FACE);
     }
-    return;
-}
+    }
 
 static void         polymer_emptybuckets(void)
 {
@@ -2400,7 +2423,7 @@ static void         polymer_drawplane(_prplane* plane)
     }
 }
 
-static inline void  polymer_inb4mirror(_prvert* buffer, GLfloat* plane)
+static inline void  polymer_inb4mirror(_prvert* buffer, const GLfloat* plane)
 {
     float           pv;
     float           reflectionmatrix[16];
@@ -2441,7 +2464,7 @@ static inline void  polymer_inb4mirror(_prvert* buffer, GLfloat* plane)
 static void         polymer_animatesprites(void)
 {
     if (asi.animatesprites)
-        asi.animatesprites(globalposx, globalposy, fix16_to_int(viewangle), asi.smoothratio);
+        asi.animatesprites(globalposx, globalposy, globalposz, fix16_to_int(viewangle), asi.smoothratio);
 }
 
 static void         polymer_freeboard(void)
@@ -2453,11 +2476,11 @@ static void         polymer_freeboard(void)
     {
         if (prsectors[i])
         {
-            Bfree(prsectors[i]->verts);
-            Bfree(prsectors[i]->floor.buffer);
-            Bfree(prsectors[i]->ceil.buffer);
-            Bfree(prsectors[i]->floor.indices);
-            Bfree(prsectors[i]->ceil.indices);
+            Xfree(prsectors[i]->verts);
+            Xfree(prsectors[i]->floor.buffer);
+            Xfree(prsectors[i]->ceil.buffer);
+            Xfree(prsectors[i]->floor.indices);
+            Xfree(prsectors[i]->ceil.indices);
             if (prsectors[i]->ceil.vbo) glDeleteBuffers(1, &prsectors[i]->ceil.vbo);
             if (prsectors[i]->ceil.ivbo) glDeleteBuffers(1, &prsectors[i]->ceil.ivbo);
             if (prsectors[i]->floor.vbo) glDeleteBuffers(1, &prsectors[i]->floor.vbo);
@@ -2474,11 +2497,11 @@ static void         polymer_freeboard(void)
     {
         if (prwalls[i])
         {
-            Bfree(prwalls[i]->bigportal);
-            Bfree(prwalls[i]->mask.buffer);
-            Bfree(prwalls[i]->over.buffer);
-            // Bfree(prwalls[i]->cap);
-            Bfree(prwalls[i]->wall.buffer);
+            Xfree(prwalls[i]->bigportal);
+            Xfree(prwalls[i]->mask.buffer);
+            Xfree(prwalls[i]->over.buffer);
+            // Xfree(prwalls[i]->cap);
+            Xfree(prwalls[i]->wall.buffer);
             if (prwalls[i]->wall.vbo) glDeleteBuffers(1, &prwalls[i]->wall.vbo);
             if (prwalls[i]->over.vbo) glDeleteBuffers(1, &prwalls[i]->over.vbo);
             if (prwalls[i]->mask.vbo) glDeleteBuffers(1, &prwalls[i]->mask.vbo);
@@ -2495,7 +2518,7 @@ static void         polymer_freeboard(void)
     {
         if (prsprites[i])
         {
-            Bfree(prsprites[i]->plane.buffer);
+            Xfree(prsprites[i]->plane.buffer);
             if (prsprites[i]->plane.vbo) glDeleteBuffers(1, &prsprites[i]->plane.vbo);
             DO_FREE_AND_NULL(prsprites[i]);
         }
@@ -2538,12 +2561,12 @@ static void         polymer_freeboard(void)
 // SECTORS
 static int32_t      polymer_initsector(int16_t sectnum)
 {
-    usectortype      *sec;
+    usectorptr_t sec;
     _prsector*      s;
 
     if (pr_verbosity >= 2) OSD_Printf("PR : Initializing sector %i...\n", sectnum);
 
-    sec = (usectortype *)&sector[sectnum];
+    sec = (usectorptr_t)&sector[sectnum];
     s = (_prsector *)Xcalloc(1, sizeof(_prsector));
 
     s->verts = (GLdouble *)Xcalloc(sec->wallnum, sizeof(GLdouble) * 3);
@@ -2577,7 +2600,7 @@ static int32_t      polymer_initsector(int16_t sectnum)
 static int32_t      polymer_updatesector(int16_t sectnum)
 {
     _prsector*      s;
-    usectortype      *sec;
+    usectorptr_t sec;
     walltype        *wal;
     int32_t         i, j;
     int32_t         ceilz, florz;
@@ -2591,7 +2614,7 @@ static int32_t      polymer_updatesector(int16_t sectnum)
     if (pr_nullrender >= 3) return 0;
 
     s = prsectors[sectnum];
-    sec = (usectortype *)&sector[sectnum];
+    sec = (usectorptr_t)&sector[sectnum];
 
     secangcos = secangsin = 2;
 
@@ -2653,14 +2676,14 @@ static int32_t      polymer_updatesector(int16_t sectnum)
         wallinvalidate = 1;
 
     floorpicnum = sec->floorpicnum;
-    DO_TILE_ANIM(floorpicnum, sectnum);
+    tileUpdatePicnum(&floorpicnum, sectnum);
     ceilingpicnum = sec->ceilingpicnum;
-    DO_TILE_ANIM(ceilingpicnum, sectnum);
+    tileUpdatePicnum(&ceilingpicnum, sectnum);
 
     if ((!s->flags.empty) && (!needfloor) &&
             (floorpicnum == s->floorpicnum_anim) &&
             (ceilingpicnum == s->ceilingpicnum_anim) &&
-#ifndef UNTRACKED_STRUCTS
+#ifdef USE_STRUCT_TRACKERS
             (s->trackedrev == sectorchanged[sectnum]))
 #else
             !Bmemcmp(&s->ceilingstat, &sec->ceilingstat, offsetof(sectortype, visibility) - offsetof(sectortype, ceilingstat)))
@@ -2760,7 +2783,7 @@ static int32_t      polymer_updatesector(int16_t sectnum)
     s->ceilingxpanning = sec->ceilingxpanning;
     s->floorypanning = sec->floorypanning;
     s->ceilingypanning = sec->ceilingypanning;
-#ifndef UNTRACKED_STRUCTS
+#ifdef USE_STRUCT_TRACKERS
     s->trackedrev = sectorchanged[sectnum];
 #endif
 
@@ -2886,7 +2909,6 @@ void PR_CALLBACK    polymer_tessedgeflag(GLenum error)
 {
     // Passing an edgeflag callback forces the tesselator to output a triangle list
     UNREFERENCED_PARAMETER(error);
-    return;
 }
 
 void PR_CALLBACK    polymer_tessvertex(void* vertex, void* sector)
@@ -2910,20 +2932,20 @@ static int32_t      polymer_buildfloor(int16_t sectnum)
 {
     // This function tesselates the floor/ceiling of a sector and stores the triangles in a display list.
     _prsector*      s;
-    usectortype     *sec;
+    usectorptr_t sec;
     intptr_t        i;
 
     if (pr_verbosity >= 2) OSD_Printf("PR : Tesselating floor of sector %i...\n", sectnum);
 
     s = prsectors[sectnum];
-    sec = (usectortype *)&sector[sectnum];
+    sec = (usectorptr_t)&sector[sectnum];
 
     if (s == NULL)
         return -1;
 
     if (s->floor.indices == NULL)
     {
-        s->indicescount = (max(3, sec->wallnum) - 2) * 3;
+        s->indicescount = (max<int16_t>(3, sec->wallnum) - 2) * 3;
         s->floor.indices = (GLushort *)Xcalloc(s->indicescount, sizeof(GLushort));
         s->ceil.indices = (GLushort *)Xcalloc(s->indicescount, sizeof(GLushort));
     }
@@ -2969,7 +2991,7 @@ static int32_t      polymer_buildfloor(int16_t sectnum)
 
 static void         polymer_drawsector(int16_t sectnum, int32_t domasks)
 {
-    usectortype     *sec;
+    usectorptr_t sec;
     _prsector*      s;
     GLubyte         oldcolor[4];
     int32_t         draw;
@@ -2977,7 +2999,10 @@ static void         polymer_drawsector(int16_t sectnum, int32_t domasks)
 
     if (pr_verbosity >= 3) OSD_Printf("PR : Drawing sector %i...\n", sectnum);
 
-    sec = (usectortype *)&sector[sectnum];
+    if (automapping)
+        show2dsector[sectnum>>3] |= pow2char[sectnum&7];
+
+    sec = (usectorptr_t)&sector[sectnum];
     s = prsectors[sectnum];
 
     queuedmask = FALSE;
@@ -3003,8 +3028,8 @@ static void         polymer_drawsector(int16_t sectnum, int32_t domasks)
             polymer_drawsearchplane(&s->floor, oldcolor, 0x02, (GLubyte *) &sectnum);
         }
         else {
-            calc_and_apply_fog(sec->floorpicnum, fogshade(sec->floorshade, sec->floorpal),
-                sec->visibility, get_floor_fogpal(sec));
+            calc_and_apply_fog(fogshade(sec->floorshade, sec->floorpal), sec->visibility,
+                get_floor_fogpal(sec));
             polymer_drawplane(&s->floor);
         }
     } else if (!domasks && cursectormaskcount && sec->floorstat & 384) {
@@ -3031,8 +3056,8 @@ static void         polymer_drawsector(int16_t sectnum, int32_t domasks)
             polymer_drawsearchplane(&s->ceil, oldcolor, 0x01, (GLubyte *) &sectnum);
         }
         else {
-            calc_and_apply_fog(sec->ceilingpicnum, fogshade(sec->ceilingshade, sec->ceilingpal),
-                               sec->visibility, get_ceiling_fogpal(sec));
+            calc_and_apply_fog(fogshade(sec->ceilingshade, sec->ceilingpal), sec->visibility,
+                               get_ceiling_fogpal(sec));
             polymer_drawplane(&s->ceil);
         }
     } else if (!domasks && !queuedmask && cursectormaskcount &&
@@ -3171,16 +3196,16 @@ static void         polymer_updatewall(int16_t wallnum)
     }
 
     wallpicnum = wal->picnum;
-    DO_TILE_ANIM(wallpicnum, wallnum+16384);
+    tileUpdatePicnum(&wallpicnum, wallnum+16384);
 
     walloverpicnum = wal->overpicnum;
     if (walloverpicnum>=0)
-        DO_TILE_ANIM(walloverpicnum, wallnum+16384);
+        tileUpdatePicnum(&walloverpicnum, wallnum+16384);
 
     if (nwallnum >= 0 && nwallnum < numwalls)
     {
         nwallpicnum = wall[nwallnum].picnum;
-        DO_TILE_ANIM(nwallpicnum, wallnum+16384);
+        tileUpdatePicnum(&nwallpicnum, wallnum+16384);
     }
     else
         nwallpicnum = 0;
@@ -3189,7 +3214,7 @@ static void         polymer_updatewall(int16_t wallnum)
             (w->invalidid == invalid) &&
             (wallpicnum == w->picnum_anim) &&
             (walloverpicnum == w->overpicnum_anim) &&
-#ifndef UNTRACKED_STRUCTS
+#ifdef USE_STRUCT_TRACKERS
             (w->trackedrev == wallchanged[wallnum]) &&
 #else
             !Bmemcmp(&wal->cstat, &w->cstat, NBYTES_WALL_CSTAT_THROUGH_YPANNING) &&
@@ -3212,7 +3237,7 @@ static void         polymer_updatewall(int16_t wallnum)
 
         w->picnum_anim = wallpicnum;
         w->overpicnum_anim = walloverpicnum;
-#ifndef UNTRACKED_STRUCTS
+#ifdef USE_STRUCT_TRACKERS
         w->trackedrev = wallchanged[wallnum];
 #endif
         if (nwallnum >= 0 && nwallnum < numwalls)
@@ -3545,7 +3570,7 @@ static void         polymer_updatewall(int16_t wallnum)
 
 static void         polymer_drawwall(int16_t sectnum, int16_t wallnum)
 {
-    usectortype     *sec;
+    usectorptr_t sec;
     walltype        *wal;
     _prwall         *w;
     GLubyte         oldcolor[4];
@@ -3553,7 +3578,7 @@ static void         polymer_drawwall(int16_t sectnum, int16_t wallnum)
 
     if (pr_verbosity >= 3) OSD_Printf("PR : Drawing wall %i...\n", wallnum);
 
-    sec = (usectortype *)&sector[sectnum];
+    sec = (usectorptr_t)&sector[sectnum];
     wal = &wall[wallnum];
     w = prwalls[wallnum];
 
@@ -3565,7 +3590,7 @@ static void         polymer_drawwall(int16_t sectnum, int16_t wallnum)
         (sector[wal->nextsector].ceilingstat & 1))
         parallaxedceiling = 1;
 
-    calc_and_apply_fog(wal->picnum, fogshade(wal->shade, wal->pal), sec->visibility, get_floor_fogpal(sec));
+    calc_and_apply_fog(fogshade(wal->shade, wal->pal), sec->visibility, get_floor_fogpal(sec));
 
     if ((w->underover & 1) && (!parallaxedfloor || (searchit == 2)))
     {
@@ -3615,6 +3640,9 @@ static void         polymer_drawwall(int16_t sectnum, int16_t wallnum)
 
     //    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     //}
+
+    if (automapping)
+        show2dwall[wallnum>>3] |= pow2char[wallnum&7];
 
     if (pr_verbosity >= 3) OSD_Printf("PR : Finished drawing wall %i...\n", wallnum);
 }
@@ -3698,14 +3726,14 @@ static void         polymer_computeplane(_prplane* p)
           (!p->indices && i < p->vertcount));
 }
 
-static inline void  polymer_crossproduct(GLfloat* in_a, GLfloat* in_b, GLfloat* out)
+static inline void  polymer_crossproduct(const GLfloat* in_a, const GLfloat* in_b, GLfloat* out)
 {
     out[0] = in_a[1] * in_b[2] - in_a[2] * in_b[1];
     out[1] = in_a[2] * in_b[0] - in_a[0] * in_b[2];
     out[2] = in_a[0] * in_b[1] - in_a[1] * in_b[0];
 }
 
-static inline void  polymer_transformpoint(const float* inpos, float* pos, float* matrix)
+static inline void  polymer_transformpoint(const float* inpos, float* pos, const float* matrix)
 {
     pos[0] = inpos[0] * matrix[0] +
              inpos[1] * matrix[4] +
@@ -3785,7 +3813,7 @@ static void         polymer_extractfrustum(GLfloat* modelview, GLfloat* projecti
     if (pr_verbosity >= 3) OSD_Printf("PR : Frustum extracted.\n");
 }
 
-static inline int32_t polymer_planeinfrustum(_prplane *plane, float* frustum)
+static inline int32_t polymer_planeinfrustum(_prplane *plane, const float* frustum)
 {
     int32_t         i, j, k = -1;
     i = 4;
@@ -3813,7 +3841,7 @@ static inline int32_t polymer_planeinfrustum(_prplane *plane, float* frustum)
     return 1;
 }
 
-static inline void  polymer_scansprites(int16_t sectnum, uspritetype* localtsprite, int32_t* localspritesortcnt)
+static inline void  polymer_scansprites(int16_t sectnum, tspriteptr_t localtsprite, int32_t* localspritesortcnt)
 {
     int32_t         i;
     spritetype      *spr;
@@ -3827,9 +3855,7 @@ static inline void  polymer_scansprites(int16_t sectnum, uspritetype* localtspri
         {
             // this function's localtsprite is either the tsprite global or
             // polymer_drawroom's locattsprite, so no aliasing
-            Bmemcpy(&localtsprite[*localspritesortcnt], spr, sizeof(spritetype));
-            localtsprite[*localspritesortcnt].extra = 0;
-            localtsprite[(*localspritesortcnt)++].owner = i;
+            renderMakeTSpriteFromSprite(&localtsprite[(*localspritesortcnt)++], i);
         }
     }
 }
@@ -3838,7 +3864,7 @@ void                polymer_updatesprite(int32_t snum)
 {
     int32_t         xsize, ysize, i, j;
     int32_t         tilexoff, tileyoff, xoff, yoff, centeryoff=0;
-    uspritetype      *tspr = tspriteptr[snum];
+    auto const      tspr = tspriteptr[snum];
     float           xratio, yratio, ang;
     float           spos[3];
     const _prvert   *inbuffer;
@@ -4151,39 +4177,37 @@ void         polymer_drawsky(int16_t tilenum, char palnum, int8_t shade)
 
 static void         polymer_initartsky(void)
 {
-    GLfloat         halfsqrt2 = 0.70710678f;
+    constexpr double factor = 2.0 * PI / (double)PSKYOFF_MAX;
 
-    artskydata[0] = -1.0f;          artskydata[1] = 0.0f;           // 0
-    artskydata[2] = -halfsqrt2;     artskydata[3] = halfsqrt2;      // 1
-    artskydata[4] = 0.0f;           artskydata[5] = 1.0f;           // 2
-    artskydata[6] = halfsqrt2;      artskydata[7] = halfsqrt2;      // 3
-    artskydata[8] = 1.0f;           artskydata[9] = 0.0f;           // 4
-    artskydata[10] = halfsqrt2;     artskydata[11] = -halfsqrt2;    // 5
-    artskydata[12] = 0.0f;          artskydata[13] = -1.0f;         // 6
-    artskydata[14] = -halfsqrt2;    artskydata[15] = -halfsqrt2;    // 7
+    for (int i = 0; i < PSKYOFF_MAX; i++)
+    {
+        artskydata[i * 2 + 0] = -cos(i * factor);
+        artskydata[i * 2 + 1] = sin(i * factor);
+    }
 }
 
 static void         polymer_drawartsky(int16_t tilenum, char palnum, int8_t shade)
 {
     pthtyp*         pth;
-    GLuint          glpics[PSKYOFF_MAX+1];
-    GLfloat         glcolors[PSKYOFF_MAX+1][3];
+    GLuint          glpics[PSKYOFF_MAX];
+    GLfloat         glcolors[PSKYOFF_MAX][3];
     int32_t         i, j;
     GLfloat         height = 2.45f / 2.0f;
 
     int32_t dapskybits;
     const int8_t *dapskyoff = getpsky(tilenum, NULL, &dapskybits, NULL, NULL);
-    const int32_t numskytilesm1 = (1<<dapskybits)-1;
+    const int32_t numskytiles = 1<<dapskybits;
+    const int32_t numskytilesm1 = numskytiles-1;
 
     i = 0;
-    while (i <= PSKYOFF_MAX)
+    while (i < numskytiles)
     {
-        int16_t picnum = tilenum + i;
+        int16_t picnum = tilenum + dapskyoff[i];
         // Prevent oob by bad user input:
         if (picnum >= MAXTILES)
             picnum = MAXTILES-1;
 
-        DO_TILE_ANIM(picnum, 0);
+        tileUpdatePicnum(&picnum, 0);
         if (!waloff[picnum])
             tileLoad(picnum);
         pth = texcache_fetch(picnum, palnum, 0, DAMETH_NOMASK);
@@ -4216,13 +4240,15 @@ static void         polymer_drawartsky(int16_t tilenum, char palnum, int8_t shad
         i++;
     }
 
+    glEnable(GL_TEXTURE_2D);
     i = 0;
-    j = 8;  // In Polymer, an ART sky has always 8 sides...
-    while (i < j)
+    j = 0;
+    int32_t const increment = PSKYOFF_MAX>>max(3, dapskybits);  // In Polymer, an ART sky has 8 or 16 sides...
+    while (i < PSKYOFF_MAX)
     {
         GLint oldswrap;
         // ... but in case a multi-psky specifies less than 8, repeat cyclically:
-        const int8_t tileofs = dapskyoff[i&numskytilesm1];
+        const int8_t tileofs = j&numskytilesm1;
 
         glColor4f(glcolors[tileofs][0], glcolors[tileofs][1], glcolors[tileofs][2], 1.0f);
         glBindTexture(GL_TEXTURE_2D, glpics[tileofs]);
@@ -4230,12 +4256,14 @@ static void         polymer_drawartsky(int16_t tilenum, char palnum, int8_t shad
         glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &oldswrap);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, glinfo.clamptoedge?GL_CLAMP_TO_EDGE:GL_CLAMP);
 
-        polymer_drawartskyquad(i, (i + 1) & (j - 1), height);
+        polymer_drawartskyquad(i, (i + increment) & (PSKYOFF_MAX - 1), height);
 
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, oldswrap);
 
-        i++;
+        i += increment;
+        ++j;
     }
+    glDisable(GL_TEXTURE_2D);
 }
 
 static void         polymer_drawartskyquad(int32_t p1, int32_t p2, GLfloat height)
@@ -4275,7 +4303,7 @@ static void         polymer_drawskybox(int16_t tilenum, char palnum, int8_t shad
     if (pr_vbos > 0)
         glBindBuffer(GL_ARRAY_BUFFER, skyboxdatavbo);
 
-    DO_TILE_ANIM(tilenum, 0);
+    tileUpdatePicnum(&tilenum, 0);
 
     i = 0;
     while (i < 6)
@@ -4308,6 +4336,7 @@ static void         polymer_drawskybox(int16_t tilenum, char palnum, int8_t shad
         }
 
         glColor4f(color[0], color[1], color[2], 1.0);
+        glEnable(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, pth ? pth->glpic : 0);
         if (pr_vbos > 0)
         {
@@ -4318,6 +4347,7 @@ static void         polymer_drawskybox(int16_t tilenum, char palnum, int8_t shad
             glTexCoordPointer(2, GL_FLOAT, 5 * sizeof(GLfloat), &skyboxdata[3 + (4 * 5 * i)]);
         }
         glDrawArrays(GL_QUADS, 0, 4);
+        glDisable(GL_TEXTURE_2D);
 
         i++;
     }
@@ -4325,12 +4355,10 @@ static void         polymer_drawskybox(int16_t tilenum, char palnum, int8_t shad
 
     if (pr_vbos > 0)
         glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-    return;
 }
 
 // MDSPRITES
-static void         polymer_drawmdsprite(uspritetype *tspr)
+static void         polymer_drawmdsprite(tspriteptr_t tspr)
 {
     md3model_t*     m;
     mdskinmap_t*    sk;
@@ -4374,9 +4402,9 @@ static void         polymer_drawmdsprite(uspritetype *tspr)
         spos2[1] = (z - fglobalposz) * (-1.f/16.f);
         spos2[2] = fglobalposx - x;
     } else {
-        spos[0] = (float)tspr->y;
-        spos[1] = -(float)(tspr->z) / 16.0f;
-        spos[2] = -(float)tspr->x;
+        spos[0] = (float)tspr->y+spriteext[tspr->owner].position_offset.y;
+        spos[1] = -(float)(tspr->z+spriteext[tspr->owner].position_offset.z) / 16.0f;
+        spos[2] = -(float)(tspr->x+spriteext[tspr->owner].position_offset.x);
 
         spos2[0] = spos2[1] = spos2[2] = 0.0f;
     }
@@ -4404,7 +4432,7 @@ static void         polymer_drawmdsprite(uspritetype *tspr)
         radplayerang = (globalang & 2047) * (2.0f * fPI / 2048.0f);
         cosminusradplayerang = cos(-radplayerang);
         sinminusradplayerang = sin(-radplayerang);
-        hudzoom = 65536.0 / spriteext[tspr->owner].offset.z;
+        hudzoom = 65536.0 / spriteext[tspr->owner].pivot_offset.z;
 
         glTranslatef(spos[0], spos[1], spos[2]);
         glRotatef(horizang, -cosminusradplayerang, 0.0f, sinminusradplayerang);
@@ -4459,9 +4487,9 @@ static void         polymer_drawmdsprite(uspritetype *tspr)
         pitchang = (float)(spriteext[tspr->owner].pitch) * (360.f/2048.f);
         rollang = (float)(spriteext[tspr->owner].roll) * (360.f/2048.f);
 
-        offsets[0] = -spriteext[tspr->owner].offset.x / (scale * tspr->xrepeat);
-        offsets[1] = -spriteext[tspr->owner].offset.y / (scale * tspr->xrepeat);
-        offsets[2] = (float)(spriteext[tspr->owner].offset.z) / 16.0f / (scale * tspr->yrepeat);
+        offsets[0] = -spriteext[tspr->owner].pivot_offset.x / (scale * tspr->xrepeat);
+        offsets[1] = -spriteext[tspr->owner].pivot_offset.y / (scale * tspr->xrepeat);
+        offsets[2] = (float)(spriteext[tspr->owner].pivot_offset.z) / 16.0f / (scale * tspr->yrepeat);
 
         glTranslatef(-offsets[0], -offsets[1], -offsets[2]);
 
@@ -4513,7 +4541,7 @@ static void         polymer_drawmdsprite(uspritetype *tspr)
     color = mdspritematerial.diffusemodulation;
 
     color[0] = color[1] = color[2] =
-        (GLubyte)(((float)(numshades-min(max((tspr->shade * shadescale)+m->shadeoff,0),numshades)))/((float)numshades) * 0xFF);
+        (GLubyte)(((float)(numshades-min(max((tspr->shade * shadescale)+m->shadeoff,0.f),(float)numshades)))/((float)numshades) * 0xFF);
 
     usinghighpal = (pr_highpalookups &&
                     prhighpalookups[curbasepal][tspr->pal].map);
@@ -4678,7 +4706,7 @@ static void         polymer_drawmdsprite(uspritetype *tspr)
         if (!mdspritematerial.diffusemap)
             continue;
 
-        if (!(tspr->extra&TSPR_EXTRA_MDHACK))
+        if (!(tspr->clipdist & TSPR_FLAGS_MDHACK))
         {
             mdspritematerial.detailmap =
                     mdloadskin((md2model_t *)m,tile2model[Ptile2tile(tspr->picnum,lpal)].skinnum,DETAILPAL,surfi);
@@ -4879,7 +4907,7 @@ static void         polymer_setupartmap(int16_t tilenum, char pal)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         glBindTexture(GL_TEXTURE_2D, 0);
-        Bfree(tempbuffer);
+        Xfree(tempbuffer);
     }
 
     if (!prbasepalmaps[curbasepal]) {
@@ -5065,7 +5093,7 @@ done:
     return bucketptr;
 }
 
-static int32_t      polymer_bindmaterial(const _prmaterial *material, int16_t* lights, int matlightcount)
+static int32_t      polymer_bindmaterial(const _prmaterial *material, const int16_t* lights, int matlightcount)
 {
     int32_t         programbits;
     int32_t         texunit;
@@ -5158,7 +5186,7 @@ static int32_t      polymer_bindmaterial(const _prmaterial *material, int16_t* l
     if (!prprograms[programbits].handle)
         polymer_compileprogram(programbits);
 
-    useShaderProgram(prprograms[programbits].handle);
+    polymost_useShaderProgram(prprograms[programbits].handle);
 
     // --------- bit setup
 
@@ -5535,7 +5563,7 @@ static void         polymer_unbindmaterial(int32_t programbits)
         glDisableVertexAttribArray(prprograms[programbits].attrib_N);
     }
 
-    useShaderProgram(0);
+    polymost_useShaderProgram(0);
 }
 
 static void         polymer_compileprogram(int32_t programbits)
@@ -5770,7 +5798,7 @@ static void         polymer_updatelights(void)
                 int16_t     picnum = light->tilenum;
                 pthtyp*     pth;
 
-                DO_TILE_ANIM(picnum, 0);
+                tileUpdatePicnum(&picnum, 0);
 
                 if (!waloff[picnum])
                     tileLoad(picnum);

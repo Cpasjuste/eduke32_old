@@ -30,7 +30,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "game.h"
 #include "warp.h"
 
-void _ErrMsg(char *strFile, unsigned uLine, char *format, ...);
+void _ErrMsg(const char *strFile, unsigned uLine, const char *format, ...);
 void FAF_DrawRooms(int posx, int posy, int posz, short ang, int horiz, short cursectnum);
 
 ////////////////////////////////////////////////////////////////////
@@ -56,7 +56,7 @@ SWBOOL FAF_DebugView = 0;
 
 void COVERupdatesector(int32_t x, int32_t y, int16_t* newsector)
 {
-    ASSERT(*newsector>=0 && *newsector<MAXSECTORS);
+    // ASSERT(*newsector>=0 && *newsector<MAXSECTORS);
     updatesector(x,y,newsector);
 }
 
@@ -90,7 +90,6 @@ FAF_Sector(short sectnum)
 {
     short SpriteNum, Next;
     SPRITEp sp;
-    SWBOOL found = FALSE;
 
     TRAVERSE_SPRITE_SECT(headspritesect[sectnum], SpriteNum, Next)
     {
@@ -123,7 +122,7 @@ void SetWallWarpHitscan(short sectnum)
     // Travel all the way around loop setting wall bits
     do
     {
-        if (wall[wall_num].nextwall >= 0)
+        if ((uint16_t)wall[wall_num].nextwall < MAXWALLS)
             SET(wall[wall_num].cstat, CSTAT_WALL_WARP_HITSCAN);
         wall_num = wall[wall_num].point2;
     }
@@ -171,7 +170,6 @@ FAFhitscan(int32_t x, int32_t y, int32_t z, int16_t sectnum,
         // hitscan warping
         if (TEST(wall[hitinfo->wall].cstat, CSTAT_WALL_WARP_HITSCAN))
         {
-            short src_sect = hitinfo->sect;
             short dest_sect;
 
             MONO_PRINT(ds);
@@ -278,10 +276,10 @@ FAFcansee(int32_t xs, int32_t ys, int32_t zs, int16_t sects,
     SWBOOL plax_found = FALSE;
     vec3_t s = { xs, ys, zs };
 
-    ASSERT(sects >= 0 && secte >= 0);
+    // ASSERT(sects >= 0 && secte >= 0);
 
     // early out to regular routine
-    if (!FAF_Sector(sects) && !FAF_Sector(secte))
+    if ((sects < 0 || !FAF_Sector(sects)) && (secte < 0 || !FAF_Sector(secte)))
     {
         return cansee(xs,ys,zs,sects,xe,ye,ze,secte);
     }
@@ -353,7 +351,7 @@ GetZadjustment(short sectnum, short hitag)
     short i, nexti;
     SPRITEp sp;
 
-    if (!TEST(sector[sectnum].extra, SECTFX_Z_ADJUST))
+    if (sectnum < 0 || !TEST(sector[sectnum].extra, SECTFX_Z_ADJUST))
         return 0L;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_ST1], i, nexti)
@@ -514,7 +512,7 @@ void FAFgetzrange(int32_t x, int32_t y, int32_t z, int16_t sectnum,
     // because the ceiling and floors get moved out of the way for drawing.
 
     // early out to regular routine
-    if (!FAF_ConnectArea(sectnum))
+    if (sectnum < 0 || !FAF_ConnectArea(sectnum))
     {
         getzrange_old(x, y, z, sectnum, hiz,  ceilhit, loz,  florhit, clipdist, clipmask);
         SectorZadjust(*ceilhit, hiz, *florhit, loz);
@@ -542,7 +540,7 @@ void FAFgetzrange(int32_t x, int32_t y, int32_t z, int16_t sectnum,
 
         updatesectorz(x, y, newz, &uppersect);
         if (uppersect < 0)
-            _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d", x, y, newz);
+            return; // _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d", x, y, newz);
         getzrange_old(x, y, newz, uppersect, hiz,  ceilhit, &foo1,  &foo2, clipdist, clipmask);
         SectorZadjust(*ceilhit, hiz, -1, NULL);
     }
@@ -556,7 +554,6 @@ void FAFgetzrange(int32_t x, int32_t y, int32_t z, int16_t sectnum,
         {
         case HIT_SECTOR:
         {
-            short hit_sector = NORM_SECTOR(*florhit);
             break;
         }
         case HIT_SPRITE:
@@ -565,7 +562,7 @@ void FAFgetzrange(int32_t x, int32_t y, int32_t z, int16_t sectnum,
 
         updatesectorz(x, y, newz, &lowersect);
         if (lowersect < 0)
-            _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d", x, y, newz);
+            return; // _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d", x, y, newz);
         getzrange_old(x, y, newz, lowersect, &foo1,  &foo2, loz,  florhit, clipdist, clipmask);
         SectorZadjust(-1, NULL, *florhit, loz);
         WaterAdjust(*florhit, loz);
@@ -611,7 +608,7 @@ void FAFgetzrangepoint(int32_t x, int32_t y, int32_t z, int16_t sectnum,
         }
         updatesectorz(x, y, newz, &uppersect);
         if (uppersect < 0)
-            _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d, sectnum %d", x, y, newz, sectnum);
+            return; // _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d, sectnum %d", x, y, newz, sectnum);
         getzrangepoint(x, y, newz, uppersect, hiz,  ceilhit, &foo1,  &foo2);
         SectorZadjust(*ceilhit, hiz, -1, NULL);
     }
@@ -627,7 +624,7 @@ void FAFgetzrangepoint(int32_t x, int32_t y, int32_t z, int16_t sectnum,
         }
         updatesectorz(x, y, newz, &lowersect);
         if (lowersect < 0)
-            _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d, sectnum %d", x, y, newz, sectnum);
+            return; // _ErrMsg(ERR_STD_ARG, "Did not find a sector at %d, %d, %d, sectnum %d", x, y, newz, sectnum);
         getzrangepoint(x, y, newz, lowersect, &foo1,  &foo2, loz,  florhit);
         SectorZadjust(-1, NULL, *florhit, loz);
         WaterAdjust(*florhit, loz);
@@ -668,9 +665,7 @@ void
 SetupMirrorTiles(void)
 {
     short i, nexti;
-    short j, nextj;
     SPRITEp sp;
-    SWBOOL found;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_FAF], i, nexti)
     {
@@ -766,7 +761,7 @@ short GlobStackSect[2];
 void
 GetUpperLowerSector(short match, int x, int y, short *upper, short *lower)
 {
-    int i, j;
+    int i;
     short sectorlist[16];
     int sln = 0;
     short SpriteNum, Next;
@@ -827,9 +822,10 @@ GetUpperLowerSector(short match, int x, int y, short *upper, short *lower)
                 if (!found)
                     continue;
 
-                sectorlist[sln] = i;
                 if (sln < (int)SIZ(GlobStackSect))
                     GlobStackSect[sln] = i;
+                if (sln < (int)SIZ(sectorlist))
+                    sectorlist[sln] = i;
                 sln++;
             }
         }
@@ -842,10 +838,17 @@ GetUpperLowerSector(short match, int x, int y, short *upper, short *lower)
         *lower = -1;
         return;
     }
-    else
+    // Map rooms have NOT been dragged on top of each other
+    else if (sln == 1)
+    {
+        *lower = sectorlist[0];
+        *upper = sectorlist[0];
+        return;
+    }
+    // Map rooms HAVE been dragged on top of each other
     // inside will somtimes find that you are in two different sectors if the x,y
     // is exactly on a sector line.
-    if (sln > 2)
+    else if (sln > 2)
     {
         //DSPRINTF(ds, "TOO MANY SECTORS FOUND: x=%d, y=%d, match=%d, num sectors %d, %d, %d, %d, %d, %d", x, y, match, sln, sectorlist[0], sectorlist[1], sectorlist[2], sectorlist[3], sectorlist[4]);
         MONO_PRINT(ds);
@@ -878,7 +881,6 @@ FindCeilingView(short match, int32_t* x, int32_t* y, int32_t z, int16_t* sectnum
     int yoff = 0;
     short i, nexti;
     SPRITEp sp = NULL;
-    short top_sprite = -1;
     int pix_diff;
     int newz;
 
@@ -1050,13 +1052,10 @@ FindFloorView(short match, int32_t* x, int32_t* y, int32_t z, int16_t* sectnum)
 }
 
 short
-ViewSectorInScene(short cursectnum, short type, short level)
+ViewSectorInScene(short cursectnum, short level)
 {
     int i, nexti;
-    int j, nextj;
     SPRITEp sp;
-    SPRITEp sp2;
-    int cz, fz;
     short match;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_FAF], i, nexti)
@@ -1095,7 +1094,7 @@ DrawOverlapRoom(int tx, int ty, int tz, short tang, int thoriz, short tsectnum)
 
     save.zcount = 0;
 
-    match = ViewSectorInScene(tsectnum, VIEW_THRU_CEILING, VIEW_LEVEL1);
+    match = ViewSectorInScene(tsectnum, VIEW_LEVEL1);
     if (match != -1)
     {
         FindCeilingView(match, &tx, &ty, tz, &tsectnum);
@@ -1116,12 +1115,12 @@ DrawOverlapRoom(int tx, int ty, int tz, short tang, int thoriz, short tsectnum)
 
         analyzesprites(tx, ty, tz, FALSE);
         post_analyzesprites();
-        drawmasks();
+        renderDrawMasks();
 
     }
     else
     {
-        match = ViewSectorInScene(tsectnum, VIEW_THRU_FLOOR, VIEW_LEVEL2);
+        match = ViewSectorInScene(tsectnum, VIEW_LEVEL2);
         if (match != -1)
         {
             FindFloorView(match, &tx, &ty, tz, &tsectnum);
@@ -1142,7 +1141,7 @@ DrawOverlapRoom(int tx, int ty, int tz, short tang, int thoriz, short tsectnum)
 
             analyzesprites(tx, ty, tz, FALSE);
             post_analyzesprites();
-            drawmasks();
+            renderDrawMasks();
 
         }
     }

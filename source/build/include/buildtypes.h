@@ -5,7 +5,7 @@
 #undef SECTORTYPE
 #undef SPRITETYPE
 
-#ifdef UNTRACKED_STRUCTS
+#ifdef UNTRACKED_STRUCTS__
 
 #define StructTracker(tracker, type) type
 #define StructName(name) u ## name
@@ -71,7 +71,13 @@ typedef struct
 //32 bytes
 typedef struct
 {
-    StructTracker(Wall, int32_t) x, y;
+    union {
+        struct
+        {
+            StructTracker(Wall, int32_t) x, y;
+        };
+        vec2_t pos;
+    };
     StructTracker(Wall, int16_t) point2, nextwall, nextsector;
     StructTracker(Wall, uint16_t) cstat;
     StructTracker(Wall, int16_t) picnum, overpicnum;
@@ -114,31 +120,57 @@ enum
     CSTAT_SPRITE_BLOCK_HITSCAN = 1u<<8u,
     CSTAT_SPRITE_TRANSLUCENT_INVERT = 1u<<9u,
 
-    CSTAT_SPRITE_RESERVED1 = 1u<<10u, // game-side
-    CSTAT_SPRITE_RESERVED2 = 1u<<11u, // game-side
-    CSTAT_SPRITE_RESERVED3 = 1u<<12u,
-    CSTAT_SPRITE_RESERVED4 = 1u<<13u,
-    CSTAT_SPRITE_RESERVED5 = 1u<<14u,
-
-    // TODO: Make these two Duke3D-only by translating them to bits in tspr
-    CSTAT_SPRITE_NO_SHADOW = 1u<<13u, // re-defined in Shadow Warrior
-    CSTAT_SPRITE_INVISIBLE_WITH_SHADOW = 1u<<14u, // re-defined in Shadow Warrior
+    CSTAT_SPRITE_RESERVED1 = 1u<<10u, // used by Duke 3D (Polymost)
+    CSTAT_SPRITE_RESERVED2 = 1u<<11u, // used by Duke 3D (EDuke32 game code extension)
+    CSTAT_SPRITE_RESERVED3 = 1u<<12u, // used by Shadow Warrior, Blood
+    CSTAT_SPRITE_RESERVED4 = 1u<<13u, // used by Duke 3D (Polymer), Shadow Warrior, Blood
+    CSTAT_SPRITE_RESERVED5 = 1u<<14u, // used by Duke 3D (Polymer), Shadow Warrior, Blood
 
     CSTAT_SPRITE_INVISIBLE = 1u<<15u,
 };
 enum
 {
     CSTAT_SPRITE_ALIGNMENT_FACING = 0,
-    CSTAT_SPRITE_ALIGNMENT_WALL = 1u<<4u,
-    CSTAT_SPRITE_ALIGNMENT_FLOOR = 1u<<5u,
-    CSTAT_SPRITE_ALIGNMENT_SLAB = 1u<<4u | 1u<<5u,
+    CSTAT_SPRITE_ALIGNMENT_WALL   = 1u<<4u,
+    CSTAT_SPRITE_ALIGNMENT_FLOOR  = 1u<<5u,
+    CSTAT_SPRITE_ALIGNMENT_SLAB   = 1u<<4u | 1u<<5u,
+
+    CSTAT_SPRITE_ALIGNMENT_MASK   = 1u<<4u | 1u<<5u,
+};
+
+enum
+{
+    CSTAT_WALL_BLOCK         = 1u,
+    CSTAT_WALL_BOTTOM_SWAP   = 1u<<1u,
+    CSTAT_WALL_ALIGN_BOTTOM  = 1u<<2u,
+    CSTAT_WALL_XFLIP         = 1u<<3u,
+    CSTAT_WALL_MASKED        = 1u<<4u,
+    CSTAT_WALL_1WAY          = 1u<<5u,
+    CSTAT_WALL_BLOCK_HITSCAN = 1u<<6u,
+    CSTAT_WALL_TRANSLUCENT   = 1u<<7u,
+    CSTAT_WALL_YFLIP         = 1u<<8u,
+    CSTAT_WALL_TRANS_FLIP    = 1u<<9u,
+
+    CSTAT_WALL_YAX_UPWALL    = 1u<<10u, // EDuke32 extension
+    CSTAT_WALL_YAX_DOWNWALL  = 1u<<11u, // EDuke32 extension
+    CSTAT_WALL_ROTATE_90     = 1u<<12u, // EDuke32 extension
+
+    CSTAT_WALL_RESERVED1     = 1u<<13u,
+    CSTAT_WALL_RESERVED2     = 1u<<14u, // used by Shadow Warrior, Blood
+    CSTAT_WALL_RESERVED3     = 1u<<15u, // used by Shadow Warrior, Blood
 };
 #endif
 
 //44 bytes
 typedef struct
 {
-    StructTracker(Sprite, int32_t) x, y, z;
+    union {
+        struct
+        {
+            StructTracker(Sprite, int32_t) x, y, z;
+        };
+        vec3_t pos;
+    };
     StructTracker(Sprite, uint16_t) cstat;
     StructTracker(Sprite, int16_t) picnum;
     StructTracker(Sprite, int8_t) shade;
@@ -146,15 +178,54 @@ typedef struct
     StructTracker(Sprite, uint8_t) xrepeat, yrepeat;
     StructTracker(Sprite, int8_t) xoffset, yoffset;
     StructTracker(Sprite, int16_t) sectnum, statnum;
-    StructTracker(Sprite, int16_t) ang, owner, xvel, yvel, zvel;
+    StructTracker(Sprite, int16_t) ang, owner;
+    union {
+        struct
+        {
+            StructTracker(Sprite, int16_t) xvel, yvel, zvel;
+        };
+        vec3_16_t vel;
+    };
     StructTracker(Sprite, int16_t) lotag, hitag;
     StructTracker(Sprite, int16_t) extra;
 } StructName(spritetypev7);
 
+#ifndef buildtypes_h__enums
+//44 bytes
+// TODO: Remove unused fields from the end of this struct. (TSPRITE_SIZE)
+typedef struct
+{
+    union {
+        struct
+        {
+            int32_t x, y, z;
+        };
+        vec3_t pos;
+    };
+    uint16_t cstat;
+    int16_t picnum;
+    int8_t shade;
+    uint8_t pal, clipdist, blend;
+    uint8_t xrepeat, yrepeat;
+    int8_t xoffset, yoffset;
+    int16_t sectnum, statnum;
+    int16_t ang, owner;
+    union {
+        struct
+        {
+            int16_t xvel, yvel, zvel;
+        };
+        vec3_16_t vel;
+    };
+    int16_t lotag, hitag;
+    int16_t extra;
+} tspritetype;
+#endif
+
 //////////////////// END Version 7 map format ////////////////
 
 //////////////////// Lunatic new-generation map format ////////////////////
-
+#if defined NEW_MAP_FORMAT
 // 44 bytes
 typedef struct
 {
@@ -180,7 +251,13 @@ typedef struct
 // 38 bytes
 typedef struct
 {
-    StructTracker(Wall, int32_t) x, y;
+    union {
+        struct
+        {
+            StructTracker(Wall, int32_t) x, y;
+        };
+        vec2_t pos;
+    };
     StructTracker(Wall, int16_t) point2, nextwall, nextsector;
     StructTracker(Wall, int16_t) upwall, dnwall;
     StructTracker(Wall, uint16_t) cstat;
@@ -191,7 +268,7 @@ typedef struct
     StructTracker(Wall, int16_t) extra;
     StructTracker(Wall, uint8_t) blend, filler_;
 } StructName(walltypevx);
-
+#endif
 // NOTE: spritetype is currently the same for V7/8/9 and VX in-memory map formats.
 
 //////////////////// END Lunatic new-generation map format ////////////////

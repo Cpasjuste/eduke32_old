@@ -40,7 +40,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "mytypes.h"
 #include "control.h"
 #include "function.h"
-#include "net.h"
+#include "network.h"
 #include "pal.h"
 #include "player.h"
 #include "jtags.h"
@@ -53,11 +53,11 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "menus.h"
 #include "interp.h"
 #include "sector.h"
+#include "config.h"
 
 static int OverlapDraw = FALSE;
 extern SWBOOL QuitFlag, LocationInfo, ConPanel, SpriteInfo, PauseKeySet;
 extern SWBOOL Voxel;
-extern char tempbuf[];
 extern char buffer[];
 SWBOOL DrawScreen;
 extern short f_c;
@@ -76,7 +76,7 @@ void DrawCompass(PLAYERp pp);
 
 #if 1
 void
-ShadeSprite(uspritetype * tsp)
+ShadeSprite(tspriteptr_t tsp)
 {
     // set shade of sprite
     tsp->shade = sector[tsp->sectnum].floorshade - 25;
@@ -97,11 +97,9 @@ GetRotation(short tSpriteNum, int viewx, int viewy)
     static short RotTable8[] = {0, 7, 6, 5, 4, 3, 2, 1};
     static short RotTable5[] = {0, 1, 2, 3, 4, 3, 2, 1};
     short rotation;
-    extern short screenpeek;
 
-    uspritetype * tsp = &tsprite[tSpriteNum];
+    tspriteptr_t tsp = &tsprite[tSpriteNum];
     USERp tu = User[tsp->owner];
-    PLAYERp pp = Player + screenpeek;
     short angle2;
 
     if (tu->RotNum == 0)
@@ -167,7 +165,7 @@ directions was not standardized.
 int
 SetActorRotation(short tSpriteNum, int viewx, int viewy)
 {
-    uspritetype * tsp = &tsprite[tSpriteNum];
+    tspriteptr_t tsp = &tsprite[tSpriteNum];
     USERp tu = User[tsp->owner];
     short StateOffset, Rotation;
 
@@ -228,7 +226,7 @@ SetActorRotation(short tSpriteNum, int viewx, int viewy)
 }
 
 int
-DoShadowFindGroundPoint(uspritetype * sp)
+DoShadowFindGroundPoint(tspriteptr_t sp)
 {
     // USES TSPRITE !!!!!
     USERp u = User[sp->owner];
@@ -236,7 +234,6 @@ DoShadowFindGroundPoint(uspritetype * sp)
     int ceilhit, florhit;
     int hiz, loz = u->loz;
     short save_cstat, bak_cstat;
-    SWBOOL found = FALSE;
 
     // recursive routine to find the ground - either sector or floor sprite
     // skips over enemy and other types of sprites
@@ -272,12 +269,11 @@ DoShadowFindGroundPoint(uspritetype * sp)
             loz = DoShadowFindGroundPoint(sp);
             hsp->cstat = bak_cstat;
         }
+        break;
     }
 
     case HIT_SECTOR:
-    {
-        return loz;
-    }
+        break;
 
     default:
         ASSERT(TRUE == FALSE);
@@ -285,7 +281,6 @@ DoShadowFindGroundPoint(uspritetype * sp)
     }
 
     return loz;
-
 }
 
 #if 0
@@ -366,9 +361,9 @@ DoVoxelShadow(SPRITEp tspr)
 #endif
 
 void
-DoShadows(uspritetype * tsp, int viewz)
+DoShadows(tspriteptr_t tsp, int viewz)
 {
-    uspritetype * New = &tsprite[spritesortcnt];
+    tspriteptr_t New = &tsprite[spritesortcnt];
     USERp tu = User[tsp->owner];
     int ground_dist = 0;
     int view_dist = 0;
@@ -393,7 +388,7 @@ DoShadows(uspritetype * tsp, int viewz)
     }
 
     tsp->sectnum = sectnum;
-    memcpy(New, tsp, sizeof(SPRITE));
+    *New = *tsp;
     // shadow is ALWAYS draw last - status is priority
     New->statnum = MAXSTATUS;
     New->sectnum = sectnum;
@@ -448,8 +443,8 @@ DoShadows(uspritetype * tsp, int viewz)
 
     xrepeat = max(xrepeat - ground_dist - view_dist, 4);
     yrepeat = max(yrepeat - ground_dist - view_dist, 4);
-    xrepeat = min(xrepeat, 255);
-    yrepeat = min(yrepeat, 255);
+    xrepeat = min(xrepeat, short(255));
+    yrepeat = min(yrepeat, short(255));
 
     New->xrepeat = xrepeat;
     New->yrepeat = yrepeat;
@@ -461,9 +456,8 @@ DoShadows(uspritetype * tsp, int viewz)
 }
 
 void
-DoMotionBlur(uspritetype const * tsp)
+DoMotionBlur(tspritetype const * const tsp)
 {
-    uspritetype * New;
     USERp tu = User[tsp->owner];
     int nx,ny,nz = 0,dx,dy,dz;
     short i, ang;
@@ -534,8 +528,8 @@ DoMotionBlur(uspritetype const * tsp)
 
     for (i = 0; i < tu->motion_blur_num; i++)
     {
-        New = &tsprite[spritesortcnt];
-        memcpy(New, tsp, sizeof(SPRITE));
+        tspriteptr_t New = &tsprite[spritesortcnt];
+        *New = *tsp;
         SET(New->cstat, CSTAT_SPRITE_TRANSLUCENT|CSTAT_SPRITE_TRANSLUCENT_INVERT);
 
         New->x += dx;
@@ -566,7 +560,6 @@ void SetVoxelSprite(SPRITEp sp, short pic)
 void WarpCopySprite(void)
 {
     SPRITEp sp1, sp2, sp;
-    uspritetype * New;
     short sn, nsn;
     short sn2, nsn2;
     short spnum, next_spnum;
@@ -599,10 +592,7 @@ void WarpCopySprite(void)
                     if (sprite[spnum].picnum == ST1)
                         continue;
 
-                    New = &tsprite[spritesortcnt];
-                    memcpy(New, &sprite[spnum], sizeof(SPRITE));
-                    spritesortcnt++;
-                    New->owner = spnum;
+                    tspriteptr_t New = renderAddTSpriteFromSprite(spnum);
                     New->statnum = 0;
 
                     xoff = sp1->x - New->x;
@@ -623,10 +613,7 @@ void WarpCopySprite(void)
                     if (sprite[spnum].picnum == ST1)
                         continue;
 
-                    New = &tsprite[spritesortcnt];
-                    memcpy(New, &sprite[spnum], sizeof(SPRITE));
-                    spritesortcnt++;
-                    New->owner = spnum;
+                    tspriteptr_t New = renderAddTSpriteFromSprite(spnum);
                     New->statnum = 0;
 
                     xoff = sp2->x - New->x;
@@ -643,7 +630,7 @@ void WarpCopySprite(void)
     }
 }
 
-void DoStarView(uspritetype * tsp, USERp tu, int viewz)
+void DoStarView(tspriteptr_t tsp, USERp tu, int viewz)
 {
     extern STATE s_Star[], s_StarDown[];
     extern STATE s_StarStuck[], s_StarDownStuck[];
@@ -669,10 +656,9 @@ void DoStarView(uspritetype * tsp, USERp tu, int viewz)
 void
 analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
 {
-    int tSpriteNum, j, k;
-    short SpriteNum, pnum;
+    int tSpriteNum;
+    short SpriteNum;
     int smr4, smr2;
-    uspritetype * tsp;
     USERp tu;
     static int ang = 0;
     PLAYERp pp = Player + screenpeek;
@@ -687,7 +673,7 @@ analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
     for (tSpriteNum = spritesortcnt - 1; tSpriteNum >= 0; tSpriteNum--)
     {
         SpriteNum = tsprite[tSpriteNum].owner;
-        tsp = &tsprite[tSpriteNum];
+        tspriteptr_t tsp = &tsprite[tSpriteNum];
         tu = User[SpriteNum];
 
         //if(tsp->statnum == STAT_GENERIC_QUEUE)
@@ -754,6 +740,15 @@ analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
                 }
             }
 
+            // workaround for mines and floor decals beneath the floor
+            if (tsp->picnum == BETTY_R0 || tsp->picnum == FLOORBLOOD1)
+            {
+                auto sp = (uspriteptr_t)&sprite[SpriteNum];
+                int32_t const floorz = getflorzofslope(sp->sectnum, sp->x, sp->y);
+                if (sp->z > floorz)
+                    tsp->z = floorz;
+            }
+
             if (gs.Shadows && TEST(tu->Flags, SPR_SHADOW))
             {
                 DoShadows(tsp, viewz);
@@ -763,7 +758,7 @@ analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
 
             //#define DART_REPEAT 6
             //#define DART_PIC 2233
-            if (useDarts)
+            if (gs.Darts)
                 if (tu->ID == 1793 || tsp->picnum == 1793)
                 {
                     tsp->picnum = 2519;
@@ -775,7 +770,7 @@ analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
 #define DART_REPEAT 16
             if (tu->ID == STAR1)
             {
-                if (useDarts)
+                if (gs.Darts)
                 {
                     tsp->picnum = DART_PIC;
                     tsp->ang = NORM_ANGLE(tsp->ang - 512 - 24);
@@ -839,7 +834,7 @@ analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
             }
         }
 
-        if (useDarts)
+        if (gs.Darts)
             if (tsp->statnum == STAT_STAR_QUEUE)
             {
                 tsp->picnum = DART_PIC;
@@ -898,7 +893,8 @@ analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
 
         if (OverlapDraw && FAF_ConnectArea(tsp->sectnum) && tsp->owner >= 0)
         {
-            ConnectCopySprite(tsp);
+            EDUKE32_STATIC_ASSERT(sizeof(uspritetype) == sizeof(tspritetype)); // see TSPRITE_SIZE
+            ConnectCopySprite((uspriteptr_t)tsp);
         }
 
         //
@@ -974,8 +970,7 @@ analyzesprites(int viewx, int viewy, int viewz, SWBOOL mirror)
 }
 
 #if 1
-uspritetype *
-get_tsprite(short SpriteNum)
+tspriteptr_t get_tsprite(short SpriteNum)
 {
     int tSpriteNum;
 
@@ -993,14 +988,13 @@ post_analyzesprites(void)
 {
     int tSpriteNum;
     short SpriteNum;
-    uspritetype * tsp;
     USERp tu;
 
     for (tSpriteNum = spritesortcnt - 1; tSpriteNum >= 0; tSpriteNum--)
     {
         SpriteNum = tsprite[tSpriteNum].owner;
         if (SpriteNum < 0) continue;    // JBF: verify this is safe
-        tsp = &tsprite[tSpriteNum];
+        tspriteptr_t tsp = &tsprite[tSpriteNum];
         tu = User[SpriteNum];
 
         if (tu)
@@ -1008,7 +1002,7 @@ post_analyzesprites(void)
             if (tu->ID == FIREBALL_FLAMES && tu->Attach >= 0)
             {
                 //uspritetype * const atsp = &sprite[tu->Attach];
-                uspritetype * const atsp = get_tsprite(tu->Attach);
+                tspriteptr_t const atsp = get_tsprite(tu->Attach);
 
                 if (!atsp)
                 {
@@ -1034,6 +1028,8 @@ post_analyzesprites(void)
 }
 #endif
 
+static ClockTicks mapzoomclock;
+
 void
 ResizeView(PLAYERp pp)
 {
@@ -1042,15 +1038,13 @@ ResizeView(PLAYERp pp)
 
     if (dimensionmode == 2 || dimensionmode == 5 || dimensionmode == 6)
     {
+        int32_t timepassed = (int32_t)(totalclock - mapzoomclock);
+        mapzoomclock += timepassed;
         if (PKEY_PRESSED(KEYSC_DASH)||PKEY_PRESSED(KEYSC_GMINUS))
-        {
-            if ((zoom -= (zoom >> 4)) < 48) zoom = 48;
-        }
+            zoom = max<int32_t>(zoom - mulscale7(timepassed * synctics, zoom), 48);
 
         if (PKEY_PRESSED(KEYSC_EQUAL)||PKEY_PRESSED(KEYSC_GPLUS))
-        {
-            if ((zoom += (zoom >> 4)) > 4096) zoom = 4096;
-        }
+            zoom = min<int32_t>(zoom + mulscale7(timepassed * synctics, zoom), 4096);
 
         if (KEY_PRESSED(KEYSC_ESC))
         {
@@ -1151,7 +1145,7 @@ BackView(int *nx, int *ny, int *nz, short *vsect, short *nang, short horiz)
     vec3_t n = { *nx, *ny, *nz };
     SPRITEp sp;
     hitdata_t hitinfo;
-    int i, vx, vy, vz, hx, hy, hz;
+    int i, vx, vy, vz, hx, hy;
     short bakcstat, daang;
     PLAYERp pp = &Player[screenpeek];
     short ang;
@@ -1270,7 +1264,7 @@ CircleCamera(int *nx, int *ny, int *nz, short *vsect, short *nang, short horiz)
     vec3_t n = { *nx, *ny, *nz };
     SPRITEp sp;
     hitdata_t hitinfo;
-    int i, vx, vy, vz, hx, hy, hz;
+    int i, vx, vy, vz, hx, hy;
     short bakcstat, daang;
     PLAYERp pp = &Player[screenpeek];
     short ang;
@@ -1385,11 +1379,11 @@ void PrintLocationInfo(PLAYERp pp)
     if (LocationInfo)
     {
 
-        i = totalclock;
+        i = (int32_t) totalclock;
         if (i != frameval[framecnt])
         {
-            sprintf(tempbuf, "FPS: %d", ((120 * AVERAGEFRAMES) / (i - frameval[framecnt])) + f_c);
-            printext256(x, y, 1, -1, tempbuf, 1);
+            sprintf(buffer, "FPS: %d", ((120 * AVERAGEFRAMES) / (i - frameval[framecnt])) + f_c);
+            printext256(x, y, 1, -1, buffer, 1);
             frameval[framecnt] = i;
         }
 
@@ -1493,16 +1487,16 @@ void PrintSpriteInfo(PLAYERp pp)
         }
         if (SpriteInfo > 1)
         {
-            sprintf(buffer, "POSX:%d", sp->x);
+            sprintf(buffer, "POSX:%d", TrackerCast(sp->x));
             printext256(x, y, 1, -1, buffer, 1);
             y += Y_STEP;
-            sprintf(buffer, "POSY:%d", sp->y);
+            sprintf(buffer, "POSY:%d", TrackerCast(sp->y));
             printext256(x, y, 1, -1, buffer, 1);
             y += Y_STEP;
-            sprintf(buffer, "POSZ:%d", sp->z);
+            sprintf(buffer, "POSZ:%d", TrackerCast(sp->z));
             printext256(x, y, 1, -1, buffer, 1);
             y += Y_STEP;
-            sprintf(buffer, "ANG:%d", (int32_t) sp->ang);
+            sprintf(buffer, "ANG:%d", TrackerCast(sp->ang));
             printext256(x, y, 1, -1, buffer, 1);
             y += Y_STEP;
         }
@@ -1531,8 +1525,7 @@ void SpriteSortList2D(int tx, int ty)
 
                 if (dist < 22000)
                 {
-                    memcpy(&tsprite[spritesortcnt], sp, sizeof(SPRITE));
-                    tsprite[spritesortcnt++].owner = i;
+                    renderAddTSpriteFromSprite(i);
                 }
             }
         }
@@ -1541,15 +1534,13 @@ void SpriteSortList2D(int tx, int ty)
 
 int COVERsetgamemode(int mode, int xdim, int ydim, int bpp)
 {
-    extern int ScreenHeight, ScreenWidth, ScreenMode, ScreenBPP;
+    ud_setup.ScreenHeight = ydim;
+    ud_setup.ScreenWidth  = xdim;
+    ud_setup.ScreenMode   = mode;
+    ud_setup.ScreenBPP    = bpp;
 
-
-    ScreenHeight = ydim;
-    ScreenWidth  = xdim;
-    ScreenMode   = mode;
-    ScreenBPP    = bpp;
-
-    return (int)setgamemode(mode,xdim,ydim,bpp);
+    // [JM] Should I be using upscalefactor here, or some SW equivalent to Duke's ud.detail? !CHECKME!
+    return (int)videoSetGameMode(mode,xdim,ydim,bpp,upscalefactor);
 }
 
 void CheatResChange(void)
@@ -1678,7 +1669,7 @@ void ScreenCaptureKeys(void)
     {
         KEY_PRESSED(KEYSC_F12) = 0;
         PauseAction();
-        screencapture("swcpxxxx.tga", KEY_PRESSED(KEYSC_LSHIFT) | KEY_PRESSED(KEYSC_RSHIFT));
+        videoCaptureScreen("swcpxxxx.png", KEY_PRESSED(KEYSC_LSHIFT) | KEY_PRESSED(KEYSC_RSHIFT));
         ResumeAction();
         PutStringInfo(Player + myconnectindex, "Screen Captured");
     }
@@ -1687,9 +1678,9 @@ void ScreenCaptureKeys(void)
 void DrawCheckKeys(PLAYERp pp)
 {
     extern SWBOOL ResCheat;
-    extern SWBOOL PauseKeySet;
 
     /* JonoF: Who really needs this now?
+    extern SWBOOL PauseKeySet;
     if (KEY_PRESSED(KEYSC_F5) && !(KEY_PRESSED(KEYSC_RSHIFT) || KEY_PRESSED(KEYSC_LSHIFT) || KEY_PRESSED(KEYSC_ALT) || KEY_PRESSED(KEYSC_RALT)) && !PauseKeySet)
         {
         KEY_PRESSED(KEYSC_F5) = 0;
@@ -1712,7 +1703,7 @@ void DrawCheckKeys(PLAYERp pp)
 }
 
 #if 0
-void DrawMessageInput(PLAYERp pp)
+void DrawMessageInput(void)
 {
     short w,h;
     static SWBOOL cur_show;
@@ -1741,14 +1732,14 @@ void DrawMessageInput(PLAYERp pp)
     }
 }
 #else
-void DrawMessageInput(PLAYERp pp)
+void DrawMessageInput(void)
 {
     short w,h;
     static SWBOOL cur_show;
     short c;
 
     // Used to make cursor fade in and out
-    c = 4-(sintable[(totalclock<<4)&2047]>>11);
+    c = 4-(sintable[((int32_t) totalclock<<4)&2047]>>11);
 
     if (MessageInputMode)
     {
@@ -1757,19 +1748,19 @@ void DrawMessageInput(PLAYERp pp)
         cur_show ^= 1;
         if (cur_show)
         {
-            minigametext(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString,0,ROTATE_SPRITE_SCREEN_CLIP);
-            rotatesprite((TEXT_XCENTER(w)+w+2)<<16,(MESSAGE_LINE+1)<<16,20000,0,COINCURSOR+((totalclock>>3)%7),c,0,ROTATE_SPRITE_SCREEN_CLIP,0,0,xdim-1,ydim-1);
+            minigametext(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString,ROTATE_SPRITE_SCREEN_CLIP);
+            rotatesprite((TEXT_XCENTER(w)+w+2)<<16,(MESSAGE_LINE+1)<<16,20000,0,COINCURSOR+(((int32_t) totalclock>>3)%7),c,0,ROTATE_SPRITE_SCREEN_CLIP,0,0,xdim-1,ydim-1);
         }
         else
         {
-            minigametext(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString,0,ROTATE_SPRITE_SCREEN_CLIP);
-            rotatesprite((TEXT_XCENTER(w)+w+2)<<16,(MESSAGE_LINE+1)<<16,20000,0,COINCURSOR+((totalclock>>3)%7),c,0,ROTATE_SPRITE_SCREEN_CLIP,0,0,xdim-1,ydim-1);
+            minigametext(TEXT_XCENTER(w), MESSAGE_LINE, MessageInputString,ROTATE_SPRITE_SCREEN_CLIP);
+            rotatesprite((TEXT_XCENTER(w)+w+2)<<16,(MESSAGE_LINE+1)<<16,20000,0,COINCURSOR+(((int32_t) totalclock>>3)%7),c,0,ROTATE_SPRITE_SCREEN_CLIP,0,0,xdim-1,ydim-1);
         }
     }
 }
 #endif
 
-void DrawConInput(PLAYERp pp)
+void DrawConInput(void)
 {
 #define PANELINPUTX 30
 #define PANELINPUTY 100
@@ -1778,7 +1769,7 @@ void DrawConInput(PLAYERp pp)
     short c;
 
     // Used to make cursor fade in and out
-    c = 4-(sintable[(totalclock<<4)&2047]>>11);
+    c = 4-(sintable[((int32_t) totalclock<<4)&2047]>>11);
 
     if (ConInputMode)
     {
@@ -1802,7 +1793,6 @@ void DrawConInput(PLAYERp pp)
 
 void DrawCrosshair(PLAYERp pp)
 {
-    extern int CrosshairX, CrosshairY;
     extern SWBOOL DemoMode,CameraTestMode;
 
     if (!gs.Crosshair)
@@ -1824,7 +1814,7 @@ void DrawCrosshair(PLAYERp pp)
     {
         int daz;
         short hit_sprite, daang;
-        static int handle=-1;
+        static int handle;
 
         daz = pp->posz + pp->bob_z;
         daang = 32;
@@ -1853,7 +1843,7 @@ void DrawCrosshair(PLAYERp pp)
 
             if (pp->CurWpn == pp->Wpn[WPN_RAIL])
             {
-                if (!FX_SoundActive(handle))
+                if (!FX_SoundValidAndActive(handle))
                     handle = PlaySound(DIGI_RAILLOCKED, &pp->posx, &pp->posy, &pp->posz, v3df_follow|v3df_dontpan);
             }
         }
@@ -1862,24 +1852,26 @@ void DrawCrosshair(PLAYERp pp)
             // It didn't target anything.
             if (pp->CurWpn == pp->Wpn[WPN_RAIL])
             {
-                if (FX_SoundActive(handle))
+                if (FX_SoundValidAndActive(handle))
+                {
                     FX_StopSound(handle);
+                    handle = 0;
+                }
             }
             goto NORMALXHAIR;
         }
 
         rotatesprite(x << 8, y << 8, (1 << 16), 0,
                      2326, 10, 0,
-                     ROTATE_SPRITE_VIEW_CLIP|ROTATE_SPRITE_CORNER, 0, 0, xdim - 1, ydim - 1);
+                     ROTATE_SPRITE_VIEW_CLIP, 0, 0, xdim - 1, ydim - 1);
     }
     else
 #endif
     {
 //NORMALXHAIR:
-        rotatesprite(CrosshairX, CrosshairY, (1 << 16), 0,
+        rotatesprite(160<<16, 100<<16, (1 << 16), 0,
                      2326, 10, 0,
-                     //ROTATE_SPRITE_VIEW_CLIP|ROTATE_SPRITE_CORNER, 0, 0, xdim - 1, ydim - 1);
-                     ROTATE_SPRITE_SCREEN_CLIP|ROTATE_SPRITE_CORNER, 0, 0, xdim - 1, ydim - 1);
+                     ROTATE_SPRITE_VIEW_CLIP, windowxy1.x, windowxy1.y, windowxy2.x, windowxy2.y);
     }
 
     //#define TITLE_ROT_FLAGS (ROTATE_SPRITE_CORNER|ROTATE_SPRITE_SCREEN_CLIP|ROTATE_SPRITE_NON_MASK)
@@ -2019,8 +2011,6 @@ void
 PostDraw(void)
 {
     short i, nexti;
-    short sectnum,statnum;
-    SPRITEp sp;
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_FLOOR_SLOPE_DONT_DRAW], i, nexti)
     {
@@ -2036,9 +2026,9 @@ PostDraw(void)
         }
 
 #if DEBUG
-        sp = &sprite[i];
-        statnum = sp->statnum;
-        sectnum = sp->sectnum;
+        SPRITEp sp = &sprite[i];
+        short statnum = sp->statnum;
+        short sectnum = sp->sectnum;
         memset(sp, 0xCC, sizeof(SPRITE));
         sp->statnum = statnum;
         sp->sectnum = sectnum;
@@ -2118,16 +2108,9 @@ void PreDrawStackedWater(void)
 {
     short si,snexti;
     short i,nexti;
-    SPRITEp sp,np;
+    SPRITEp sp;
     USERp u,nu;
     short New;
-    int smr4,smr2;
-    int x,y,z;
-    short ang;
-    PLAYERp pp = Player + screenpeek;
-
-    smr4 = smoothratio + (((int) MoveSkip4) << 16);
-    smr2 = smoothratio + (((int) MoveSkip2) << 16);
 
     TRAVERSE_SPRITE_STAT(headspritestat[STAT_CEILING_FLOOR_PIC_OVERRIDE], si, snexti)
     {
@@ -2151,8 +2134,6 @@ void PreDrawStackedWater(void)
                 New = ConnectCopySprite((uspritetype const *)sp);
                 if (New >= 0)
                 {
-                    np = &sprite[New];
-
                     // spawn a user
                     User[New] = nu = (USERp)CallocMem(sizeof(USER), 1);
                     ASSERT(nu != NULL);
@@ -2247,11 +2228,9 @@ void
 drawscreen(PLAYERp pp)
 {
     extern SWBOOL DemoMode,CameraTestMode;
-    int tx, ty, tz,thoriz,pp_siz;
+    int tx, ty, tz,thoriz;
     short tang,tsectnum;
     short i,j;
-    walltype *wal;
-    int tiltlock;
     int bob_amt = 0;
     int quake_z, quake_x, quake_y;
     short quake_ang;
@@ -2264,15 +2243,17 @@ drawscreen(PLAYERp pp)
     static short lv_sectnum = -1;
     static int lv_x, lv_y, lv_z;
 
+    int const viewingRange = viewingrange;
+
     if (HelpInputMode)
     {
-        flushperms();
+        renderFlushPerms();
         // note - could put Order Info Pages at the top like this also
 
         rotatesprite(0,0,65536L,0,HelpPagePic[HelpPage],0,0,
                      (ROTATE_SPRITE_CORNER|ROTATE_SPRITE_SCREEN_CLIP|ROTATE_SPRITE_NON_MASK|ROTATE_SPRITE_IGNORE_START_MOST),
                      0, 0, xdim-1, ydim-1);
-        nextpage();
+        videoNextPage();
 
         return;
     }
@@ -2293,7 +2274,7 @@ drawscreen(PLAYERp pp)
     }
 #endif
 
-    if (getrendermode() >= 3)
+    if (videoGetRenderMode() >= REND_POLYMOST)
         RedrawScreen = TRUE;
 
     DrawScreen = TRUE;
@@ -2304,7 +2285,7 @@ drawscreen(PLAYERp pp)
         RedrawCompass = TRUE;
         RedrawScreen = FALSE;
         // get rid of all PERM sprites!
-        flushperms();
+        renderFlushPerms();
         // get rid of all PANF_KILL_AFTER_SHOW sprites!
         pFlushPerms(pp);
         SetBorder(pp,gs.BorderNum);
@@ -2313,7 +2294,7 @@ drawscreen(PLAYERp pp)
     PreUpdatePanel();
 
 
-    smoothratio = min(max((totalclock - ototalclock) * (65536 / synctics),0),65536);
+    smoothratio = min(max(((int32_t) totalclock - ototalclock) * (65536 / synctics),0),65536);
 
     if (!ScreenSavePic)
     {
@@ -2343,11 +2324,13 @@ drawscreen(PLAYERp pp)
 
     if (tsectnum < 0)
     {
+#if 0
         // if we hit an invalid sector move to the last valid position for drawing
         tsectnum = lv_sectnum;
         tx = lv_x;
         ty = lv_y;
         tz = lv_z;
+#endif
     }
     else
     {
@@ -2359,12 +2342,11 @@ drawscreen(PLAYERp pp)
     }
 
     // with "last valid" code this should never happen
-    ASSERT(tsectnum >= 0 && tsectnum <= MAXSECTORS);
+    // ASSERT(tsectnum >= 0 && tsectnum <= MAXSECTORS);
 
     pp->six = tx;
     pp->siy = ty;
     pp->siz = tz - pp->posz;
-    pp_siz = tz;
     pp->siang = tang;
 
     if (pp->sop_riding || pp->sop_control)
@@ -2423,8 +2405,14 @@ drawscreen(PLAYERp pp)
         thoriz = min(thoriz, PLAYER_HORIZ_MAX);
     }
 
+    if (r_usenewaspect)
+    {
+        newaspect_enable = 1;
+        videoSetCorrectedAspect();
+    }
+
     if (FAF_DebugView)
-        clearview(255);
+        videoClearViewableArea(255L);
 
     OverlapDraw = TRUE;
     DrawOverlapRoom(tx, ty, tz, tang, thoriz, tsectnum);
@@ -2437,15 +2425,20 @@ drawscreen(PLAYERp pp)
         JS_DrawMirrors(pp, tx, ty, tz, tang, thoriz);
     }
 
+    // TODO: This call is redundant if the tiled overhead map is shown, but the
+    // HUD elements should be properly outputted with hardware rendering first.
     if (!FAF_DebugView)
-    {
         FAF_DrawRooms(tx, ty, tz, tang, thoriz, tsectnum);
-        PicInView(FAF_MIRROR_PIC, FALSE);
-    }
 
     analyzesprites(tx, ty, tz, FALSE);
     post_analyzesprites();
-    drawmasks();
+    renderDrawMasks();
+
+    if (r_usenewaspect)
+    {
+        newaspect_enable = 0;
+        renderSetAspect(viewingRange, tabledivide32_noinline(65536 * ydim * 8, xdim * 5));
+    }
 
     UpdatePanel();
 
@@ -2464,17 +2457,21 @@ drawscreen(PLAYERp pp)
 
     i = pp->cursectnum;
 
-    show2dsector[i>>3] |= (1<<(i&7));
-    wal = &wall[sector[i].wallptr];
-    for (j=sector[i].wallnum; j>0; j--,wal++)
+    if (i >= 0)
     {
-        i = wal->nextsector;
-        if (i < 0) continue;
-        if (wal->cstat&0x0071) continue;
-        if (wall[wal->nextwall].cstat&0x0071) continue;
-        if (sector[i].lotag == 32767) continue;
-        if (sector[i].ceilingz >= sector[i].floorz) continue;
         show2dsector[i>>3] |= (1<<(i&7));
+        walltype *wal = &wall[sector[i].wallptr];
+        for (j=sector[i].wallnum; j>0; j--,wal++)
+        {
+            i = wal->nextsector;
+            if (i < 0) continue;
+            if (wal->cstat&0x0071) continue;
+            uint16_t const nextwall = wal->nextwall;
+            if (nextwall < MAXWALLS && wall[nextwall].cstat&0x0071) continue;
+            if (sector[i].lotag == 32767) continue;
+            if (sector[i].ceilingz >= sector[i].floorz) continue;
+            show2dsector[i>>3] |= (1<<(i&7));
+        }
     }
 
     if ((dimensionmode == 5 || dimensionmode == 6) && pp == Player+myconnectindex)
@@ -2503,8 +2500,8 @@ drawscreen(PLAYERp pp)
 
         if (dimensionmode == 6)
         {
-            clearview(0L);
-            drawmapview(tx, ty, zoom, tang);
+            videoClearViewableArea(0L);
+            renderDrawMapView(tx, ty, zoom, tang);
         }
 
         // Draw the line map on top of texture 2d map or just stand alone
@@ -2546,10 +2543,10 @@ drawscreen(PLAYERp pp)
 
     if (ConInputMode)
     {
-        DrawConInput(pp);   // Console panel input mode
+        DrawConInput();   // Console panel input mode
     }
     else
-        DrawMessageInput(pp);   // This is only used for non-multiplayer input now
+        DrawMessageInput();   // This is only used for non-multiplayer input now
 
     DrawCompass(pp);
     UpdateMiniBar(pp);
@@ -2559,7 +2556,7 @@ drawscreen(PLAYERp pp)
     else
         SecretInfo(pp);
 
-    nextpage();
+    videoNextPage();
 
 #if SYNC_TEST
     SyncStatMessage();
@@ -2606,7 +2603,6 @@ DrawCompass(PLAYERp pp)
     short x;
     short i;
     int flags;
-    PANEL_SPRITEp psp;
 
     static short CompassPic[32] =
     {
@@ -2655,7 +2651,7 @@ DrawCompass(PLAYERp pp)
     start_ang = NORM_CANG(start_ang - 4);
 
     flags = ROTATE_SPRITE_SCREEN_CLIP | ROTATE_SPRITE_CORNER;
-    if (RedrawCompass)
+    if (RedrawCompass && !UsingMenus)
     {
         RedrawCompass = FALSE;
         SET(flags, ROTATE_SPRITE_ALL_PAGES);
@@ -2682,18 +2678,14 @@ void ScreenTileUnLock(void)
 }
 
 int
-ScreenLoadSaveSetup(PLAYERp pp)
+ScreenLoadSaveSetup(void)
 {
-    int tx, ty, tz,thoriz,pp_siz;
-    short tang,tsectnum;
-    short i;
-
     // lock and allocate memory
 
     ScreenTileLock();
 
     if (!waloff[SAVE_SCREEN_TILE])
-        allocache((intptr_t*)&waloff[SAVE_SCREEN_TILE], SAVE_SCREEN_XSIZE * SAVE_SCREEN_YSIZE, &walock[SAVE_SCREEN_TILE]);
+        g_cache.allocateBlock((intptr_t*)&waloff[SAVE_SCREEN_TILE], SAVE_SCREEN_XSIZE * SAVE_SCREEN_YSIZE, &walock[SAVE_SCREEN_TILE]);
 
     tilesiz[SAVE_SCREEN_TILE].x = SAVE_SCREEN_XSIZE;
     tilesiz[SAVE_SCREEN_TILE].x = SAVE_SCREEN_YSIZE;
@@ -2702,19 +2694,17 @@ ScreenLoadSaveSetup(PLAYERp pp)
 }
 
 int
-ScreenSaveSetup(PLAYERp pp)
+ScreenSaveSetup(void)
 {
-    short i;
+    ScreenLoadSaveSetup();
 
-    ScreenLoadSaveSetup(Player + myconnectindex);
-
-    setviewtotile(SAVE_SCREEN_TILE, SAVE_SCREEN_YSIZE, SAVE_SCREEN_XSIZE);
+    renderSetTarget(SAVE_SCREEN_TILE, SAVE_SCREEN_YSIZE, SAVE_SCREEN_XSIZE);
 
     ScreenSavePic = TRUE;
     drawscreen(Player + myconnectindex);
     ScreenSavePic = FALSE;
 
-    setviewback();
+    renderRestoreTarget();
 
     return SAVE_SCREEN_TILE;
 }

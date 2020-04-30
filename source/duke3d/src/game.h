@@ -30,6 +30,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #endif
 
 #include "fix16.h"
+#include "gamedefs.h"
+#include "gamevars.h"
+#include "mmulti.h"
+#include "network.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -113,6 +117,12 @@ enum {
     STATUSBAR_NOMODERN  = 0x00000040,
 };
 
+enum {
+    BENCHMARKMODE_OFF = 0x0,
+    BENCHMARKMODE_PERFORMANCE = 0x1,
+    BENCHMARKMODE_GENERATE_REFERENCE = 0x2,
+};
+
 void A_DeleteSprite(int spriteNum);
 
 static inline int32_t G_GetLogoFlags(void)
@@ -155,7 +165,20 @@ extern camera_t g_camera;
 
 #define MAX_RETURN_VALUES 6
 
+#define MAX_ARRAYRANGE_VALUES 32
+
 // KEEPINSYNC lunatic/_defs_game.lua
+typedef struct ud_setup_s {
+    int32_t usejoystick;
+    int32_t usemouse;
+    int32_t fullscreen;
+    int32_t xdim;
+    int32_t ydim;
+    int32_t bpp;
+    int32_t forcesetup;
+    int32_t noautoload;
+} ud_setup_t;
+
 typedef struct {
 #if !defined LUNATIC
     vec3_t camerapos;
@@ -181,11 +204,11 @@ typedef struct {
     int32_t m_respawn_items,m_respawn_monsters,m_respawn_inventory,m_recstat,m_monsters_off,detail;
     int32_t m_ffire,ffire,m_player_skill,m_level_number,m_volume_number,multimode;
     int32_t player_skill,level_number,volume_number,m_marker,marker,mouseflip;
-    int32_t music_episode, music_level;
+    int32_t music_episode, music_level, skill_voice;
 
     int32_t playerbest;
 
-    int32_t configversion, bgstretch;
+    int32_t configversion, bgstretch, frameperiod;
 
     int32_t default_volume, default_skill;
 
@@ -195,6 +218,8 @@ typedef struct {
     int32_t returnvar[MAX_RETURN_VALUES-1];
 
     uint32_t userbytever;
+
+    int32_t fov;
 
 #if !defined LUNATIC
     fix16_t cameraq16ang, cameraq16horiz;
@@ -206,24 +231,22 @@ typedef struct {
 
     int8_t menutitle_pal, slidebar_palselected, slidebar_paldisabled;
 
+    int32_t last_stateless_level, last_stateless_volume; // strictly internal
+
     struct {
-        int32_t UseJoystick;
-        int32_t UseMouse;
         int32_t AutoAim;
-        int32_t ShowOpponentWeapons;
-        int32_t MouseDeadZone,MouseBias;
-        int32_t SmoothInput;
+        int32_t ShowWeapons;
+        int32_t MouseBias;
 
         // JBF 20031211: Store the input settings because
         // (currently) mact can't regurgitate them
         int32_t MouseFunctions[MAXMOUSEBUTTONS][2];
-        int32_t MouseDigitalFunctions[MAXMOUSEAXES][2];
         int32_t MouseAnalogueAxes[MAXMOUSEAXES];
-        int32_t MouseAnalogueScale[MAXMOUSEAXES];
         int32_t JoystickFunctions[MAXJOYBUTTONSANDHATS][2];
         int32_t JoystickDigitalFunctions[MAXJOYAXES][2];
         int32_t JoystickAnalogueAxes[MAXJOYAXES];
         int32_t JoystickAnalogueScale[MAXJOYAXES];
+        int32_t JoystickAnalogueInvert[MAXJOYAXES];
         int32_t JoystickAnalogueDead[MAXJOYAXES];
         int32_t JoystickAnalogueSaturate[MAXJOYAXES];
         uint8_t KeyboardKeys[NUMGAMEFUNCTIONS][2];
@@ -231,8 +254,8 @@ typedef struct {
         //
         // Sound variables
         //
-        int32_t MasterVolume;
         int32_t FXVolume;
+        int32_t MusicDevice;
         int32_t MusicVolume;
         int32_t SoundToggle;
         int32_t MusicToggle;
@@ -244,20 +267,9 @@ typedef struct {
         int32_t NumBits;
         int32_t MixRate;
 
+#ifdef ASS_REVERSESTEREO
         int32_t ReverseStereo;
-
-        //
-        // Screen variables
-        //
-
-        int32_t ScreenMode;
-
-        int32_t ScreenWidth;
-        int32_t ScreenHeight;
-        int32_t ScreenBPP;
-
-        int32_t ForceSetup;
-        int32_t NoAutoLoad;
+#endif
 
         int32_t scripthandle;
         int32_t setupread;
@@ -266,6 +278,8 @@ typedef struct {
         int32_t LastUpdateCheck;
         int32_t useprecache;
     } config;
+
+    ud_setup_t setup;
 
     char overhead_on,last_overhead,showweapons;
     char god,warp_on,cashman,eog,showallmap;
@@ -289,6 +303,9 @@ extern user_defs ud;
 extern const char *s_buildDate;
 
 extern char boardfilename[BMAX_PATH], currentboardfilename[BMAX_PATH];
+#define USERMAPMUSICFAKEVOLUME MAXVOLUMES
+#define USERMAPMUSICFAKELEVEL (MAXLEVELS-1)
+#define USERMAPMUSICFAKESLOT ((USERMAPMUSICFAKEVOLUME * MAXLEVELS) + USERMAPMUSICFAKELEVEL)
 
 static inline int G_HaveUserMap(void)
 {
@@ -300,7 +317,6 @@ static inline int Menu_HaveUserMap(void)
     return (boardfilename[0] != 0 && ud.m_level_number == 7 && ud.m_volume_number == 0);
 }
 
-extern const char *defaultrtsfilename[GAMECOUNT];
 extern const char *G_DefaultRtsFile(void);
 
 #ifdef LEGACY_ROR
@@ -309,6 +325,7 @@ extern char ror_protectedsectors[MAXSECTORS];
 
 extern float r_ambientlight;
 
+extern int32_t g_BenchmarkMode;
 extern int32_t g_Debug;
 extern int32_t g_Shareware;
 #if !defined LUNATIC
@@ -317,14 +334,11 @@ extern int32_t g_cameraDistance;
 #endif
 extern int32_t g_crosshairSum;
 extern int32_t g_doQuickSave;
-extern int32_t g_forceWeaponChoice;
-extern int32_t g_fakeMultiMode;
 extern int32_t g_levelTextTime;
 extern int32_t g_quitDeadline;
 extern int32_t g_restorePalette;
 extern int32_t hud_glowingquotes;
 extern int32_t hud_showmapname;
-extern int32_t r_maxfps;
 extern int32_t tempwallptr;
 extern int32_t ticrandomseed;
 extern int32_t vote_map;
@@ -338,12 +352,10 @@ extern int32_t MAXCACHE1DSIZE;
 extern palette_t CrosshairColors;
 extern palette_t DefaultCrosshairColors;
 
-extern uint64_t g_frameDelay;
-
 int32_t A_CheckInventorySprite(spritetype *s);
 int32_t A_InsertSprite(int16_t whatsect, int32_t s_x, int32_t s_y, int32_t s_z, int16_t s_pn, int8_t s_s, uint8_t s_xr,
                        uint8_t s_yr, int16_t s_a, int16_t s_ve, int16_t s_zv, int16_t s_ow, int16_t s_ss);
-int A_Spawn(int j,int pn);
+int A_Spawn(int spriteNum,int tileNum);
 int G_DoMoveThings(void);
 //int32_t G_EndOfLevel(void);
 
@@ -361,7 +373,7 @@ void G_PostCreateGameState(void);
 void A_SpawnCeilingGlass(int spriteNum,int sectNum,int glassCnt);
 void A_SpawnGlass(int spriteNum,int glassCnt);
 void A_SpawnRandomGlass(int spriteNum,int wallNum,int glassCnt);
-void A_SpawnWallGlass(int i,int wallnum,int n);
+void A_SpawnWallGlass(int spriteNum,int wallnum,int glassCnt);
 void G_AddUserQuote(const char *daquote);
 void G_BackToMenu(void);
 void G_DumpDebugInfo(void);
@@ -373,14 +385,14 @@ const char* G_PrintBestTime(void);
 void G_BonusScreen(int32_t bonusonly);
 //void G_CheatGetInv(void);
 void G_DisplayRest(int32_t smoothratio);
-void G_DoSpriteAnimations(int32_t ourx, int32_t oury, int32_t oura, int32_t smoothratio);
+void G_DoSpriteAnimations(int32_t ourx, int32_t oury, int32_t ourz, int32_t oura, int32_t smoothratio);
 void G_DrawBackground(void);
 void G_DrawFrags(void);
 void G_HandleMirror(int32_t x, int32_t y, int32_t z, fix16_t a, fix16_t horiz, int32_t smoothratio);
-void G_DrawRooms(int32_t snum,int32_t smoothratio);
+void G_DrawRooms(int32_t playerNum,int32_t smoothratio);
 void G_DrawTXDigiNumZ(int32_t starttile,int32_t x,int32_t y,int32_t n,int32_t s,int32_t pal,int32_t cs,int32_t x1,int32_t y1,int32_t x2,int32_t y2,int32_t z);
-int G_FPSLimit(void);
-void G_GameExit(const char *t) ATTRIBUTE((noreturn));
+int engineFPSLimit(void);
+void G_GameExit(const char *msg) ATTRIBUTE((noreturn));
 void G_GameQuit(void);
 void G_GetCrosshairColor(void);
 void G_HandleLocalKeys(void);
@@ -395,10 +407,6 @@ void M32RunScript(const char *s);
 void P_DoQuote(int32_t q,DukePlayer_t *p);
 void P_SetGamePalette(DukePlayer_t *player, uint32_t palid, int32_t set);
 
-#define NEG_ALPHA_TO_BLEND(alpha, blend, orientation) do { \
-    if (alpha < 0) { blend = -alpha; alpha = 0; orientation |= RS_TRANS1; } \
-} while (0)
-
 // Cstat protection mask for (currently) spawned MASKWALL* sprites.
 // TODO: look at more cases of cstat=(cstat&PROTECTED)|ADDED in A_Spawn()?
 // 2048+(32+16)+8+4
@@ -406,11 +414,11 @@ void P_SetGamePalette(DukePlayer_t *player, uint32_t palid, int32_t set);
 
 void fadepal(int32_t r,int32_t g,int32_t b,int32_t start,int32_t end,int32_t step);
 //void fadepaltile(int32_t r,int32_t g,int32_t b,int32_t start,int32_t end,int32_t step,int32_t tile);
-void G_InitTimer(int32_t ticpersec);
+void G_InitTimer(int32_t ticspersec);
 
-static inline int32_t G_GetTeamPalette(int32_t team)
+static inline int G_GetTeamPalette(int team)
 {
-    int8_t pal[] = { 3, 10, 11, 12 };
+    static CONSTEXPR int8_t pal[] = { 3, 10, 11, 12 };
 
     if ((unsigned)team >= ARRAY_SIZE(pal))
         return 0;
@@ -427,15 +435,34 @@ extern int G_StartRTS(int lumpNum, int localPlayer);
 
 extern void G_MaybeAllocPlayer(int32_t pnum);
 
-static inline void G_HandleAsync(void)
+static inline int32_t gameHandleEvents(void)
 {
-    handleevents();
     Net_GetPackets();
+    return handleevents();
 }
 
-static inline int32_t calc_smoothratio(int32_t totalclk, int32_t ototalclk)
+static inline int32_t calc_smoothratio_demo(ClockTicks totalclk, ClockTicks ototalclk)
 {
-    return clamp((totalclk-ototalclk)*(65536/TICSPERFRAME), 0, 65536);
+    int32_t rfreq = tabledivide64(refreshfreq * TICRATE, timerGetClockRate());
+    uint64_t elapsedFrames = tabledivide64(((uint64_t) (totalclk - ototalclk).toScale16()) * rfreq, 65536*TICRATE);
+#if 0
+    //POGO: additional debug info for testing purposes
+    OSD_Printf("Elapsed frames: %" PRIu64 ", smoothratio: %" PRIu64 "\n", elapsedFrames, tabledivide64(65536*elapsedFrames*REALGAMETICSPERSEC, rfreq));
+#endif
+    return clamp(tabledivide64(65536*elapsedFrames*REALGAMETICSPERSEC, rfreq), 0, 65536);
+}
+
+static inline int32_t calc_smoothratio(ClockTicks totalclk, ClockTicks ototalclk)
+{
+    if (!((ud.show_help == 0 && (!g_netServer && ud.multimode < 2) && ((g_player[myconnectindex].ps->gm & MODE_MENU) == 0)) ||
+          (g_netServer || ud.multimode > 1) ||
+          ud.recstat == 2) ||
+        ud.pause_on)
+    {
+        return 65536;
+    }
+
+    return calc_smoothratio_demo(totalclk, ototalclk);
 }
 
 // sector effector lotags
@@ -515,15 +542,12 @@ enum
 };
 
 
-#define G_ModDirSnprintf(buf, size, basename, ...)                                                                          \
-    \
-(((g_modDir[0] != '/') ? Bsnprintf(buf, size, "%s/" basename, g_modDir, ##__VA_ARGS__)                                      \
-                       : Bsnprintf(buf, size, basename, ##__VA_ARGS__)) >= ((int32_t)size) - 1\
-)
-#define G_ModDirSnprintfLite(buf, size, basename)                                                                          \
-    \
-((g_modDir[0] != '/') ? Bsnprintf(buf, size, "%s/%s", g_modDir, basename)                                      \
-                      : Bsnprintf(buf, size, basename))
+#define G_ModDirSnprintf(buf, size, basename, ...)                                                                                          \
+    (((g_modDir[0] != '/') ? Bsnprintf(buf, size, "%s/" basename, g_modDir, ##__VA_ARGS__) : Bsnprintf(buf, size, basename, ##__VA_ARGS__)) \
+     >= ((int32_t)size) - 1)
+
+#define G_ModDirSnprintfLite(buf, size, basename) \
+    ((g_modDir[0] != '/') ? Bsnprintf(buf, size, "%s/%s", g_modDir, basename) : Bsnprintf(buf, size, basename))
 
 static inline void G_NewGame_EnterLevel(void)
 {
@@ -536,34 +560,23 @@ static inline void G_NewGame_EnterLevel(void)
 static inline int G_GetMusicIdx(const char *str)
 {
     int32_t lev, ep;
-    char    b1, b2;
+    signed char b1, b2;
 
     int numMatches = sscanf(str, "%c%d%c%d", &b1,&ep, &b2,&lev);
 
     if (numMatches != 4 || Btoupper(b1) != 'E' || Btoupper(b2) != 'L')
         return -1;
 
-    if ((unsigned)--lev >= MAXLEVELS || (unsigned)--ep >= MAXVOLUMES)
+    if ((unsigned)--lev >= MAXLEVELS)
+        return -2;
+
+    if (ep == 0)
+        return (MAXVOLUMES * MAXLEVELS) + lev;
+
+    if ((unsigned)--ep >= MAXVOLUMES)
         return -2;
 
     return (ep * MAXLEVELS) + lev;
-}
-
-static inline int G_GetViewscreenSizeShift(const uspritetype *tspr)
-{
-#if VIEWSCREENFACTOR == 0
-    UNREFERENCED_PARAMETER(tspr);
-    return VIEWSCREENFACTOR;
-#else
-    static const int mask = (1<<VIEWSCREENFACTOR)-1;
-    const int rem = (tspr->xrepeat & mask) | (tspr->yrepeat & mask);
-
-    for (bssize_t i=0; i < VIEWSCREENFACTOR; i++)
-        if (rem & (1<<i))
-            return i;
-
-    return VIEWSCREENFACTOR;
-#endif
 }
 
 extern void G_PrintCurrentMusic(void);
@@ -574,8 +587,6 @@ void El_SetCON(const char *conluacode);
 
 EXTERN_INLINE_HEADER void G_SetStatusBarScale(int32_t sc);
 
-EXTERN_INLINE_HEADER void SetIfGreater(int32_t *variable, int32_t potentialValue);
-
 #endif
 
 #ifdef __cplusplus
@@ -584,20 +595,30 @@ EXTERN_INLINE_HEADER void SetIfGreater(int32_t *variable, int32_t potentialValue
 
 #ifndef ONLY_USERDEFS
 
+template <typename T>
+static inline int G_GetViewscreenSizeShift(T const * spr)
+{
+#if VIEWSCREENFACTOR == 0
+    UNREFERENCED_PARAMETER(spr);
+    return VIEWSCREENFACTOR;
+#else
+    static CONSTEXPR int const mask = (1<<VIEWSCREENFACTOR)-1;
+    const int rem = (spr->xrepeat & mask) | (spr->yrepeat & mask);
+
+    for (int i=0; i < VIEWSCREENFACTOR; i++)
+        if (rem & (1<<i))
+            return i;
+
+    return VIEWSCREENFACTOR;
+#endif
+}
+
 #if defined game_c_ || !defined DISABLE_INLINING
 
 EXTERN_INLINE void G_SetStatusBarScale(int32_t sc)
 {
-    ud.statusbarscale = clamp(sc, 36, 100);
+    ud.statusbarscale = clamp(sc, 50, 100);
     G_UpdateScreenArea();
-}
-
-// the point of this is to prevent re-running a function or calculation passed to potentialValue
-// without making a new variable under each individual circumstance
-EXTERN_INLINE void SetIfGreater(int32_t *variable, int32_t potentialValue)
-{
-    if (potentialValue > *variable)
-        *variable = potentialValue;
 }
 
 #endif

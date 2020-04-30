@@ -26,7 +26,7 @@ int32_t videoSetVsync(int32_t newSync)
     vsync_renderlayer = newSync;
 
     videoResetMode();
-    if (videoSetGameMode(fullscreen, xdim, ydim, bpp))
+    if (videoSetGameMode(fullscreen, xres, yres, bpp, upscalefactor))
         OSD_Printf("restartvid: Reset failed...\n");
 
     return newSync;
@@ -58,6 +58,7 @@ int32_t sdlayer_checkversion(void)
 //
 int32_t initsystem(void)
 {
+    // TODO: Refactor the init sequence such that we don't need to duplicate this across both sdlayer objects.
 #if defined NOSDLPARACHUTE
     const int sdlinitflags = SDL_INIT_VIDEO | SDL_INIT_NOPARACHUTE;
 #else
@@ -67,8 +68,9 @@ int32_t initsystem(void)
     mutex_init(&m_initprintf);
 
 #ifdef _WIN32
-    win_init();
+    windowsPlatformInit();
 #endif
+    sysReadCPUID();
 
     if (sdlayer_checkversion())
         return -1;
@@ -173,52 +175,6 @@ static inline char grabmouse_low(char a)
 #endif
 }
 
-// high-resolution timers for profiling
-uint64_t timerGetTicksU64(void)
-{
-# if defined _WIN32
-    return win_getu64ticks();
-# elif defined __APPLE__
-    return mach_absolute_time();
-# elif _POSIX_TIMERS>0 && defined _POSIX_MONOTONIC_CLOCK
-    // This is SDL HG's SDL_GetPerformanceCounter() when clock_gettime() is
-    // available.
-    uint64_t ticks;
-    struct timespec now;
-
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    ticks = now.tv_sec;
-    ticks *= 1000000000;
-    ticks += now.tv_nsec;
-    return ticks;
-# elif defined GEKKO
-    return ticks_to_nanosecs(gettime());
-# else
-    // Blar. This pragma is unsupported on earlier GCC versions.
-    // At least we'll get a warning and a reference to this line...
-#  pragma message "Using low-resolution (1ms) timer for getu64ticks. Profiling will work badly."
-    return SDL_GetTicks();
-# endif
-}
-
-uint64_t timerGetFreqU64(void)
-{
-# if defined _WIN32
-    return win_timerfreq;
-# elif defined __APPLE__
-    static mach_timebase_info_data_t ti;
-    if (ti.denom == 0)
-        (void) mach_timebase_info(&ti);  // ti.numer/ti.denom: nsec/(m_a_t() tick)
-    return (1000000000LL*ti.denom)/ti.numer;
-# elif _POSIX_TIMERS>0 && defined _POSIX_MONOTONIC_CLOCK
-    return 1000000000;
-# elif defined GEKKO
-    return TB_NSPERSEC;
-# else
-    return 1000;
-# endif
-}
-
 void videoGetModes(void)
 {
     int32_t i, maxx = 0, maxy = 0;
@@ -251,12 +207,8 @@ void videoGetModes(void)
         pf.BitsPerPixel = cdepths[j];
         pf.BytesPerPixel = cdepths[j] >> 3;
 
-#if !defined SDL_DISABLE_8BIT_BUFFER
         // We convert paletted contents to non-paletted
         modes = SDL_ListModes((cdepths[j] == 8) ? NULL : &pf, SURFACE_FLAGS | SDL_FULLSCREEN);
-#else
-        modes = SDL_ListModes(&pf, SURFACE_FLAGS | SDL_FULLSCREEN);
-#endif
 
         if (modes == (SDL_Rect **)0)
         {
@@ -302,10 +254,11 @@ void videoGetModes(void)
 
         for (i = 0; g_defaultVideoModes[i].x; i++)
         {
-            if (!SDL_CHECKMODE(g_defaultVideoModes[i].x, g_defaultVideoModes[i].y))
+            auto &mode = g_defaultVideoModes[i];
+            if (mode.x > maxx || mode.y > maxy || !SDL_CHECKMODE(mode.x, mode.y))
                 continue;
 
-            SDL_ADDMODE(g_defaultVideoModes[i].x, g_defaultVideoModes[i].y, cdepths[j], 0);
+            SDL_ADDMODE(mode.x, mode.y, cdepths[j], 0);
         }
     }
 
@@ -325,7 +278,14 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
 #endif
 
     ret = setvideomode_sdlcommon(&x, &y, c, fs, &regrab);
-    if (ret != 1) return ret;
+    if (ret != 1)
+    {
+        if (ret == 0)
+        {
+            setvideomode_sdlcommonpost(x, y, c, fs, regrab);
+        }
+        return ret;
+    }
 
     // restore gamma before we change video modes if it was changed
     if (sdl_surface && gammabrightness)
@@ -340,17 +300,15 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
     initprintf("Setting video mode %dx%d (%d-bpp %s)\n", x, y, c, ((fs & 1) ? "fullscreen" : "windowed"));
 
 #ifdef USE_OPENGL
-    if (c > 8)
+    if (c > 8 || !nogl)
     {
-        int32_t i, j, multisamplecheck = (glmultisample > 0);
+        int32_t i;
 
         if (nogl)
             return -1;
-
 # ifdef _WIN32
-        win_setvideomode(c);
+        windowsDwmSetupComposition(false);
 # endif
-
         struct glattribs
         {
             SDL_GLattr attr;
@@ -358,71 +316,47 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
         } sdlayer_gl_attributes [] =
         {
             { SDL_GL_DOUBLEBUFFER, 1 },
-            { SDL_GL_MULTISAMPLEBUFFERS, glmultisample > 0 },
-            { SDL_GL_MULTISAMPLESAMPLES, glmultisample },
-            { SDL_GL_STENCIL_SIZE, 1 },
+            { SDL_GL_STENCIL_SIZE, 8 },
             { SDL_GL_ACCELERATED_VISUAL, 1 },
             { SDL_GL_SWAP_CONTROL, vsync_renderlayer },
         };
 
-        do
+        SDL_GL_ATTRIBUTES(i, sdlayer_gl_attributes);
+
+        /* HACK: changing SDL GL attribs only works before surface creation,
+            so we have to create a new surface in a different format first
+            to force the surface we WANT to be recreated instead of reused. */
+        if (vsync_renderlayer != ovsync)
         {
-            SDL_GL_ATTRIBUTES(i, sdlayer_gl_attributes);
-
-            /* HACK: changing SDL GL attribs only works before surface creation,
-               so we have to create a new surface in a different format first
-               to force the surface we WANT to be recreated instead of reused. */
-            if (vsync_renderlayer != ovsync)
+            if (sdl_surface)
             {
-                if (sdl_surface)
-                {
-                    SDL_FreeSurface(sdl_surface);
-                    sdl_surface =
-                    SDL_SetVideoMode(1, 1, 8, SDL_NOFRAME | SURFACE_FLAGS | ((fs & 1) ? SDL_FULLSCREEN : 0));
-                    SDL_FreeSurface(sdl_surface);
-                }
-                ovsync = vsync_renderlayer;
+                SDL_FreeSurface(sdl_surface);
+                sdl_surface =
+                SDL_SetVideoMode(1, 1, 8, SDL_NOFRAME | SURFACE_FLAGS | ((fs & 1) ? SDL_FULLSCREEN : 0));
+                SDL_FreeSurface(sdl_surface);
             }
-            sdl_surface = SDL_SetVideoMode(x, y, c, SDL_OPENGL | ((fs & 1) ? SDL_FULLSCREEN : 0));
-            if (!sdl_surface)
-            {
-                if (multisamplecheck)
-                {
-                    initprintf("Multisample mode not possible. Retrying without multisampling.\n");
-                    glmultisample = 0;
-                    continue;
-                }
-                initprintf("Unable to set video mode!\n");
-                return -1;
-            }
-
-#ifdef _WIN32
-            loadglextensions();
-#endif
-        } while (multisamplecheck--);
-    }
-    else
-#endif  // defined USE_OPENGL
-    {
-#if !defined SDL_DISABLE_8BIT_BUFFER
-        // We convert paletted contents to non-paletted
-        sdl_surface = SDL_SetVideoMode(x, y, 0, SURFACE_FLAGS | ((fs & 1) ? SDL_FULLSCREEN : 0));
-#else
-        sdl_surface = SDL_SetVideoMode(x, y, c, SURFACE_FLAGS | ((fs & 1) ? SDL_FULLSCREEN : 0));
-#endif
+            ovsync = vsync_renderlayer;
+        }
+        sdl_surface = SDL_SetVideoMode(x, y, c, SDL_OPENGL | ((fs & 1) ? SDL_FULLSCREEN : 0));
         if (!sdl_surface)
         {
             initprintf("Unable to set video mode!\n");
             return -1;
         }
-#if !defined SDL_DISABLE_8BIT_BUFFER
-        sdl_buffersurface = SDL_CreateRGBSurface(SURFACE_FLAGS, x, y, c, 0, 0, 0, 0);
-        if (!sdl_buffersurface)
+
+        gladLoadGLLoader(SDL_GL_GetProcAddress);
+    }
+    else
+#endif  // defined USE_OPENGL
+    {
+        // We convert paletted contents to non-paletted
+        sdl_surface = SDL_SetVideoMode(x, y, 0, SURFACE_FLAGS | ((fs & 1) ? SDL_FULLSCREEN : 0));
+
+        if (!sdl_surface)
         {
-            initprintf("Unable to set video mode: SDL_CreateRGBSurface failed: %s\n", SDL_GetError());
+            initprintf("Unable to set video mode!\n");
             return -1;
         }
-#endif
     }
 
     setvideomode_sdlcommonpost(x, y, c, fs, regrab);
@@ -438,10 +372,17 @@ void videoShowFrame(int32_t w)
     UNREFERENCED_PARAMETER(w);
 
 #ifdef USE_OPENGL
-    if (bpp > 8)
+    if (!nogl)
     {
-        if (palfadedelta)
-            fullscreen_tint_gl(palfadergb.r, palfadergb.g, palfadergb.b, palfadedelta);
+        if (bpp > 8)
+        {
+            if (palfadedelta)
+                fullscreen_tint_gl(palfadergb.r, palfadergb.g, palfadergb.b, palfadedelta);
+        }
+        else
+        {
+            glsurface_blitBuffer();
+        }
 
         SDL_GL_SwapBuffers();
         return;
@@ -456,16 +397,10 @@ void videoShowFrame(int32_t w)
         while (lockcount) videoEndDrawing();
     }
 
-    // deferred palette updating
-    if (needpalupdate)
-    {
-        SDL_SetColors(sdl_buffersurface, sdlayer_pal, 0, 256);
-        needpalupdate = 0;
-    }
+    if (SDL_MUSTLOCK(sdl_surface)) SDL_LockSurface(sdl_surface);
+    softsurface_blitBuffer((uint32_t*) sdl_surface->pixels, sdl_surface->format->BitsPerPixel);
+    if (SDL_MUSTLOCK(sdl_surface)) SDL_UnlockSurface(sdl_surface);
 
-#if !defined SDL_DISABLE_8BIT_BUFFER
-    SDL_BlitSurface(sdl_buffersurface, NULL, sdl_surface, NULL);
-#endif
     SDL_Flip(sdl_surface);
 }
 
@@ -503,10 +438,10 @@ int32_t handleevents_pollsdl(void)
                         {
                             if (keyGetState(j))
                             {
-                                keySetState(j, 0);
                                 if (keypresscallback)
                                     keypresscallback(j, 0);
                             }
+                            keySetState(j, 0);
                         }
                     }
                     break;
@@ -516,10 +451,10 @@ int32_t handleevents_pollsdl(void)
                 {
                     if (!keyGetState(code))
                     {
-                        keySetState(code, 1);
                         if (keypresscallback)
                             keypresscallback(code, 1);
                     }
+                    keySetState(code, 1);
                 }
                 else
                 {
@@ -539,13 +474,9 @@ int32_t handleevents_pollsdl(void)
                     appactive = ev.active.gain;
                     if (g_mouseGrabbed && g_mouseEnabled)
                         grabmouse_low(!!appactive);
-# ifdef _WIN32
-                    // Win_SetKeyboardLayoutUS(appactive);
-
-                    if (backgroundidle)
-                        SetPriorityClass(GetCurrentProcess(),
-                                         appactive ? NORMAL_PRIORITY_CLASS : IDLE_PRIORITY_CLASS);
-# endif
+#ifdef _WIN32
+                    windowsHandleFocusChange(appactive);
+#endif
                     rv = -1;
 
                     if (ev.active.state & SDL_APPMOUSEFOCUS)
@@ -568,6 +499,7 @@ int32_t handleevents_pollsdl(void)
                     ev.motion.yrel /= 12;
                 }
 #endif
+            fallthrough__;
             default: // OSD_Printf("Got event (%d)\n", ev.type); break;
                 rv = handleevents_sdlcommon(&ev);
                 break;

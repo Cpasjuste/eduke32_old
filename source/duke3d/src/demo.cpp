@@ -20,18 +20,19 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 //-------------------------------------------------------------------------
 
-#include "duke3d.h"
 #include "demo.h"
-//#include "premap.h"  // G_UpdateScreenArea()
+#include "duke3d.h"
+#include "input.h"
 #include "menus.h"
 #include "savegame.h"
-#include "input.h"
 #include "screens.h"
+
+#include "vfs.h"
 
 char g_firstDemoFile[BMAX_PATH];
 
-FILE *g_demo_filePtr = (FILE *)NULL;  // write
-int32_t g_demo_recFilePtr = -1;  // read
+buildvfs_FILE g_demo_filePtr{};  // write
+buildvfs_kfd g_demo_recFilePtr = buildvfs_kfd_invalid;  // read
 
 int32_t g_demo_cnt;
 int32_t g_demo_goalCnt=0;
@@ -96,7 +97,7 @@ static int32_t G_OpenDemoRead(int32_t g_whichDemo) // 0 = mine
     }
 
     g_demo_recFilePtr = kopen4loadfrommod(demofnptr, g_loadFromGroupOnly);
-    if (g_demo_recFilePtr == -1)
+    if (g_demo_recFilePtr == buildvfs_kfd_invalid)
         return 0;
 
     Bassert(g_whichDemo >= 1);
@@ -104,7 +105,7 @@ static int32_t G_OpenDemoRead(int32_t g_whichDemo) // 0 = mine
     if (i)
     {
         OSD_Printf(OSD_ERROR "There were errors opening demo %d (code: %d).\n", g_whichDemo, i);
-        kclose(g_demo_recFilePtr); g_demo_recFilePtr = -1;
+        kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
         return 0;
     }
 
@@ -149,7 +150,7 @@ void G_OpenDemoWrite(void)
     if (ud.recstat == 2)
     {
         kclose(g_demo_recFilePtr);
-        g_demo_recFilePtr = -1;
+        g_demo_recFilePtr = buildvfs_kfd_invalid;
     }
 
     if ((g_player[myconnectindex].ps->gm&MODE_GAME) && g_player[myconnectindex].ps->dead_flag)
@@ -164,7 +165,7 @@ void G_OpenDemoWrite(void)
         for (i=1; i<g_scriptSize-2; i++)
         {
             intptr_t w=apScript[i];
-            if ((w&0x0fff)==CON_RESIZEARRAY && (w>>12) && apScript[i+1]>=0 && apScript[i+1]<g_gameArrayCount)
+            if (VM_DECODE_INST(w)==CON_RESIZEARRAY && VM_DECODE_LINE_NUMBER(w) && apScript[i+1]>=0 && apScript[i+1]<g_gameArrayCount)
             {
                 OSD_Printf("\nThe CON code possibly contains a RESIZEARRAY command.\n");
                 OSD_Printf("Gamearrays that change their size during the game are unsupported by\n");
@@ -192,7 +193,7 @@ void G_OpenDemoWrite(void)
 
         demonum++;
 
-        g_demo_filePtr = Bfopen(demofn, "rb");
+        g_demo_filePtr = buildvfs_fopen_read(demofn);
         if (g_demo_filePtr == NULL)
             break;
 
@@ -200,7 +201,7 @@ void G_OpenDemoWrite(void)
     }
     while (1);
 
-    g_demo_filePtr = Bfopen(demofn,"wb");
+    g_demo_filePtr = buildvfs_fopen_write(demofn);
     if (g_demo_filePtr == NULL)
         return;
 
@@ -263,16 +264,16 @@ static void Demo_WriteSync()
 {
     int16_t tmpreccnt;
 
-    fwrite("sYnC", 4, 1, g_demo_filePtr);
+    buildvfs_fwrite("sYnC", 4, 1, g_demo_filePtr);
     tmpreccnt = (int16_t)ud.reccnt;
-    fwrite(&tmpreccnt, sizeof(int16_t), 1, g_demo_filePtr);
+    buildvfs_fwrite(&tmpreccnt, sizeof(int16_t), 1, g_demo_filePtr);
     if (demorec_seeds)
-        fwrite(g_demo_seedbuf, 1, ud.reccnt, g_demo_filePtr);
+        buildvfs_fwrite(g_demo_seedbuf, 1, ud.reccnt, g_demo_filePtr);
 
     if (demo_synccompress)
         dfwrite_LZ4(recsync, sizeof(input_t), ud.reccnt, g_demo_filePtr);
     else //if (demo_synccompress==0)
-        fwrite(recsync, sizeof(input_t), ud.reccnt, g_demo_filePtr);
+        buildvfs_fwrite(recsync, sizeof(input_t), ud.reccnt, g_demo_filePtr);
 
     ud.reccnt = 0;
 }
@@ -294,7 +295,7 @@ void G_DemoRecord(void)
 
     for (TRAVERSE_CONNECT(i))
     {
-        Bmemcpy(&recsync[ud.reccnt], g_player[i].inputBits, sizeof(input_t));
+        Bmemcpy(&recsync[ud.reccnt], g_player[i].input, sizeof(input_t));
         ud.reccnt++;
     }
 
@@ -309,13 +310,13 @@ void G_CloseDemoWrite(void)
         if (ud.reccnt > 0)
             Demo_WriteSync();
 
-        fwrite("EnD!", 4, 1, g_demo_filePtr);
+        buildvfs_fwrite("EnD!", 4, 1, g_demo_filePtr);
 
         // lastly, we need to write the number of written recsyncs to the demo file
-        if (fseek(g_demo_filePtr, offsetof(savehead_t, reccnt), SEEK_SET))
+        if (buildvfs_fseek_abs(g_demo_filePtr, offsetof(savehead_t, reccnt)))
             perror("G_CloseDemoWrite: final fseek");
         else
-            fwrite(&g_demo_cnt, sizeof(g_demo_cnt), 1, g_demo_filePtr);
+            buildvfs_fwrite(&g_demo_cnt, sizeof(g_demo_cnt), 1, g_demo_filePtr);
 
         ud.recstat = ud.m_recstat = 0;
         MAYBE_FCLOSE_AND_NULL(g_demo_filePtr);
@@ -550,7 +551,7 @@ RECHECK:
         lastsyncofs = ktell(g_demo_recFilePtr);
         initsyncofs = lastsyncofs;
         lastsynctic = g_demo_cnt;
-        lastsyncclock = totalclock;
+        lastsyncclock = (int32_t) totalclock;
         outofsync = 0;
 #if KRANDDEBUG
         krd_enable(2);
@@ -677,7 +678,7 @@ RECHECK:
                         {
                             lastsyncofs = ktell(g_demo_recFilePtr);
                             lastsynctic = g_demo_cnt;
-                            lastsyncclock = totalclock;
+                            lastsyncclock = (int32_t) totalclock;
 
                             if (kread(g_demo_recFilePtr, tmpbuf, 4) != 4)
                                 CORRUPT(7);
@@ -710,7 +711,7 @@ nextdemo:
 nextdemo_nomenu:
                         foundemo = 0;
                         ud.reccnt = 0;
-                        kclose(g_demo_recFilePtr); g_demo_recFilePtr = -1;
+                        kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
 
                         if (g_demo_goalCnt>0)
                         {
@@ -788,7 +789,7 @@ nextdemo_nomenu:
         if (Demo_IsProfiling())
             totalclock += TICSPERFRAME;
 
-        if (G_FPSLimit())
+        if (engineFPSLimit())
         {
             if (foundemo == 0)
             {
@@ -843,7 +844,7 @@ nextdemo_nomenu:
                 }
                 else
                 {
-                    j = calc_smoothratio(totalclock, ototalclock);
+                    j = calc_smoothratio_demo(totalclock, ototalclock);
                     if (g_demo_paused && g_demo_rewind)
                         j = 65536-j;
 
@@ -898,6 +899,7 @@ nextdemo_nomenu:
             if ((g_player[myconnectindex].ps->gm&MODE_MENU) && (g_player[myconnectindex].ps->gm&MODE_EOL))
             {
                 Demo_FinishProfile();
+                videoNextPage();
                 goto RECHECK;
             }
 
@@ -956,12 +958,14 @@ nextdemo_nomenu:
                 if (ud.show_help == 0 && (g_player[myconnectindex].ps->gm&MODE_MENU) == 0)
                     rotatesprite_fs((320-50)<<16, 9<<16, 65536L, 0, BETAVERSION, 0, 0, 2+8+16+128);
             }
+
+            videoNextPage();
         }
 
         // NOTE: We must prevent handleevents() and Net_GetPackets() from
         // updating totalclock when profiling (both via sampletimer()):
         if (!Demo_IsProfiling())
-            G_HandleAsync();
+            gameHandleEvents();
 
         if (g_player[myconnectindex].ps->gm == MODE_GAME)
         {
@@ -972,7 +976,7 @@ nextdemo_nomenu:
 #if KRANDDEBUG
                 krd_print("krandplay.log");
 #endif
-                kclose(g_demo_recFilePtr); g_demo_recFilePtr = -1;
+                kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
             }
 
             return 0;
@@ -980,7 +984,7 @@ nextdemo_nomenu:
     }
 
     ud.multimode = numplayers;  // fixes 2 infinite loops after watching demo
-    kclose(g_demo_recFilePtr); g_demo_recFilePtr = -1;
+    kclose(g_demo_recFilePtr); g_demo_recFilePtr = buildvfs_kfd_invalid;
 
     Demo_FinishProfile();
 

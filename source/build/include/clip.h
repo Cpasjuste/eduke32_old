@@ -1,3 +1,11 @@
+// "Build Engine & Tools" Copyright (c) 1993-1997 Ken Silverman
+// Ken Silverman's official web site: "http://www.advsys.net/ken"
+// See the included license file "BUILDLIC.TXT" for license info.
+//
+// This file has been modified from Ken Silverman's original release
+// by Jonathon Fowler (jf@jonof.id.au)
+// by the EDuke32 team (development@voidpoint.com)
+
 #pragma once
 
 #ifndef clip_h_
@@ -7,8 +15,9 @@
 extern "C" {
 #endif
 
-#define MAXCLIPNUM 1024
-
+#define MAXCLIPSECTORS 512
+#define MAXCLIPNUM 2048
+#define CLIPCURBHEIGHT (1<<8)
 #ifdef HAVE_CLIPSHAPE_FEATURE
 
 #define CM_MAX 256  // must be a power of 2
@@ -44,25 +53,16 @@ typedef struct
     int32_t maxdist;
 } clipinfo_t;
 
-extern clipinfo_t clipinfo[CM_MAX];
-
 typedef struct
 {
     int16_t numsectors, numwalls;
-    usectortype *sector;
-    uwalltype *wall;
+    usectorptr_t sector;
+    uwallptr_t wall;
 } mapinfo_t;
 
-extern mapinfo_t origmapinfo, clipmapinfo;
-
-extern void engineInitClipMaps();
 extern int32_t quickloadboard;
-extern int16_t *sectq;
-extern int16_t pictoidx[MAXTILES];  // maps tile num to clipinfo[] index
-extern int16_t clipspritelist[MAXCLIPNUM];
+extern void engineInitClipMaps();
 extern void engineSetClipMap(mapinfo_t *bak, mapinfo_t *newmap);
-extern int32_t clipsprite_try(uspritetype const * const spr, int32_t xmin, int32_t ymin, int32_t xmax, int32_t ymax);
-extern int32_t clipsprite_initindex(int32_t curidx, uspritetype const * const curspr, int32_t *clipsectcnt, const vec3_t *vect);
 
 #endif // HAVE_CLIPSHAPE_FEATURE
 typedef struct
@@ -70,23 +70,19 @@ typedef struct
     int32_t x1, y1, x2, y2;
 } linetype;
 
-extern linetype clipit[MAXCLIPNUM];
+extern int16_t clipsectorlist[MAXCLIPSECTORS];
 
-extern int16_t clipnum;
-extern int32_t clipsectnum, origclipsectnum, clipspritenum;
-extern int16_t clipsectorlist[MAXCLIPNUM], origclipsectorlist[MAXCLIPNUM];
-
-int clipinsidebox(vec2_t *vect, int wallnum, int walldist);
+int clipinsidebox(vec2_t const * const vect, int const wallnum, int const walldist);
 int clipinsideboxline(int x, int y, int x1, int y1, int x2, int y2, int walldist);
 
 extern int32_t clipmoveboxtracenum;
 
-int32_t clipmove(vec3_t *vect, int16_t *sectnum, int32_t xvect, int32_t yvect, int32_t walldist, int32_t ceildist,
-    int32_t flordist, uint32_t cliptype) ATTRIBUTE((nonnull(1, 2)));
-int32_t clipmovex(vec3_t *pos, int16_t *sectnum, int32_t xvect, int32_t yvect, int32_t walldist, int32_t ceildist,
-    int32_t flordist, uint32_t cliptype, uint8_t noslidep) ATTRIBUTE((nonnull(1, 2)));
-int32_t pushmove(vec3_t *vect, int16_t *sectnum, int32_t walldist, int32_t ceildist, int32_t flordist,
-    uint32_t cliptype) ATTRIBUTE((nonnull(1, 2)));
+int32_t clipmove(vec3_t *const pos, int16_t *const sectnum, int32_t xvect, int32_t yvect, int32_t const walldist, int32_t const ceildist,
+                 int32_t const flordist, uint32_t const cliptype) ATTRIBUTE((nonnull(1, 2)));
+int32_t clipmovex(vec3_t *const pos, int16_t *const sectnum, int32_t xvect, int32_t yvect, int32_t const walldist, int32_t const ceildist,
+                  int32_t const flordist, uint32_t const cliptype, uint8_t const noslidep) ATTRIBUTE((nonnull(1, 2)));
+int pushmove(vec3_t *const vect, int16_t *const sectnum, int32_t const walldist, int32_t const ceildist, int32_t const flordist,
+                 uint32_t const cliptype, bool clear = true) ATTRIBUTE((nonnull(1, 2)));
 
 #ifdef __cplusplus
 }

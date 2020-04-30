@@ -1,16 +1,17 @@
-#include "compat.h"
-#include "osd.h"
-#include "build.h"
 #include "baselayer.h"
 
-#include "renderlayer.h"
-
 #include "a.h"
-#include "polymost.h"
+#include "build.h"
 #include "cache1d.h"
+#include "communityapi.h"
+#include "compat.h"
+#include "osd.h"
+#include "polymost.h"
+#include "renderlayer.h"
 
 // video
 #ifdef _WIN32
+#include "winbits.h"
 extern "C"
 {
     __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 0x00000001;
@@ -18,11 +19,7 @@ extern "C"
 }
 #endif // _WIN32
 
-vec2_t const g_defaultVideoModes[]
-= { { 2560, 1440 }, { 2560, 1200 }, { 2560, 1080 }, { 1920, 1440 }, { 1920, 1200 }, { 1920, 1080 }, { 1680, 1050 },
-    { 1600, 1200 }, { 1600, 900 },  { 1366, 768 },  { 1280, 1024 }, { 1280, 960 },  { 1280, 720 },  { 1152, 864 },
-    { 1024, 768 },  { 1024, 600 },  { 800, 600 },   { 640, 480 },   { 640, 400 },   { 512, 384 },   { 480, 360 },
-    { 400, 300 },   { 320, 240 },   { 320, 200 },   { 0, 0 } };
+int32_t g_borderless=2;
 
 // input
 char    inputdevices = 0;
@@ -30,23 +27,20 @@ char    inputdevices = 0;
 char    keystatus[NUMKEYS];
 char    g_keyFIFO[KEYFIFOSIZ];
 char    g_keyAsciiFIFO[KEYFIFOSIZ];
+uint8_t g_keyFIFOpos;
 uint8_t g_keyFIFOend;
 uint8_t g_keyAsciiPos;
 uint8_t g_keyAsciiEnd;
 char    g_keyRemapTable[NUMKEYS];
 char    g_keyNameTable[NUMKEYS][24];
 
+int32_t r_maxfps = -1;
+int32_t r_maxfpsoffset;
+uint64_t g_frameDelay;
+
 void (*keypresscallback)(int32_t, int32_t);
 
 void keySetCallback(void (*callback)(int32_t, int32_t)) { keypresscallback = callback; }
-
-char const g_keyAsciiTable[128] = {
-    0  ,   0,   '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 0,  0,   'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p',
-    '[', ']', 0,   0,   'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', 39, '`', 0,   92,  'z', 'x', 'c', 'v', 'b', 'n', 'm', ',',
-    '.', '/', 0,   '*', 0,   32,  0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   '7', '8', '9', '-', '4', '5', '6',
-    '+', '1', '2', '3', '0', '.', 0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-    0  ,   0,   0,   0,   0,   0, 0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,   0,   0,
-};
 
 int32_t keyGetState(int32_t key) { return keystatus[g_keyRemapTable[key]]; }
 
@@ -60,6 +54,23 @@ void keySetState(int32_t key, int32_t state)
         g_keyFIFO[(g_keyFIFOend+1)&(KEYFIFOSIZ-1)] = state;
         g_keyFIFOend = ((g_keyFIFOend+2)&(KEYFIFOSIZ-1));
     }
+}
+
+char keyGetScan(void)
+{
+    if (g_keyFIFOpos == g_keyFIFOend)
+        return 0;
+
+    char const c    = g_keyFIFO[g_keyFIFOpos];
+    g_keyFIFOpos = ((g_keyFIFOpos + 2) & (KEYFIFOSIZ - 1));
+
+    return c;
+}
+
+void keyFlushScans(void)
+{
+    Bmemset(&g_keyFIFO,0,sizeof(g_keyFIFO));
+    g_keyFIFOpos = g_keyFIFOend = 0;
 }
 
 //
@@ -128,15 +139,17 @@ int32_t mouseReadAbs(vec2_t * const pResult, vec2_t const * const pInput)
 
     int32_t const xwidth = max(scale(240<<16, xdim, ydim), 320<<16);
 
-    pResult->x = scale(pInput->x, xwidth, xdim) - ((xwidth>>1) - (320<<15));
-    pResult->y = scale(pInput->y, 200<<16, ydim);
+    pResult->x = scale(pInput->x, xwidth, xres) - ((xwidth>>1) - (320<<15));
+    pResult->y = scale(pInput->y, 200<<16, yres);
+
+    pResult->y = divscale16(pResult->y - (200<<15), rotatesprite_yxaspect) + (200<<15) - rotatesprite_y_offset;
 
     return 1;
 }
 
-void mouseReadButtons(int32_t *pResult)
+int32_t mouseReadButtons(void)
 {
-    *pResult = (!g_mouseEnabled || !appactive || !g_mouseInsideWindow || (osd && osd->flags & OSD_CAPTURE)) ? 0 : g_mouseBits;
+    return (!g_mouseEnabled || !appactive || !g_mouseInsideWindow || (osd && osd->flags & OSD_CAPTURE)) ? 0 : g_mouseBits;
 }
 
 controllerinput_t joystick;
@@ -213,7 +226,7 @@ void calc_ylookup(int32_t bpl, int32_t lastyidx)
 
     if (lastyidx > ylookupsiz)
     {
-        Baligned_free(ylookup);
+        Xaligned_free(ylookup);
 
         ylookup = (intptr_t *)Xaligned_alloc(16, lastyidx * sizeof(intptr_t));
         ylookupsiz = lastyidx;
@@ -257,40 +270,94 @@ struct glinfo_t glinfo =
     "",         // extensions
 
     1.0,        // max anisotropy
-    0,          // brga texture format
-    0,          // clamp-to-edge support
-    0,          // texture compression
-    0,          // non-power-of-two textures
-    0,          // multisampling
-    0,          // nvidia multisampling hint
-    0,          // ARBfp
-    0,          // depth textures
-    0,          // shadow comparison
-    0,          // Frame Buffer Objects
-    0,          // rectangle textures
-    0,          // multitexturing
-    0,          // env_combine
-    0,          // Vertex Buffer Objects
-    0,          // VSync support
-    0,          // Shader Model 4 support
-    0,          // Occlusion Queries
-    0,          // GLSL
-    0,          // Debug Output
-    0,          // Buffer storage
-    0,          // Sync
-    0,          // GL info dumped
+    0,          // structure filled
+    0,          // supported extensions
 };
 
-// Used to register the game's / editor's osdcmd_vidmode() functions here.
-int32_t (*baselayer_osdcmd_vidmode_func)(osdfuncparm_t const * const parm);
+void fill_glinfo(void)
+{
+    glinfo.extensions = (const char *)glGetString(GL_EXTENSIONS);
+    glinfo.renderer   = (const char *)glGetString(GL_RENDERER);
+    glinfo.vendor     = (const char *)glGetString(GL_VENDOR);
+    glinfo.version    = (const char *)glGetString(GL_VERSION);
 
-static int32_t osdfunc_setrendermode(osdfuncparm_t const * const parm)
+#ifdef POLYMER
+    if (!Bstrcmp(glinfo.vendor, "ATI Technologies Inc."))
+    {
+        pr_ati_fboworkaround = 1;
+        initprintf("Enabling ATI FBO color attachment workaround.\n");
+
+        if (Bstrstr(glinfo.renderer, "Radeon X1"))
+        {
+            pr_ati_nodepthoffset = 1;
+            initprintf("Enabling ATI R520 polygon offset workaround.\n");
+        }
+# ifdef __APPLE__
+        // See bug description at http://lists.apple.com/archives/mac-opengl/2005/Oct/msg00169.html
+        if (!Bstrncmp(glinfo.renderer, "ATI Radeon 9600", 15))
+        {
+            pr_ati_textureformat_one = 1;
+            initprintf("Enabling ATI Radeon 9600 texture format workaround.\n");
+        }
+# endif
+    }
+#endif  // defined POLYMER
+
+    // process the extensions string and flag stuff we recognize
+    glinfo.depthtex = !!Bstrstr(glinfo.extensions, "GL_ARB_depth_texture");
+    glinfo.fbos     = !!Bstrstr(glinfo.extensions, "GL_EXT_framebuffer_object") || !!Bstrstr(glinfo.extensions, "GL_OES_framebuffer_object");
+    glinfo.shadow   = !!Bstrstr(glinfo.extensions, "GL_ARB_shadow");
+    glinfo.texnpot  = !!Bstrstr(glinfo.extensions, "GL_ARB_texture_non_power_of_two") || !!Bstrstr(glinfo.extensions, "GL_OES_texture_npot");
+
+#if !defined EDUKE32_GLES
+    glinfo.bgra             = !!Bstrstr(glinfo.extensions, "GL_EXT_bgra");
+    glinfo.bufferstorage    = !!Bstrstr(glinfo.extensions, "GL_ARB_buffer_storage");
+    glinfo.clamptoedge      = !!Bstrstr(glinfo.extensions, "GL_EXT_texture_edge_clamp") || !!Bstrstr(glinfo.extensions, "GL_SGIS_texture_edge_clamp");
+    glinfo.debugoutput      = !!Bstrstr(glinfo.extensions, "GL_ARB_debug_output");
+    glinfo.depthclamp       = !!Bstrstr(glinfo.extensions, "GL_ARB_depth_clamp");
+    glinfo.glsl             = !!Bstrstr(glinfo.extensions, "GL_ARB_shader_objects");
+    glinfo.multitex         = !!Bstrstr(glinfo.extensions, "GL_ARB_multitexture");
+    glinfo.occlusionqueries = !!Bstrstr(glinfo.extensions, "GL_ARB_occlusion_query");
+    glinfo.rect             = !!Bstrstr(glinfo.extensions, "GL_NV_texture_rectangle") || !!Bstrstr(glinfo.extensions, "GL_EXT_texture_rectangle");
+    glinfo.sync             = !!Bstrstr(glinfo.extensions, "GL_ARB_sync");
+    glinfo.texcompr         = !!Bstrstr(glinfo.extensions, "GL_ARB_texture_compression") && Bstrcmp(glinfo.vendor, "ATI Technologies Inc.");
+    glinfo.vbos             = !!Bstrstr(glinfo.extensions, "GL_ARB_vertex_buffer_object");
+    glinfo.vsync            = !!Bstrstr(glinfo.extensions, "WGL_EXT_swap_control") || !!Bstrstr(glinfo.extensions, "GLX_EXT_swap_control");
+
+# ifdef DYNAMIC_GLEXT
+    if (glinfo.texcompr && (!glCompressedTexImage2D || !glGetCompressedTexImage))
+    {
+        // lacking the necessary extensions to do this
+        initprintf("Warning: the GL driver lacks necessary functions to use caching\n");
+        glinfo.texcompr = 0;
+    }
+# endif
+#else
+    // don't bother checking because ETC2 et al. are not listed in extensions anyway
+    glinfo.texcompr = 1; // !!Bstrstr(glinfo.extensions, "GL_OES_compressed_ETC1_RGB8_texture");
+#endif
+
+    glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &glinfo.maxanisotropy);
+
+    if (!glinfo.filled)
+    {
+        int32_t oldbpp = bpp;
+        bpp = 32;
+        osdcmd_glinfo(NULL);
+        glinfo.filled = 1;
+        bpp = oldbpp;
+    }
+}
+
+// Used to register the game's / editor's osdcmd_vidmode() functions here.
+int32_t (*baselayer_osdcmd_vidmode_func)(osdcmdptr_t parm);
+
+static int osdfunc_setrendermode(osdcmdptr_t parm)
 {
     if (parm->numparms != 1)
         return OSDCMD_SHOWHELP;
 
-    char *p;
-    int32_t m = Bstrtol(parm->parms[0], &p, 10);
+    int32_t m = Bstrtol(parm->parms[0], NULL, 10);
 
     if (m != REND_CLASSIC && m != REND_POLYMOST && m != REND_POLYMER)
         return OSDCMD_SHOWHELP;
@@ -321,12 +388,16 @@ static int32_t osdfunc_setrendermode(osdfuncparm_t const * const parm)
 
     videoSetRenderMode(m);
 
-    char const *renderer;
+    char const *renderer = "other";
 
     switch (videoGetRenderMode())
     {
     case REND_CLASSIC:
-        renderer = "classic software";
+#ifdef NOASM
+        renderer = "classic software (C)";
+#else
+        renderer = "classic software (ASM)";
+#endif
         break;
     case REND_POLYMOST:
         renderer = "polygonal OpenGL";
@@ -336,8 +407,6 @@ static int32_t osdfunc_setrendermode(osdfuncparm_t const * const parm)
         renderer = "great justice (Polymer)";
         break;
 #endif
-    default:
-        EDUKE32_UNREACHABLE_SECTION(break);
     }
 
     OSD_Printf("Rendering method changed to %s\n", renderer);
@@ -346,7 +415,7 @@ static int32_t osdfunc_setrendermode(osdfuncparm_t const * const parm)
 }
 
 #ifdef DEBUGGINGAIDS
-static int32_t osdcmd_hicsetpalettetint(osdfuncparm_t const * const parm)
+static int osdcmd_hicsetpalettetint(osdcmdptr_t parm)
 {
     int32_t parms[8];
 
@@ -365,7 +434,7 @@ static int32_t osdcmd_hicsetpalettetint(osdfuncparm_t const * const parm)
 }
 #endif
 
-int32_t osdcmd_glinfo(osdfuncparm_t const * const UNUSED(parm))
+int osdcmd_glinfo(osdcmdptr_t UNUSED(parm))
 {
     UNREFERENCED_CONST_PARAMETER(parm);
 
@@ -378,7 +447,7 @@ int32_t osdcmd_glinfo(osdfuncparm_t const * const UNUSED(parm))
     initprintf("OpenGL information\n %s %s %s\n",
                glinfo.vendor, glinfo.renderer, glinfo.version);
 
-    if (!glinfo.dumped)
+    if (!glinfo.filled)
         return OSDCMD_OK;
 
     char const *s[] = { "supported", "not supported" };
@@ -386,26 +455,21 @@ int32_t osdcmd_glinfo(osdfuncparm_t const * const UNUSED(parm))
 #define SUPPORTED(x) (x ? s[0] : s[1])
 
     initprintf(" BGRA textures:           %s\n", SUPPORTED(glinfo.bgra));
-    initprintf(" Non-power-of-2 textures: %s\n", SUPPORTED(glinfo.texnpot));
     initprintf(" Clamp-to-edge:           %s\n", SUPPORTED(glinfo.clamptoedge));
-    initprintf(" Multi-texturing:         %s\n", SUPPORTED(glinfo.multitex));
     initprintf(" Framebuffer objects:     %s\n", SUPPORTED(glinfo.fbos));
+    initprintf(" Multi-texturing:         %s\n", SUPPORTED(glinfo.multitex));
+    initprintf(" Non-power-of-2 textures: %s\n", SUPPORTED(glinfo.texnpot));
 #ifndef EDUKE32_GLES
-    initprintf(" Texture compression:     %s\n", SUPPORTED(glinfo.texcompr));
-    initprintf(" Multi-sampling:          %s\n", SUPPORTED(glinfo.multisample));
-    initprintf(" NVIDIA multisample hint: %s\n", SUPPORTED(glinfo.nvmultisamplehint));
-    initprintf(" ARBfp fragment programs: %s\n", SUPPORTED(glinfo.arbfp));
-    initprintf(" Depth textures:          %s\n", SUPPORTED(glinfo.depthtex));
-    initprintf(" Shadow textures:         %s\n", SUPPORTED(glinfo.shadow));
-    initprintf(" Rectangle textures:      %s\n", SUPPORTED(glinfo.rect));
-    initprintf(" env_combine:             %s\n", SUPPORTED(glinfo.envcombine));
-    initprintf(" Vertex buffer objects:   %s\n", SUPPORTED(glinfo.vbos));
-    initprintf(" Shader model 4:          %s\n", SUPPORTED(glinfo.sm4));
-    initprintf(" Occlusion queries:       %s\n", SUPPORTED(glinfo.occlusionqueries));
-    initprintf(" GLSL:                    %s\n", SUPPORTED(glinfo.glsl));
-    initprintf(" Debug output:            %s\n", SUPPORTED(glinfo.debugoutput));
     initprintf(" Buffer storage:          %s\n", SUPPORTED(glinfo.bufferstorage));
+    initprintf(" Debug output:            %s\n", SUPPORTED(glinfo.debugoutput));
+    initprintf(" Depth textures:          %s\n", SUPPORTED(glinfo.depthtex));
+    initprintf(" GLSL:                    %s\n", SUPPORTED(glinfo.glsl));
+    initprintf(" Occlusion queries:       %s\n", SUPPORTED(glinfo.occlusionqueries));
+    initprintf(" Rectangle textures:      %s\n", SUPPORTED(glinfo.rect));
+    initprintf(" Shadow textures:         %s\n", SUPPORTED(glinfo.shadow));
     initprintf(" Sync:                    %s\n", SUPPORTED(glinfo.sync));
+    initprintf(" Texture compression:     %s\n", SUPPORTED(glinfo.texcompr));
+    initprintf(" Vertex buffer objects:   %s\n", SUPPORTED(glinfo.vbos));
 #endif
     initprintf(" Maximum anisotropy:      %.1f%s\n", glinfo.maxanisotropy, glinfo.maxanisotropy > 1.0 ? "" : " (no anisotropic filtering)");
 
@@ -417,7 +481,7 @@ int32_t osdcmd_glinfo(osdfuncparm_t const * const UNUSED(parm))
 }
 #endif
 
-static int32_t osdcmd_cvar_set_baselayer(osdfuncparm_t const * const parm)
+static int osdcmd_cvar_set_baselayer(osdcmdptr_t parm)
 {
     int32_t r = osdcmd_cvar_set(parm);
 
@@ -426,10 +490,13 @@ static int32_t osdcmd_cvar_set_baselayer(osdfuncparm_t const * const parm)
     if (!Bstrcasecmp(parm->name, "vid_gamma") || !Bstrcasecmp(parm->name, "vid_brightness") || !Bstrcasecmp(parm->name, "vid_contrast"))
     {
         videoSetPalette(GAMMA_CALC,0,0);
-
         return r;
     }
-
+    else if (!Bstrcasecmp(parm->name, "r_maxfps") || !Bstrcasecmp(parm->name, "r_maxfpsoffset"))
+    {
+        if (r_maxfps > 0) r_maxfps = clamp(r_maxfps, 30, 1000);
+        g_frameDelay = calcFrameDelay(r_maxfps, r_maxfpsoffset);
+    }
     return r;
 }
 
@@ -445,11 +512,16 @@ int32_t baselayer_init(void)
     static osdcvardata_t cvars_engine[] =
     {
         { "lz4compressionlevel","adjust LZ4 compression level used for savegames",(void *) &lz4CompressionLevel, CVAR_INT, 1, 32 },
+        { "r_borderless", "borderless windowed mode: 0: never  1: always  2: if resolution matches desktop", (void *) &r_borderless, CVAR_INT|CVAR_RESTARTVID, 0, 2 },
+        { "r_displayindex","index of output display",(void *)&r_displayindex, CVAR_INT|CVAR_RESTARTVID, 0, 10 },
         { "r_usenewaspect","enable/disable new screen aspect ratio determination code",(void *) &r_usenewaspect, CVAR_BOOL, 0, 1 },
         { "r_screenaspect","if using r_usenewaspect and in fullscreen, screen aspect ratio in the form XXYY, e.g. 1609 for 16:9",
           (void *) &r_screenxy, SCREENASPECT_CVAR_TYPE, 0, 9999 },
+        { "r_fpgrouscan","use floating-point numbers for slope rendering",(void *) &r_fpgrouscan, CVAR_BOOL, 0, 1 },
         { "r_novoxmips","turn off/on the use of mipmaps when rendering 8-bit voxels",(void *) &novoxmips, CVAR_BOOL, 0, 1 },
         { "r_voxels","enable/disable automatic sprite->voxel rendering",(void *) &usevoxels, CVAR_BOOL, 0, 1 },
+        { "r_maxfps", "limit the frame rate", (void *)&r_maxfps, CVAR_INT | CVAR_FUNCPTR, -1, 1000 },
+        { "r_maxfpsoffset", "menu-controlled offset for r_maxfps", (void *)&r_maxfpsoffset, CVAR_INT | CVAR_FUNCPTR, -10, 10 },
 #ifdef YAX_ENABLE
         { "r_tror_nomaskpass", "enable/disable additional pass in TROR software rendering", (void *)&r_tror_nomaskpass, CVAR_BOOL, 0, 1 },
 #endif
@@ -466,8 +538,8 @@ int32_t baselayer_init(void)
 #endif
     };
 
-    for (native_t i=0; i<ARRAY_SSIZE(cvars_engine); i++)
-        OSD_RegisterCvar(&cvars_engine[i], (cvars_engine[i].flags & CVAR_FUNCPTR) ? osdcmd_cvar_set_baselayer : osdcmd_cvar_set);
+    for (auto & i : cvars_engine)
+        OSD_RegisterCvar(&i, (i.flags & CVAR_FUNCPTR) ? osdcmd_cvar_set_baselayer : osdcmd_cvar_set);
 
 #ifdef USE_OPENGL
     OSD_RegisterFunction("setrendermode","setrendermode <number>: sets the engine's rendering mode.\n"
@@ -500,7 +572,7 @@ void maybe_redirect_outputs(void)
     char *argp;
 
     // pipe standard outputs to files
-    if ((argp = Bgetenv("BUILD_LOGSTDOUT")) == NULL || Bstrcasecmp(argp, "TRUE"))
+    if ((argp = Bgetenv("EDUKE32_LOGSTDOUT")) == NULL || Bstrcasecmp(argp, "TRUE"))
         return;
 
     FILE *fp = freopen("stdout.txt", "w", stdout);
@@ -515,4 +587,35 @@ void maybe_redirect_outputs(void)
         *stderr = *fp;
     }
 #endif
+}
+
+int engineFPSLimit(void)
+{
+    if (!r_maxfps)
+        return true;
+
+    g_frameDelay = calcFrameDelay(r_maxfps, r_maxfpsoffset);
+
+    uint64_t const  frameJitter = timerGetPerformanceFrequency() / 1000ull;
+    uint64_t        frameTicks;
+    static uint64_t nextFrameTicks;
+    static uint64_t frameDelay;
+
+    if (g_frameDelay != frameDelay)
+    {
+        nextFrameTicks = timerGetPerformanceCounter() + g_frameDelay;
+        frameDelay = g_frameDelay;
+    }
+
+    do { handleevents(); } while (nextFrameTicks - (frameTicks = timerGetPerformanceCounter()) < frameJitter);
+
+    if (nextFrameTicks - frameTicks > g_frameDelay)
+    {
+        while (nextFrameTicks - frameTicks > g_frameDelay)
+            nextFrameTicks += g_frameDelay;
+
+        return true;
+    }
+
+    return false;
 }

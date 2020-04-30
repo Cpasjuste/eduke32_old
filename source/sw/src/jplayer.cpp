@@ -47,7 +47,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 #include "savedef.h"
 #include "menus.h"
-#include "net.h"
+#include "network.h"
 #include "pal.h"
 
 #include "bots.h"
@@ -122,10 +122,11 @@ int gametext(int x,int y,char *t,char s,short dabits)
     return x;
 }
 
-int minigametext(int x,int y,char *t,char s,short dabits)
+int minigametext(int x,int y,const char *t,short dabits)
 {
     short ac,newx;
-    char centre, *oldt;
+    char centre;
+    const char *oldt;
 
     centre = (x == (320>>1));
     newx = 0;
@@ -215,7 +216,7 @@ int quotebot, quotebotgoal;
 short user_quote_time[MAXUSERQUOTES];
 char user_quote[MAXUSERQUOTES][256];
 
-void adduserquote(char *daquote)
+void adduserquote(const char *daquote)
 {
     int i;
 
@@ -252,16 +253,16 @@ void operatefta(void)
         {
             // dont fade out
             if (k > 4)
-                minigametext(320>>1,j,user_quote[i],0,2+8);
+                minigametext(320>>1,j,user_quote[i],2+8);
             else if (k > 2)
-                minigametext(320>>1,j,user_quote[i],0,2+8+1);
+                minigametext(320>>1,j,user_quote[i],2+8+1);
             else
-                minigametext(320>>1,j,user_quote[i],0,2+8+1+32);
+                minigametext(320>>1,j,user_quote[i],2+8+1+32);
         }
         else
         {
             // dont fade out
-            minigametext(320>>1,j,user_quote[i],0,2+8);
+            minigametext(320>>1,j,user_quote[i],2+8);
         }
 
         j -= 6;
@@ -286,7 +287,7 @@ void addconquote(char *daquote)
 #define CON_ROT_FLAGS (ROTATE_SPRITE_CORNER|ROTATE_SPRITE_SCREEN_CLIP|ROTATE_SPRITE_NON_MASK)
 void operateconfta(void)
 {
-    int i, j, k;
+    int i, j;
 
     if (!ConPanel) return; // If panel isn't up, don't draw anything
 
@@ -343,7 +344,7 @@ void BOT_ChooseWeapon(PLAYERp p, USERp u, SW_PACKET *syn)
         }
 }
 
-int getspritescore(int snum, int dapicnum)
+int getspritescore(/*int snum, */int dapicnum)
 {
 
     switch (dapicnum)
@@ -423,7 +424,6 @@ void computergetinput(int snum, SW_PACKET *syn)
     walltype *wal;
     int myx, myy, myz, myang, mycursectnum;
     USERp u;
-    short weap;
     //extern SWBOOL Pachinko_Win_Cheat;
 
     if (!MoveSkip4) return; // Make it so the bots don't slow the game down so bad!
@@ -621,7 +621,7 @@ void computergetinput(int snum, SW_PACKET *syn)
         //Strafe attack
         if (fightdist)
         {
-            j = totalclock+snum*13468;
+            j = (int32_t) totalclock+snum*13468;
             i = sintable[(j<<6)&2047];
             i += sintable[((j+4245)<<5)&2047];
             i += sintable[((j+6745)<<4)&2047];
@@ -796,7 +796,7 @@ void computergetinput(int snum, SW_PACKET *syn)
                 for (j=headspritesect[i]; j>=0; j=nextspritesect[j])
                 {
                     if ((sprite[j].xrepeat <= 0) || (sprite[j].yrepeat <= 0)) continue;
-                    if (getspritescore(snum,sprite[j].picnum) <= 0) continue;
+                    if (getspritescore(/*snum,*/sprite[j].picnum) <= 0) continue;
                     if (FAFcansee(x1,y1,z1-(32<<8),damysect,sprite[j].x,sprite[j].y,sprite[j].z-(4<<8),i))
                     { goalx[snum] = sprite[j].x; goaly[snum] = sprite[j].y; goalz[snum] = sprite[j].z; goalsprite[snum] = j; break; }
                 }
@@ -842,7 +842,7 @@ void computergetinput(int snum, SW_PACKET *syn)
         daang = getangle(x2-x1,y2-y1);
         if ((i&0xc000) == 32768)
             daang = getangle(wall[wall[i&(MAXWALLS-1)].point2].x-wall[i&(MAXWALLS-1)].x,wall[wall[i&(MAXWALLS-1)].point2].y-wall[i&(MAXWALLS-1)].y);
-        j = totalclock+snum*13468;
+        j = (int32_t) totalclock+snum*13468;
         i = sintable[(j<<6)&2047];
         i += sintable[((j+4245)<<5)&2047];
         i += sintable[((j+6745)<<4)&2047];

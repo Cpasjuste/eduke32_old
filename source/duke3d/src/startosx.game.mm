@@ -9,6 +9,7 @@
 #include "compat.h"
 #include "baselayer.h"
 #include "grpscan.h"
+#include "osxbits.h"
 
 #import "GrpFile.game.h"
 #import "GameListSource.game.h"
@@ -29,40 +30,41 @@
 # define NSControlSizeSmall NSSmallControlSize
 #endif
 
-static NSRect NSRectChangeXY(NSRect const rect, CGFloat const x, CGFloat const y)
+#ifndef MAC_OS_X_VERSION_10_14
+# define NSButtonTypeSwitch NSSwitchButton
+# define NSBezelStyleRounded NSRoundedBezelStyle
+# define NSControlStateValueOn NSOnState
+# define NSControlStateValueOff NSOffState
+#endif
+
+static inline NSRect NSRectChangeXY(NSRect const rect, CGFloat const x, CGFloat const y)
 {
     return NSMakeRect(x, y, rect.size.width, rect.size.height);
 }
-static NSRect NSSizeAddXY(NSSize const size, CGFloat const x, CGFloat const y)
+static inline NSRect NSSizeAddXY(NSSize const size, CGFloat const x, CGFloat const y)
 {
     return NSMakeRect(x, y, size.width, size.height);
 }
-#if 0
-static CGFloat NSRightEdge(NSRect rect)
+static inline CGFloat NSRightEdge(NSRect rect)
 {
     return rect.origin.x + rect.size.width;
 }
-#endif
-static CGFloat NSTopEdge(NSRect rect)
+static inline CGFloat NSTopEdge(NSRect rect)
 {
     return rect.origin.y + rect.size.height;
 }
 
-static void setFontToSmall(id control)
+static inline void setFontToSmall(id control)
 {
     [control setFont:[NSFont fontWithDescriptor:[[control font] fontDescriptor] size:[NSFont smallSystemFontSize]]];
 }
 
-static void setControlToSmall(id control)
+static inline void setControlToSmall(id control)
 {
-#ifdef MAC_OS_X_VERSION_10_12
     [control setControlSize:NSControlSizeSmall];
-#else
-    [control setControlSize:NSControlSizeSmall];
-#endif
 }
 
-static NSTextField * makeLabel(NSString * labelText)
+static inline NSTextField * makeLabel(NSString * labelText)
 {
     NSTextField *textField = [[NSTextField alloc] init];
     setFontToSmall(textField);
@@ -76,38 +78,36 @@ static NSTextField * makeLabel(NSString * labelText)
     return textField;
 }
 
-static NSButton * makeCheckbox(NSString * labelText)
+static inline NSButton * makeCheckbox(NSString * labelText)
 {
     NSButton *checkbox = [[NSButton alloc] init];
     setFontToSmall(checkbox);
     setControlToSmall([checkbox cell]);
     [checkbox setTitle:labelText];
-    [checkbox setButtonType:NSSwitchButton];
+    [checkbox setButtonType:NSButtonTypeSwitch];
     [checkbox sizeToFit];
     return checkbox;
 }
 
-static NSPopUpButton * makeComboBox(void)
+static inline NSPopUpButton * makeComboBox(void)
 {
     NSPopUpButton *comboBox = [[NSPopUpButton alloc] init];
     [comboBox setPullsDown:NO];
     setFontToSmall(comboBox);
     setControlToSmall([comboBox cell]);
-    [comboBox setBezelStyle:NSRoundedBezelStyle];
+    [comboBox setBezelStyle:NSBezelStyleRounded];
     [comboBox setPreferredEdge:NSMaxYEdge];
     [[comboBox cell] setArrowPosition:NSPopUpArrowAtCenter];
     [comboBox sizeToFit];
     return comboBox;
 }
 
-static id nsapp;
-
 /* setAppleMenu disappeared from the headers in 10.4 */
 @interface NSApplication(NSAppleMenu)
 - (void)setAppleMenu:(NSMenu *)menu;
 @end
 
-static NSString * GetApplicationName(void)
+static inline NSString * GetApplicationName(void)
 {
     NSString *appName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleDisplayName"];
     if (!appName)
@@ -118,7 +118,7 @@ static NSString * GetApplicationName(void)
     return appName;
 }
 
-static void CreateApplicationMenus(void)
+static inline void CreateApplicationMenus(void)
 {
     NSString *appName;
     NSString *title;
@@ -179,9 +179,7 @@ static int retval = -1;
 
 static struct {
     grpfile_t const * grp;
-    int fullscreen;
-    int xdim3d, ydim3d, bpp3d;
-    int forcesetup;
+    ud_setup_t shared;
 } settings;
 
 @interface StartupWindow : NSWindow <NSWindowDelegate>
@@ -258,7 +256,7 @@ static struct {
         [startButton setTitle:@"Start"];
         [startButton setTarget:self];
         [startButton setAction:@selector(start:)];
-        [startButton setBezelStyle:NSRoundedBezelStyle];
+        [startButton setBezelStyle:NSBezelStyleRounded];
         [startButton setKeyEquivalent:@"\r"];
         [startButton setAutoresizingMask:NSViewMinXMargin | NSViewMaxYMargin];
 
@@ -268,7 +266,7 @@ static struct {
         [cancelButton setTitle:@"Cancel"];
         [cancelButton setTarget:self];
         [cancelButton setAction:@selector(cancel:)];
-        [cancelButton setBezelStyle:NSRoundedBezelStyle];
+        [cancelButton setBezelStyle:NSBezelStyleRounded];
         [cancelButton setAutoresizingMask:NSViewMinXMargin | NSViewMaxYMargin];
 
 
@@ -425,14 +423,14 @@ static struct {
 
 - (void)populateVideoModes:(BOOL)firstTime
 {
-    int i, mode3d, fullscreen = ([fullscreenButton state] == NSOnState);
+    int i, mode3d, fullscreen = ([fullscreenButton state] == NSControlStateValueOn);
     int idx3d = -1;
     int xdim = 0, ydim = 0, bpp = 0;
 
     if (firstTime) {
-        xdim = settings.xdim3d;
-        ydim = settings.ydim3d;
-        bpp  = settings.bpp3d;
+        xdim = settings.shared.xdim;
+        ydim = settings.shared.ydim;
+        bpp  = settings.shared.bpp;
     } else {
         mode3d = [[modeslist3d objectAtIndex:[videoMode3DPUButton indexOfSelectedItem]] intValue];
         if (mode3d >= 0) {
@@ -490,10 +488,10 @@ static struct {
 
     int mode = [[modeslist3d objectAtIndex:[videoMode3DPUButton indexOfSelectedItem]] intValue];
     if (mode >= 0) {
-        settings.xdim3d = validmode[mode].xdim;
-        settings.ydim3d = validmode[mode].ydim;
-        settings.bpp3d = validmode[mode].bpp;
-        settings.fullscreen = validmode[mode].fs;
+        settings.shared.xdim = validmode[mode].xdim;
+        settings.shared.ydim = validmode[mode].ydim;
+        settings.shared.bpp = validmode[mode].bpp;
+        settings.shared.fullscreen = validmode[mode].fs;
     }
 
     int row = [[gameList documentView] selectedRow];
@@ -501,7 +499,7 @@ static struct {
         settings.grp = [[gamelistsrc grpAtIndex:row] entryptr];
     }
 
-    settings.forcesetup = [alwaysShowButton state] == NSOnState;
+    settings.shared.forcesetup = [alwaysShowButton state] == NSControlStateValueOn;
 
     retval = 1;
 }
@@ -510,8 +508,8 @@ static struct {
 {
     videoGetModes();
 
-    [fullscreenButton setState: (settings.fullscreen ? NSOnState : NSOffState)];
-    [alwaysShowButton setState: (settings.forcesetup ? NSOnState : NSOffState)];
+    [fullscreenButton setState: (settings.shared.fullscreen ? NSControlStateValueOn : NSControlStateValueOff)];
+    [alwaysShowButton setState: (settings.shared.forcesetup ? NSControlStateValueOn : NSControlStateValueOff)];
     [self populateVideoModes:YES];
 
     // enable all the controls on the Configuration page
@@ -594,18 +592,12 @@ static StartupWindow *startwin = nil;
 
 int startwin_open(void)
 {
-    // fix for "ld: absolute address to symbol _NSApp in a different linkage unit not supported"
-    // (OS X 10.6) when building for PPC
-    nsapp = [NSApplication sharedApplication];
-
     if (startwin != nil) return 1;
 
     startwin = [[StartupWindow alloc] init];
     if (startwin == nil) return -1;
 
     [startwin setupMessagesMode];
-
-    [nsapp finishLaunching];
 
     [startwin center];
     [startwin makeKeyAndOrderFront:nil];
@@ -680,11 +672,7 @@ int startwin_run(void)
 {
     if (startwin == nil) return 0;
 
-    settings.fullscreen = ud.config.ScreenMode;
-    settings.xdim3d = ud.config.ScreenWidth;
-    settings.ydim3d = ud.config.ScreenHeight;
-    settings.bpp3d = ud.config.ScreenBPP;
-    settings.forcesetup = ud.config.ForceSetup;
+    settings.shared = ud.setup;
     settings.grp = g_selectedGrp;
 
     [startwin setupRunMode];
@@ -701,11 +689,7 @@ int startwin_run(void)
     [nsapp updateWindows];
 
     if (retval) {
-        ud.config.ScreenMode = settings.fullscreen;
-        ud.config.ScreenWidth = settings.xdim3d;
-        ud.config.ScreenHeight = settings.ydim3d;
-        ud.config.ScreenBPP = settings.bpp3d;
-        ud.config.ForceSetup = settings.forcesetup;
+        ud.setup = settings.shared;
         g_selectedGrp = settings.grp;
     }
 

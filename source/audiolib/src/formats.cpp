@@ -24,20 +24,18 @@
  * Raw, WAV, and VOC source support for MultiVoc
  */
 
-#include "compat.h"
-#include "pitch.h"
-#include "multivoc.h"
 #include "_multivc.h"
+#include "compat.h"
+#include "multivoc.h"
+#include "pitch.h"
+#include "pragmas.h"
 
 static playbackstatus MV_GetNextWAVBlock(VoiceNode *voice)
 {
-    if (voice->BlockLength <= 0)
+    if (voice->BlockLength == 0)
     {
-        if (voice->LoopStart == NULL)
-        {
-            voice->Playing = FALSE;
+        if (voice->LoopStart == nullptr)
             return NoMoreData;
-        }
 
         voice->BlockLength = voice->LoopSize;
         voice->NextBlock   = voice->LoopStart;
@@ -47,8 +45,8 @@ static playbackstatus MV_GetNextWAVBlock(VoiceNode *voice)
 
     voice->sound        = voice->NextBlock;
     voice->position    -= voice->length;
-    voice->length       = min(voice->BlockLength, 0x8000);
-    voice->NextBlock   += voice->length * (voice->channels * voice->bits / 8);
+    voice->length       = min(voice->BlockLength, 0x8000u);
+    voice->NextBlock   += voice->length * ((voice->channels * voice->bits) >> 3);
     voice->BlockLength -= voice->length;
     voice->length     <<= 16;
 
@@ -57,26 +55,25 @@ static playbackstatus MV_GetNextWAVBlock(VoiceNode *voice)
 
 static playbackstatus MV_GetNextVOCBlock(VoiceNode *voice)
 {
-    size_t  blocklength = 0;
-    uint32_t   samplespeed = 0;  // XXX: compiler-happy on synthesis
-    uint32_t   tc = 0;
-    unsigned       BitsPerSample;
-    unsigned       Channels;
-    unsigned       Format;
+    size_t   blocklength = 0;
+    uint32_t samplespeed = 0;  // XXX: compiler-happy on synthesis
+    uint32_t tc          = 0;
+    unsigned BitsPerSample;
+    unsigned Channels;
+    unsigned Format;
 
     if (voice->BlockLength > 0)
     {
         voice->position    -= voice->length;
-        voice->sound       += (voice->length >> 16) * (voice->channels * voice->bits / 8);
-        voice->length       = min(voice->BlockLength, 0x8000);
+        voice->sound       += (voice->length >> 16) * ((voice->channels * voice->bits) >> 3);
+        voice->length       = min(voice->BlockLength, 0x8000u);
         voice->BlockLength -= voice->length;
         voice->length     <<= 16;
         return KeepPlaying;
     }
 
-    const uint8_t *ptr = (uint8_t const *)voice->NextBlock;
+    auto ptr = (uint8_t const *)voice->NextBlock;
 
-    voice->Playing = TRUE;
     voice->Paused = FALSE;
 
     int voicemode = 0;
@@ -88,11 +85,10 @@ static playbackstatus MV_GetNextVOCBlock(VoiceNode *voice)
 
     do
     {
-        // Stop playing if we get a NULL pointer
-        if (ptr == NULL)
+        // Stop playing if we get a null pointer
+        if (ptr == nullptr)
         {
-            voice->Playing = FALSE;
-            done = TRUE;
+            done = 2;
             break;
         }
 
@@ -118,11 +114,10 @@ static playbackstatus MV_GetNextVOCBlock(VoiceNode *voice)
         case 0 :
 end_of_data:
             // End of data
-            if ((voice->LoopStart == NULL) ||
+            if ((voice->LoopStart == nullptr) ||
                     ((intptr_t) voice->LoopStart >= ((intptr_t) ptr - 4)))
             {
-                voice->Playing = FALSE;
-                done = TRUE;
+                done = 2;
             }
             else
             {
@@ -178,7 +173,7 @@ end_of_data:
 
         case 6 :
             // Repeat begin
-            if (voice->LoopEnd == NULL)
+            if (voice->LoopEnd == nullptr)
             {
                 voice->LoopCount = B_LITTLE16(*(uint16_t const *)ptr);
                 voice->LoopStart = (char *)((intptr_t) ptr + blocklength);
@@ -193,14 +188,14 @@ end_of_data:
                 voice->LoopCount = 0;
             else
             {
-                if ((voice->LoopCount > 0) && (voice->LoopStart != NULL))
+                if ((voice->LoopCount > 0) && (voice->LoopStart != nullptr))
                 {
                     ptr = (uint8_t const *) voice->LoopStart;
 
                     if (voice->LoopCount < 0xffff)
                     {
                         if (--voice->LoopCount == 0)
-                            voice->LoopStart = NULL;
+                            voice->LoopStart = nullptr;
                     }
                 }
             }
@@ -254,8 +249,7 @@ end_of_data:
 
         default :
             // Unknown data.  Probably not a VOC file.
-            voice->Playing = FALSE;
-            done = TRUE;
+            done = 2;
             break;
         }
 
@@ -263,20 +257,20 @@ end_of_data:
     }
     while (!done);
 
-    if (voice->Playing)
+    if (done != 2)
     {
         voice->NextBlock    = (char const *)ptr + blocklength;
         voice->sound        = (char const *)ptr;
 
         // CODEDUP multivoc.c MV_SetVoicePitch
         voice->SamplingRate = samplespeed;
-        voice->RateScale    = (voice->SamplingRate * voice->PitchScale) / MV_MixRate;
+        voice->RateScale    = divideu32(voice->SamplingRate * voice->PitchScale, MV_MixRate);
 
         // Multiply by MV_MIXBUFFERSIZE - 1
         voice->FixedPointBufferSize = (voice->RateScale * MV_MIXBUFFERSIZE) -
                                       voice->RateScale;
 
-        if (voice->LoopEnd != NULL)
+        if (voice->LoopEnd != nullptr)
         {
             if (blocklength > (uintptr_t)voice->LoopEnd)
                 blocklength = (uintptr_t)voice->LoopEnd;
@@ -295,7 +289,7 @@ end_of_data:
             blocklength /= 2;
 
         voice->position     = 0;
-        voice->length       = min(blocklength, 0x8000);
+        voice->length       = min<uint32_t>(blocklength, 0x8000u);
         voice->BlockLength  = blocklength - voice->length;
         voice->length     <<= 16;
 
@@ -307,8 +301,31 @@ end_of_data:
     return NoMoreData;
 }
 
-int32_t MV_PlayWAV3D(char *ptr, uint32_t length, int32_t loophow, int32_t pitchoffset, int32_t angle, int32_t distance,
-                     int32_t priority, uint32_t callbackval)
+static playbackstatus MV_GetNextRAWBlock(VoiceNode *voice)
+{
+    if (voice->BlockLength == 0)
+    {
+        if (voice->LoopStart == NULL)
+            return NoMoreData;
+
+        voice->BlockLength = voice->LoopSize;
+        voice->NextBlock   = voice->LoopStart;
+        voice->length      = 0;
+        voice->position    = 0;
+    }
+
+    voice->sound        = voice->NextBlock;
+    voice->position    -= voice->length;
+    voice->length       = min(voice->BlockLength, 0x8000u);
+    voice->NextBlock   += voice->length * (voice->channels * voice->bits / 8);
+    voice->BlockLength -= voice->length;
+    voice->length     <<= 16;
+
+    return KeepPlaying;
+}
+
+int MV_PlayWAV3D(char *ptr, uint32_t length, int loophow, int pitchoffset, int angle, int distance,
+                     int priority, fix16_t volume, intptr_t callbackval)
 {
     if (!MV_Installed)
         return MV_Error;
@@ -319,17 +336,17 @@ int32_t MV_PlayWAV3D(char *ptr, uint32_t length, int32_t loophow, int32_t pitcho
         angle    += MV_NUMPANPOSITIONS / 2;
     }
 
-    int const volume = MIX_VOLUME(distance);
+    int const vol = MIX_VOLUME(distance);
 
     // Ensure angle is within 0 - 127
     angle &= MV_MAXPANPOSITION;
 
     return MV_PlayWAV(ptr, length, loophow, -1, pitchoffset, max(0, 255 - distance),
-        MV_PanTable[ angle ][ volume ].left, MV_PanTable[ angle ][ volume ].right, priority, callbackval);
+        MV_PanTable[ angle ][ vol ].left, MV_PanTable[ angle ][ vol ].right, priority, volume, callbackval);
 }
 
-int32_t MV_PlayWAV(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t loopend, int32_t pitchoffset, int32_t vol,
-                   int32_t left, int32_t right, int32_t priority, uint32_t callbackval)
+int MV_PlayWAV(char *ptr, uint32_t length, int loopstart, int loopend, int pitchoffset, int vol,
+                   int left, int right, int priority, fix16_t volume, intptr_t callbackval)
 {
     if (!MV_Installed)
         return MV_Error;
@@ -340,10 +357,7 @@ int32_t MV_PlayWAV(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t loo
     riff.format_size = B_LITTLE32(riff.format_size);
 
     if ((memcmp(riff.RIFF, "RIFF", 4) != 0) || (memcmp(riff.WAVE, "WAVE", 4) != 0) || (memcmp(riff.fmt, "fmt ", 4) != 0))
-    {
-        MV_SetErrorCode(MV_InvalidFile);
-        return MV_Error;
-    }
+        return MV_SetErrorCode(MV_InvalidFile);
 
     format_header format;
     memcpy(&format, ptr + sizeof(riff_header), sizeof(format_header));
@@ -361,66 +375,59 @@ int32_t MV_PlayWAV(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t loo
     // Check if it's PCM data.
     if (format.wFormatTag != 1 || (format.nChannels != 1 && format.nChannels != 2) ||
         ((format.nBitsPerSample != 8) && (format.nBitsPerSample != 16)) || memcmp(data.DATA, "data", 4) != 0)
-    {
-        MV_SetErrorCode(MV_InvalidFile);
-        return MV_Error;
-    }
+        return MV_SetErrorCode(MV_InvalidFile);
 
     // Request a voice from the voice pool
 
     VoiceNode     *voice = MV_AllocVoice(priority);
 
-    if (voice == NULL)
-    {
-        MV_SetErrorCode(MV_NoVoices);
-        return MV_Error;
-    }
+    if (voice == nullptr)
+        return MV_SetErrorCode(MV_NoVoices);
 
     voice->wavetype    = FMT_WAV;
     voice->bits        = format.nBitsPerSample;
     voice->channels    = format.nChannels;
     voice->GetSound    = MV_GetNextWAVBlock;
 
-    int32_t length = data.size;
+    int blocklen = data.size;
 
     if (voice->bits == 16)
     {
         data.size  &= ~1;
-        length     /= 2;
+        blocklen     /= 2;
     }
 
     if (voice->channels == 2)
     {
         data.size &= ~1;
-        length    /= 2;
+        blocklen    /= 2;
     }
 
     voice->rawdataptr = (uint8_t *)ptr;
-    voice->ptrlength = ptrlength;
-    voice->Playing     = TRUE;
+    voice->ptrlength  = length;
     voice->Paused      = FALSE;
     voice->LoopCount   = 0;
     voice->position    = 0;
     voice->length      = 0;
-    voice->BlockLength = length;
+    voice->BlockLength = blocklen;
     voice->NextBlock   = (char *)((intptr_t) ptr + sizeof(riff_header) + riff.format_size + sizeof(data_header));
-    voice->next        = NULL;
-    voice->prev        = NULL;
+    voice->next        = nullptr;
+    voice->prev        = nullptr;
     voice->priority    = priority;
     voice->callbackval = callbackval;
-    voice->LoopStart   = loopstart >= 0 ? voice->NextBlock : NULL;
-    voice->LoopEnd     = NULL;
-    voice->LoopSize    = loopend > 0 ? loopend - loopstart + 1 : length;
+    voice->LoopStart   = loopstart >= 0 ? voice->NextBlock : nullptr;
+    voice->LoopEnd     = nullptr;
+    voice->LoopSize    = loopend > 0 ? loopend - loopstart + 1 : blocklen;
 
     MV_SetVoicePitch(voice, format.nSamplesPerSec, pitchoffset);
-    MV_SetVoiceVolume(voice, vol, left, right);
+    MV_SetVoiceVolume(voice, vol, left, right, volume);
     MV_PlayVoice(voice);
 
     return voice->handle;
 }
 
-int32_t MV_PlayVOC3D(char *ptr, uint32_t ptrlength, int32_t loophow, int32_t pitchoffset, int32_t angle,
-                     int32_t distance, int32_t priority, uint32_t callbackval)
+int MV_PlayVOC3D(char *ptr, uint32_t length, int loophow, int pitchoffset, int angle,
+                     int distance, int priority, fix16_t volume, intptr_t callbackval)
 {
     if (!MV_Installed)
         return MV_Error;
@@ -431,27 +438,62 @@ int32_t MV_PlayVOC3D(char *ptr, uint32_t ptrlength, int32_t loophow, int32_t pit
         angle    += MV_NUMPANPOSITIONS / 2;
     }
 
-    int const volume = MIX_VOLUME(distance);
+    int const vol = MIX_VOLUME(distance);
 
     // Ensure angle is within 0 - 127
     angle &= MV_MAXPANPOSITION;
 
-    return MV_PlayVOC(ptr, ptrlength, loophow, -1, pitchoffset, max(0, 255 - distance),
-        MV_PanTable[ angle ][ volume ].left, MV_PanTable[ angle ][ volume ].right, priority, callbackval);
+    return MV_PlayVOC(ptr, length, loophow, -1, pitchoffset, max(0, 255 - distance),
+        MV_PanTable[ angle ][ vol ].left, MV_PanTable[ angle ][ vol ].right, priority, volume, callbackval);
 }
 
-int32_t MV_PlayVOC(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t loopend, int32_t pitchoffset, int32_t vol,
-                   int32_t left, int32_t right, int32_t priority, uint32_t callbackval)
+int MV_PlayVOC(char *ptr, uint32_t length, int loopstart, int loopend, int pitchoffset, int vol,
+                   int left, int right, int priority, fix16_t volume, intptr_t callbackval)
 {
     if (!MV_Installed)
         return MV_Error;
 
     // Make sure it looks like a valid VOC file.
     if (memcmp(ptr, "Creative Voice File", 19) != 0)
-    {
-        MV_SetErrorCode(MV_InvalidFile);
+        return MV_SetErrorCode(MV_InvalidFile);
+
+    // Request a voice from the voice pool
+    VoiceNode *voice = MV_AllocVoice(priority);
+
+    if (voice == nullptr)
+        return MV_SetErrorCode(MV_NoVoices);
+
+    voice->rawdataptr = (uint8_t *)ptr;
+    voice->ptrlength = length;
+    voice->Paused = FALSE;
+    voice->wavetype    = FMT_VOC;
+    voice->bits        = 8;
+    voice->channels    = 1;
+    voice->GetSound    = MV_GetNextVOCBlock;
+    voice->NextBlock   = ptr + B_LITTLE16(*(uint16_t *)(ptr + 0x14));
+    voice->LoopCount   = 0;
+    voice->BlockLength = 0;
+    voice->PitchScale  = PITCH_GetScale(pitchoffset);
+    voice->length      = 0;
+    voice->next        = nullptr;
+    voice->prev        = nullptr;
+    voice->priority    = priority;
+    voice->callbackval = callbackval;
+    voice->LoopStart   = loopstart >= 0 ? voice->NextBlock : nullptr;
+    voice->LoopEnd     = nullptr;
+    voice->LoopSize    = loopend - loopstart + 1;
+
+    MV_SetVoiceVolume(voice, vol, left, right, volume);
+    MV_PlayVoice(voice);
+
+    return voice->handle;
+}
+
+int MV_PlayRAW(char *ptr, uint32_t length, int rate, char *loopstart, char *loopend, int pitchoffset, int vol,
+                   int left, int right, int priority, fix16_t volume, intptr_t callbackval)
+{
+    if (!MV_Installed)
         return MV_Error;
-    }
 
     // Request a voice from the voice pool
     VoiceNode *voice = MV_AllocVoice(priority);
@@ -463,29 +505,31 @@ int32_t MV_PlayVOC(char *ptr, uint32_t ptrlength, int32_t loopstart, int32_t loo
     }
 
     voice->rawdataptr = (uint8_t *)ptr;
-    voice->ptrlength = ptrlength;
-    voice->Playing = TRUE;
+    voice->ptrlength = length;
     voice->Paused = FALSE;
-    voice->wavetype    = FMT_VOC;
+    voice->wavetype    = FMT_RAW;
     voice->bits        = 8;
     voice->channels    = 1;
-    voice->GetSound    = MV_GetNextVOCBlock;
-    voice->NextBlock   = ptr + B_LITTLE16(*(uint16_t *)(ptr + 0x14));
+    voice->GetSound    = MV_GetNextRAWBlock;
+    voice->NextBlock   = ptr;
     voice->LoopCount   = 0;
-    voice->BlockLength = 0;
+    voice->position    = 0;
+    voice->BlockLength = length;
     voice->PitchScale  = PITCH_GetScale(pitchoffset);
     voice->length      = 0;
     voice->next        = NULL;
     voice->prev        = NULL;
     voice->priority    = priority;
     voice->callbackval = callbackval;
-    voice->LoopStart   = loopstart >= 0 ? voice->NextBlock : NULL;
-    voice->LoopEnd     = NULL;
+    voice->LoopStart   = loopstart;
+    voice->LoopEnd     = loopend;
     voice->LoopSize    = loopend - loopstart + 1;
 
-    MV_SetVoiceVolume(voice, vol, left, right);
+    voice->volume      = volume;
+
+    MV_SetVoicePitch(voice, rate, pitchoffset);
+    MV_SetVoiceVolume(voice, vol, left, right, volume);
     MV_PlayVoice(voice);
 
     return voice->handle;
 }
-

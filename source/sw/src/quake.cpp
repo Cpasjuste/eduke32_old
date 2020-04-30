@@ -196,7 +196,7 @@ void QuakeViewChange(PLAYERp pp, int *z_diff, int *x_diff, int *y_diff, short *a
     {
         sp = &sprite[i];
 
-        dist = FindDistance3D(pp->posx - sp->x, pp->posy - sp->y, (pp->posz - sp->z)>>4);
+        dist = FindDistance3D(pp->posx - sp->x, pp->posy - sp->y, pp->posz - sp->z);
 
         // shake whole level
         if (QUAKE_TestDontTaper(sp))
@@ -295,7 +295,6 @@ int
 SetGunQuake(int16_t SpriteNum)
 {
     SPRITEp sp = &sprite[SpriteNum];
-    USERp u = User[SpriteNum];
 
     SpawnQuake(sp->sectnum, sp->x, sp->y, sp->z,  40, 8, 40000);
 

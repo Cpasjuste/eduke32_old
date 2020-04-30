@@ -23,8 +23,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #ifndef player_h_
 #define player_h_
 
+#include "build.h"
 #include "inv.h"
-#include "fix16.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,10 +37,18 @@ extern int32_t g_mostConcurrentPlayers;
 #define NAM_GRENADE_LIFETIME        120
 #define NAM_GRENADE_LIFETIME_VAR    30
 
-#define HORIZ_MIN                   -99
+#define HORIZ_MIN                   (-99)
 #define HORIZ_MAX                   299
 #define AUTO_AIM_ANGLE              48
 #define PHEIGHT                     (38<<8)
+#define PCROUCHHEIGHT               (16<<8)
+#define PCROUCHINCREMENT            (2048+768)
+#define PMINHEIGHT                  1024 // this is NOT the value I wanted here, but Duke It Out in DC's shitty vents said otherwise
+
+#define PCRACKTIME                  777
+
+#define PWATERSPEEDMODIFIER         0x1400
+#define PCROUCHSPEEDMODIFIER        0x2000
 
 #define TRIPBOMB_TRIPWIRE       0x00000001
 #define TRIPBOMB_TIMER          0x00000002
@@ -48,7 +56,7 @@ extern int32_t g_mostConcurrentPlayers;
 #define PIPEBOMB_REMOTE         0x00000001
 #define PIPEBOMB_TIMER          0x00000002
 
-#define WEAPON_POS_LOWER            -9
+#define WEAPON_POS_LOWER            (-9)
 #define WEAPON_POS_RAISE            10
 #define WEAPON_POS_START             6
 
@@ -121,7 +129,7 @@ typedef struct {
     uint32_t bits;
     int16_t fvel, svel;
     fix16_t q16avel, q16horz;
-    int8_t extbits;
+    uint8_t extbits;
 } input_t;
 
 #pragma pack(push,1)
@@ -133,18 +141,18 @@ typedef struct {
 // TODO: rearrange this if the opportunity arises!
 // KEEPINSYNC lunatic/_defs_game.lua
 typedef struct {
-    vec3_t pos, opos, vel, npos;
+    vec3_t pos, opos;
+    vec3_t vel, npos;
     vec2_t bobpos, fric;
 
     fix16_t q16horiz, q16horizoff, oq16horiz, oq16horizoff;
     fix16_t q16ang, oq16ang, q16angvel;
 
     int32_t truefz, truecz, player_par;
-    int32_t randomflamex, exitx, exity;
     int32_t runspeed, max_player_health, max_shield_amount;
     int32_t autostep, autostep_sbw;
 
-    uint32_t interface_toggle_flag;
+    uint32_t interface_toggle;
 #ifdef LUNATIC
     int32_t pipebombControl, pipebombLifetime, pipebombLifetimeVar;
     int32_t tripbombControl, tripbombLifetime, tripbombLifetimeVar;
@@ -164,7 +172,7 @@ typedef struct {
     int16_t newowner, jumping_counter, airleft;
     int16_t fta, ftq, access_wallnum, access_spritenum;
     int16_t got_access, weapon_ang, visibility;
-    int16_t somethingonplayer, on_crane, i, one_parallax_sectnum;
+    int16_t somethingonplayer, on_crane, i, parallax_sectnum;
     int16_t random_club_frame, one_eighty_count;
     int16_t dummyplayersprite, extra_extra8;
     int16_t actorsqu, timebeforeexit, customexitsound, last_pissed_time;
@@ -186,11 +194,11 @@ typedef struct {
     uint8_t hbomb_on, jumping_toggle, rapid_fire_hold, on_ground;
     uint8_t inven_icon, buttonpalette, over_shoulder_on, show_empty_weapon;
 
-    uint8_t jetpack_on, spritebridge, lastrandomspot;
+    uint8_t jetpack_on, spritebridge;
     uint8_t scuba_on, footprintpal, heat_on, invdisptime;
 
     uint8_t holster_weapon, falling_counter, footprintshade;
-    uint8_t refresh_inventory, last_full_weapon;
+    uint8_t last_full_weapon;
 
     uint8_t toggle_key_flag, knuckle_incs, knee_incs, access_incs;
     uint8_t walking_snd_toggle, palookup, hard_landing, fist_incs;
@@ -210,13 +218,20 @@ typedef struct {
     // anywhere (like with spritetype_t): g_player[i].ps->wa.idx == i.
     struct { int32_t idx; } wa;
 #endif
-    // int8_t padding_[0];
+
+    int8_t crouch_toggle;
+    int8_t padding_[3];
 } DukePlayer_t;
 
 // KEEPINSYNC lunatic/_defs_game.lua
-typedef struct {
+typedef struct
+{
     DukePlayer_t *ps;
-    input_t *inputBits;
+    input_t *input;
+
+    bool    horizRecenter;
+    float   horizAngleAdjust;
+    fix16_t horizSkew;
 
     int32_t netsynctime;
     int16_t ping, filler;
@@ -224,7 +239,9 @@ typedef struct {
     // NOTE: wchoice[HANDREMOTE_WEAPON .. MAX_WEAPONS-1] unused
     uint8_t frags[MAXPLAYERS], wchoice[MAX_WEAPONS];
 
-    char vote, gotvote, pingcnt, playerquitflag, ready;
+
+    char vote, gotvote, pingcnt, playerquitflag,
+        ready; // currently unused. May be used later to indicate that a player has pressed use on intermission to indicate they are ready to go on to the next map
     char user_name[32];
     uint32_t revision;
 } playerdata_t;
@@ -314,7 +331,6 @@ extern int32_t          g_levelTextTime;
 extern int32_t          g_myAimMode;
 extern int32_t          g_numObituaries;
 extern int32_t          g_numSelfObituaries;
-extern int32_t          g_emuJumpTics;
 extern int32_t          mouseyaxismode;
 extern int32_t          ticrandomseed;
 
@@ -343,16 +359,16 @@ static inline void P_PalFrom(DukePlayer_t *pPlayer, uint8_t f, uint8_t r, uint8_
     }
 }
 
-void    P_AddKills(DukePlayer_t * const pPlayer, uint16_t kills);
+void    P_AddKills(DukePlayer_t * pPlayer, uint16_t kills);
 int32_t A_GetHitscanRange(int spriteNum);
 void    P_GetInput(int playerNum);
-void P_AddAmmo(DukePlayer_t * const pPlayer, int const weaponNum, int const addAmount);
+void P_AddAmmo(DukePlayer_t * pPlayer, int weaponNum, int addAmount);
 void    P_AddWeapon(DukePlayer_t *pPlayer, int weaponNum, int switchWeapon);
 void    P_CheckWeapon(DukePlayer_t *pPlayer);
 void    P_DisplayScuba(void);
 void    P_DisplayWeapon(void);
-void P_DropWeapon(int const playerNum);
-int     P_FindOtherPlayer(int playerNum, int32_t *d);
+void P_DropWeapon(int playerNum);
+int     P_FindOtherPlayer(int playerNum, int32_t *pDist);
 void    P_FragPlayer(int playerNum);
 void    P_UpdatePosWhenViewingCam(DukePlayer_t *pPlayer);
 void    P_ProcessInput(int playerNum);
@@ -362,6 +378,13 @@ void    P_UpdateScreenPal(DukePlayer_t *pPlayer);
 void    P_EndLevel(void);
 void    P_CheckWeaponI(int playerNum);
 int     P_GetHudPal(const DukePlayer_t *pPlayer);
+int     P_GetKneePal(const DukePlayer_t *pPlayer);
+#ifdef __cplusplus
+}
+int     P_GetKneePal(const DukePlayer_t *pPlayer, int hudPal);
+extern "C" {
+#endif
+int     P_GetOverheadPal(const DukePlayer_t *pPlayer);
 
 int Proj_GetDamage(projectile_t const *pProj);
 
@@ -385,10 +408,10 @@ static inline int P_GetP(const void *pSprite)
     // NOTE: In the no-netcode build, there's no point to pass player indices
     // at all since there is ever only one player. However, merely returning 0
     // would mean making this build less strict than the normal one.
-    Bassert(((const uspritetype *)pSprite)->yvel == 0);
+    Bassert(((uspriteptr_t)pSprite)->yvel == 0);
     return 0;
 #else
-    int playerNum = ((const uspritetype *)pSprite)->yvel;
+    int playerNum = ((uspriteptr_t)pSprite)->yvel;
     // [JM] Check against MAXPLAYERS as opposed to g_mostConcurrentPlayers
     //      to prevent CON for disconnected/fake players from executing as playernum 0.
     if ((unsigned)playerNum >= MAXPLAYERS)
@@ -398,10 +421,12 @@ static inline int P_GetP(const void *pSprite)
 }
 
 // Get the player index given an APLAYER sprite index.
-static inline int P_Get(int32_t spriteNum) { return P_GetP((const uspritetype *)&sprite[spriteNum]); }
+static inline int P_Get(int32_t spriteNum) { return P_GetP((uspriteptr_t)&sprite[spriteNum]); }
 
 #ifdef __cplusplus
 }
 #endif
+
+extern int portableBackupSave(const char *, const char *, int, int);
 
 #endif

@@ -1,5 +1,5 @@
 /* Extended Module Player
- * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2018 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,7 +34,6 @@
 #include "format.h"
 #include "list.h"
 #include "hio.h"
-#include "tempfile.h"
 
 #ifndef LIBXMP_CORE_PLAYER
 #if !defined(HAVE_POPEN) && defined(WIN32)
@@ -282,6 +281,7 @@ static char *get_basename(char *name)
 }
 #endif /* LIBXMP_CORE_PLAYER */
 
+#ifdef EDUKE32_DISABLED
 int xmp_test_module(char *path, struct xmp_test_info *info)
 {
 	HIO_HANDLE *h;
@@ -361,6 +361,7 @@ int xmp_test_module(char *path, struct xmp_test_info *info)
 #endif
 	return ret;
 }
+#endif
 
 static int load_module(xmp_context opaque, HIO_HANDLE *h)
 {
@@ -464,6 +465,7 @@ static int load_module(xmp_context opaque, HIO_HANDLE *h)
 	return -XMP_ERROR_LOAD;
 }
 
+#ifdef EDUKE32_DISABLED
 int xmp_load_module(xmp_context opaque, char *path)
 {
 	struct context_data *ctx = (struct context_data *)opaque;
@@ -543,6 +545,7 @@ int xmp_load_module(xmp_context opaque, char *path)
 	return ret;
 #endif
 }
+#endif
 
 int xmp_load_module_from_memory(xmp_context opaque, void *mem, long size)
 {
@@ -573,6 +576,7 @@ int xmp_load_module_from_memory(xmp_context opaque, void *mem, long size)
 	return ret;
 }
 
+#ifdef EDUKE32_DISABLED
 int xmp_load_module_from_file(xmp_context opaque, void *file, long size)
 {
 	struct context_data *ctx = (struct context_data *)opaque;
@@ -598,6 +602,7 @@ int xmp_load_module_from_file(xmp_context opaque, void *file, long size)
 
 	return ret;
 }
+#endif
 
 void xmp_release_module(xmp_context opaque)
 {

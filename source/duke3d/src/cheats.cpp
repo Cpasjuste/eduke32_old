@@ -20,11 +20,11 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 //-------------------------------------------------------------------------
 
-#include "duke3d.h"
-#include "osdcmds.h"
 #include "cheats.h"
 
-// KEEPINSYNC game.h: enum cheatindex_t
+#include "duke3d.h"
+#include "osdcmds.h"
+
 char CheatStrings [NUMCHEATS][MAXCHEATLEN] =
 {
 #ifndef EDUKE32_STANDALONE
@@ -58,6 +58,37 @@ char CheatStrings [NUMCHEATS][MAXCHEATLEN] =
 #endif
 };
 
+char CheatDescriptions[NUMCHEATS][MAXCHEATDESC] =
+{
+    "Toggle God Mode",
+    "Give Everything",
+    "Level Warp",
+    "Toggle Coordinate Display",
+    "Toggle 3rd-Person View",
+    "", // time
+    "Toggle All Locks",
+    "Toggle Cashman",
+    "Give All Items",
+    "Toggle Framerate Display",
+    "Change Skill",
+    "", // beta
+    "Toggle Hyper",
+    "Toggle Monsters",
+    "", // <RESERVED>
+    "", // <RESERVED>
+    "Matt Saettler.  matts@saettler.com", // todd
+    "Toggle Show All Map",
+    "", // kroz
+    "", // allen
+    "Toggle Clipping",
+    "Give Weapons",
+    "Give Inventory",
+    "Give Keys",
+    "Toggle Debug Data Dump",
+    "", // <RESERVED>
+    "", // cgs
+};
+
 const uint32_t CheatFunctionFlags [NUMCHEATS] =
 {
     1 << CHEATFUNC_GOD,
@@ -89,8 +120,8 @@ const uint32_t CheatFunctionFlags [NUMCHEATS] =
     (1 << CHEATFUNC_GOD) | (1 << CHEATFUNC_GIVEEVERYTHING),
 };
 
-// KEEPINSYNC game.h: enum CheatCodeFunctions
-// KEEPINSYNC menus.c: MenuEntry_t ME_CheatCodes[]
+// KEEPINSYNC cheats.h: enum CheatCodeFunctions
+// KEEPINSYNC menus.cpp: MenuEntry_t ME_CheatCodes[]
 const uint8_t CheatFunctionIDs[NUMCHEATS] =
 {
     CHEAT_CASHMAN,
@@ -115,8 +146,6 @@ const uint8_t CheatFunctionIDs[NUMCHEATS] =
     CHEAT_COORDS,
     CHEAT_DEBUG,
 };
-
-char const * const g_NAMMattCheatQuote = "Matt Saettler.  matts@saettler.com";
 
 #ifndef EDUKE32_STANDALONE
 void G_SetupCheats(void)
@@ -216,15 +245,17 @@ static void G_CheatGetInv(DukePlayer_t *pPlayer)
 static void end_cheat(DukePlayer_t * const pPlayer)
 {
     pPlayer->cheat_phase = 0;
+    g_cheatBufLen = 0;
     KB_FlushKeyboardQueue();
+    KB_ClearKeysDown();
 }
 
-static int32_t cheatbuflen;
+int g_cheatBufLen;
 static int8_t cheatbuf[MAXCHEATLEN];
 
 void G_DoCheats(void)
 {
-    DukePlayer_t * const pPlayer = g_player[myconnectindex].ps;
+    auto const pPlayer = g_player[myconnectindex].ps;
     int consoleCheat = 0;
     int cheatNum;
 
@@ -232,7 +263,7 @@ void G_DoCheats(void)
     {
         cheatNum = osdcmd_cheatsinfo_stat.cheatnum;
 
-        if (ud.player_skill == 4)
+        if (!FURY && ud.player_skill == 4)
         {
             switch (cheatNum)
             {
@@ -285,31 +316,33 @@ void G_DoCheats(void)
             if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')))
             {
                 pPlayer->cheat_phase = 0;
+                g_cheatBufLen = 0;
                 //                P_DoQuote(QUOTE_46,pPlayer);
                 return;
             }
 
-            cheatbuf[cheatbuflen++] = (int8_t) ch;
+            cheatbuf[g_cheatBufLen++] = (int8_t) ch;
             // This assertion is not obvious, but it should hold because of the
             // cheat string matching logic below.
-            Bassert(cheatbuflen < (signed)sizeof(cheatbuf));
-            cheatbuf[cheatbuflen] = 0;
+            Bassert(g_cheatBufLen < (signed)sizeof(cheatbuf));
+            cheatbuf[g_cheatBufLen] = 0;
             //            KB_ClearKeysDown();
 
             for (cheatNum=0; cheatNum < NUMCHEATCODES; cheatNum++)
             {
-                for (bssize_t j = 0; j<cheatbuflen; j++)
+                for (bssize_t j = 0; j<g_cheatBufLen; j++)
                 {
                     if (cheatbuf[j] == CheatStrings[cheatNum][j] || (CheatStrings[cheatNum][j] == '#' && ch >= '0' && ch <= '9'))
                     {
                         if (CheatStrings[cheatNum][j+1] == 0) goto FOUNDCHEAT;
-                        if (j == cheatbuflen-1) return;
+                        if (j == g_cheatBufLen-1) return;
                     }
                     else break;
                 }
             }
 
             pPlayer->cheat_phase = 0;
+            g_cheatBufLen = 0;
             return;
 
         FOUNDCHEAT:;
@@ -380,9 +413,9 @@ void G_DoCheats(void)
                 {
                 case CHEAT_WEAPONS:
                 {
-                    int const weaponLimit = (VOLUMEONE) ? 6 : 0;
+                    int const weaponLimit = (VOLUMEONE) ? SHRINKER_WEAPON : MAX_WEAPONS;
 
-                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < MAX_WEAPONS-weaponLimit; weaponNum++)
+                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < weaponLimit; weaponNum++)
                     {
                         P_AddAmmo(pPlayer, weaponNum, pPlayer->max_ammo_amount[weaponNum]);
                         pPlayer->gotweapon |= (1<<weaponNum);
@@ -432,8 +465,7 @@ void G_DoCheats(void)
 
                 case CHEAT_ALLEN:
                     P_DoQuote(QUOTE_CHEAT_ALLEN, pPlayer);
-                    pPlayer->cheat_phase = 0;
-                    KB_ClearKeyDown(sc_N);
+                    end_cheat(pPlayer);
                     return;
 
                 case CHEAT_CORNHOLIO:
@@ -502,12 +534,12 @@ void G_DoCheats(void)
 
                 case CHEAT_STUFF:
                 {
-                    int const weaponLimit = (VOLUMEONE) ? 6 : 0;
+                    int const weaponLimit = (VOLUMEONE) ? SHRINKER_WEAPON : MAX_WEAPONS;
 
-                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < MAX_WEAPONS-weaponLimit; weaponNum++)
+                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < weaponLimit; weaponNum++)
                         pPlayer->gotweapon |= (1<<weaponNum);
 
-                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < MAX_WEAPONS-weaponLimit; weaponNum++)
+                    for (bssize_t weaponNum = PISTOL_WEAPON; weaponNum < weaponLimit; weaponNum++)
                         P_AddAmmo(pPlayer, weaponNum, pPlayer->max_ammo_amount[weaponNum]);
 
                     G_CheatGetInv(pPlayer);
@@ -568,7 +600,7 @@ void G_DoCheats(void)
                 case CHEAT_VIEW:
                     pPlayer->over_shoulder_on ^= 1;
                     CAMERADIST = 0;
-                    CAMERACLOCK = totalclock;
+                    CAMERACLOCK = (int32_t) totalclock;
                     //                    P_DoQuote(QUOTE_CHEATS_DISABLED,pPlayer);
                     end_cheat(pPlayer);
                     return;
@@ -600,8 +632,7 @@ void G_DoCheats(void)
 
                 case CHEAT_CASHMAN:
                     ud.cashman = 1-ud.cashman;
-                    KB_ClearKeyDown(sc_N);
-                    pPlayer->cheat_phase = 0;
+                    end_cheat(pPlayer);
                     return;
 
                 case CHEAT_ITEMS:
@@ -614,8 +645,8 @@ void G_DoCheats(void)
                 case CHEAT_SHOWMAP: // SHOW ALL OF THE MAP TOGGLE;
                     ud.showallmap = !ud.showallmap;
 
-                    for (bssize_t i=0; i<(MAXSECTORS>>3); i++)
-                        show2dsector[i] = ud.showallmap*255;
+                    for (char & i : show2dsector)
+                        i = ud.showallmap*255;
 
                     P_DoQuote(ud.showallmap ? QUOTE_SHOW_MAP_ON : QUOTE_SHOW_MAP_OFF,
                         pPlayer);
@@ -626,7 +657,7 @@ void G_DoCheats(void)
                 case CHEAT_TODD:
                     if (NAM)
                     {
-                        Bstrcpy(apStrings[QUOTE_RESERVED4], g_NAMMattCheatQuote);
+                        Bstrcpy(apStrings[QUOTE_RESERVED4], CheatDescriptions[CHEAT_TODD]);
                         P_DoQuote(QUOTE_RESERVED4, pPlayer);
                     }
                     else
@@ -638,7 +669,7 @@ void G_DoCheats(void)
                     return;
 
                 case CHEAT_RATE:
-                    if (ud.showfps++ > 2)
+                    if (++ud.showfps > 3)
                         ud.showfps = 0;
 
                     end_cheat(pPlayer);
@@ -646,7 +677,6 @@ void G_DoCheats(void)
 
                 case CHEAT_BETA:
                     P_DoQuote(QUOTE_CHEAT_BETA, pPlayer);
-                    KB_ClearKeyDown(sc_H);
                     end_cheat(pPlayer);
                     return;
 
@@ -675,8 +705,8 @@ void G_DoCheats(void)
                 case CHEAT_RESERVED3:
                     ud.eog = 1;
                     pPlayer->player_par = 0;
-                    pPlayer->gm |= MODE_EOL;
-                    KB_FlushKeyboardQueue();
+                    pPlayer->gm |= MODE_EOL;;
+                    end_cheat(pPlayer);
                     return;
 
                 default:
@@ -702,7 +732,7 @@ void G_DoCheats(void)
         {
             if (pPlayer->cheat_phase == -1)
             {
-                if (ud.player_skill == 4)
+                if (!FURY && ud.player_skill == 4)
                 {
                     P_DoQuote(QUOTE_CHEATS_DISABLED, pPlayer);
                     pPlayer->cheat_phase = 0;
@@ -711,13 +741,14 @@ void G_DoCheats(void)
                 {
                     pPlayer->cheat_phase = 1;
                     //                    P_DoQuote(QUOTE_25,pPlayer);
-                    cheatbuflen = 0;
                 }
+                g_cheatBufLen = 0;
                 KB_FlushKeyboardQueue();
             }
             else if (pPlayer->cheat_phase != 0)
             {
                 pPlayer->cheat_phase = 0;
+                g_cheatBufLen = 0;
                 KB_ClearKeyDown((uint8_t) CheatKeys[0]);
                 KB_ClearKeyDown((uint8_t) CheatKeys[1]);
             }

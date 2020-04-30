@@ -22,13 +22,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #pragma once
 
-extern void G_DoCheats(void);
-extern void G_SetupCheats(void);
+#define MAXCHEATLEN 20
+#define MAXCHEATDESC 64
+#define NUMCHEATCODES (int32_t) ARRAY_SIZE(CheatStrings)
 
-extern char const * const g_NAMMattCheatQuote;
+void G_DoCheats(void);
+void G_SetupCheats(void);
+extern int g_cheatBufLen;
 
-// Cheats
-// KEEPINSYNC game.c: char CheatStrings[][]
 enum cheatindex_t
 {
     CHEAT_CORNHOLIO,  // 0
@@ -62,9 +63,10 @@ enum cheatindex_t
 };
 
 extern char CheatStrings[NUMCHEATS][MAXCHEATLEN];
+extern char CheatDescriptions[NUMCHEATS][MAXCHEATDESC];
 
-// KEEPINSYNC game.c: uint8_t CheatFunctionIDs[]
-// KEEPINSYNC menus.c: MenuEntry_t ME_CheatCodes[]
+// KEEPINSYNC cheats.cpp: uint8_t CheatFunctionIDs[]
+// KEEPINSYNC menus.cpp: MenuEntry_t ME_CheatCodes[]
 enum CheatCodeFunctions
 {
     CHEATFUNC_CASHMAN,

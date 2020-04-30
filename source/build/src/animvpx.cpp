@@ -27,7 +27,7 @@ const char *animvpx_read_ivf_header_errmsg[] = {
 
 EDUKE32_STATIC_ASSERT(sizeof(animvpx_ivf_header_t) == 32);
 
-int32_t animvpx_read_ivf_header(int32_t inhandle, animvpx_ivf_header_t *hdr)
+int32_t animvpx_read_ivf_header(buildvfs_kfd inhandle, animvpx_ivf_header_t *hdr)
 {
     int32_t err;
 
@@ -85,7 +85,7 @@ static void get_codec_error(animvpx_codec_ctx *codec)
 }
 
 // no checks for double-init!
-int32_t animvpx_init_codec(const animvpx_ivf_header_t *info, int32_t inhandle, animvpx_codec_ctx *codec)
+int32_t animvpx_init_codec(const animvpx_ivf_header_t *info, buildvfs_kfd inhandle, animvpx_codec_ctx *codec)
 {
     vpx_codec_dec_cfg_t cfg;
 
@@ -98,7 +98,7 @@ int32_t animvpx_init_codec(const animvpx_ivf_header_t *info, int32_t inhandle, a
 
     //
     codec->inhandle = inhandle;
-    codec->pic = (uint8_t *)Bcalloc(info->width*info->height,4);
+    codec->pic = (uint8_t *)Xcalloc(info->width*info->height,4);
 
     codec->compbuflen = codec->compbufallocsiz = 0;
     codec->compbuf = NULL;
@@ -152,7 +152,7 @@ int32_t animvpx_uninit_codec(animvpx_codec_ctx *codec)
 ////////// FRAME RETRIEVAL //////////
 
 // read one IVF/VP8 frame, which may code multiple "picture-frames"
-static int32_t animvpx_read_frame(int32_t inhandle, uint8_t **bufptr, uint32_t *bufsizptr, uint32_t *bufallocsizptr)
+static int32_t animvpx_read_frame(buildvfs_kfd inhandle, uint8_t **bufptr, uint32_t *bufsizptr, uint32_t *bufallocsizptr)
 {
 #pragma pack(push,1)
     struct { uint32_t framesiz; uint64_t timestamp; } hdr;
@@ -168,14 +168,14 @@ static int32_t animvpx_read_frame(int32_t inhandle, uint8_t **bufptr, uint32_t *
 
     if (!*bufptr)
     {
-        *bufptr = (uint8_t *)Bmalloc(hdr.framesiz);
+        *bufptr = (uint8_t *)Xmalloc(hdr.framesiz);
         if (!*bufptr)
             return 2;
         *bufallocsizptr = hdr.framesiz;
     }
     else if (*bufallocsizptr < hdr.framesiz)
     {
-        *bufptr = (uint8_t *)Brealloc(*bufptr, hdr.framesiz);
+        *bufptr = (uint8_t *)Xrealloc(*bufptr, hdr.framesiz);
         if (!*bufptr)
             return 2;
         *bufallocsizptr = hdr.framesiz;
@@ -434,14 +434,13 @@ void animvpx_setup_glstate(int32_t animvpx_flags)
             OSD_Printf("animvpx link log: %s\n", logbuf);
 
         /* Finally, use the program. */
-        useShaderProgram(PHandle);
+        polymost_useShaderProgram(PHandle);
     }
 #endif
 
     ////////// GL STATE //////////
 
-    //Force fullscreen (glox1=-1 forces it to restore afterwards)
-    glViewport(0,0,xdim,ydim); glox1 = -1;
+    glViewport(0,0,xdim,ydim);
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
@@ -457,7 +456,6 @@ void animvpx_setup_glstate(int32_t animvpx_flags)
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
-    glEnable(GL_TEXTURE_2D);
 
 #ifdef USE_GLEXT
     glActiveTexture(GL_TEXTURE0);
@@ -491,7 +489,7 @@ void animvpx_restore_glstate(void)
 #ifdef USE_GLEXT
     if (glinfo.glsl)
     {
-        useShaderProgram(0);
+        polymost_useShaderProgram(0);
         polymost_resetProgram();
     }
 #endif

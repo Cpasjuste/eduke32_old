@@ -11,6 +11,8 @@ SYNTHESIS := 0
 override empty :=
 override space := $(empty) $(empty)
 override comma := ,
+override paren_open := (
+override paren_close := )
 
 
 ##### Detect platform
@@ -107,6 +109,7 @@ endif
 DONT_PRINT := > $(NULLSTREAM) 2>&1
 DONT_PRINT_STDERR := 2> $(NULLSTREAM)
 DONT_FAIL := ; exit 0
+ESCAPE=\\
 
 HAVE_SH := 1
 # when no sh.exe is found in PATH on Windows, no path is prepended to it
@@ -126,9 +129,16 @@ endef
 define RMDIR
     rm -rf $(filter-out / *,$1)
 endef
+define CAT
+    cat $1
+endef
+define RAW_ECHO
+    echo '$1'
+endef
 
 ifeq (0,$(HAVE_SH))
     DONT_FAIL := & rem
+    ESCAPE=^
 
     define LL
         dir $(subst /,\,$1)
@@ -141,6 +151,12 @@ ifeq (0,$(HAVE_SH))
     endef
     define RMDIR
         rmdir /s /q $(subst /,\,$(filter-out / *,$1)) $(DONT_PRINT_STDERR) $(DONT_FAIL)
+    endef
+    define CAT
+        type $(subst /,\,$1)
+    endef
+    define RAW_ECHO
+        echo $(subst ",$(ESCAPE)",$(subst $(paren_open),$(ESCAPE)$(paren_open),$(subst $(paren_close),$(ESCAPE)$(paren_close),$1)))
     endef
 
     # if, printf, exit, and ; are unavailable without sh
@@ -310,8 +326,8 @@ endif
 #  LTO - 1 := enable link-time optimization
 
 # Optional overrides for text
-APPNAME :=
-APPBASENAME :=
+APPNAME ?=
+APPBASENAME ?=
 
 # Build toggles
 RELEASE := 1
@@ -322,24 +338,29 @@ MEMMAP := 0
 CPLUSPLUS := 1
 
 # Feature toggles
-STANDALONE := 0
-NETCODE := 1
-STARTUP_WINDOW := 1
-SIMPLE_MENU := 0
-POLYMER := 1
+STANDALONE ?= 0
+NETCODE ?= 1
+STARTUP_WINDOW ?= 1
+RETAIL_MENU ?= 0
+POLYMER ?= 1
 USE_OPENGL := 1
 LUNATIC := 0
 USE_LUAJIT_2_1 := 0
 
 # Library toggles
 HAVE_GTK2 := 1
-USE_LIBVPX := 1
+USE_LIBVPX ?= 1
 HAVE_VORBIS := 1
 HAVE_FLAC := 1
 HAVE_XMP := 1
 RENDERTYPE := SDL
-MIXERTYPE := SDL
 SDL_TARGET := 2
+USE_PHYSFS := 0
+
+ifneq (0,$(USE_PHYSFS))
+    # PhysFS requires this to be off
+    override CPLUSPLUS := 0
+endif
 
 # Debugging/Build options
 FORCEDEBUG := 0
@@ -363,12 +384,6 @@ ifneq (100,$(RELEASE)$(PROFILER)$(ALLOCACHE_AS_MALLOC))
 endif
 
 ifeq ($(PLATFORM),WINDOWS)
-    MIXERTYPE := WIN
-    ifneq ($(RENDERTYPE),SDL)
-        ifeq ($(MIXERTYPE),SDL)
-            override MIXERTYPE := WIN
-        endif
-    endif
     override HAVE_GTK2 := 0
 else ifeq ($(PLATFORM),DARWIN)
     HAVE_GTK2 := 0
@@ -401,6 +416,7 @@ ifneq ($(FORCEDEBUG),0)
     override STRIP :=
 endif
 
+DBGLEVEL :=
 ifeq ($(RELEASE),0)
     OPTLEVEL := 0
 
@@ -508,10 +524,17 @@ ifeq ($(PLATFORM),WINDOWS)
     ASFORMAT := win$(BITS)
     ASFLAGS += -DUNDERSCORES
 
+    ifneq ($(RELEASE),0)
+        ifeq ($(FORCEDEBUG),0)
+            DYNAMICBASE := ,--dynamicbase
+        endif
+    endif
+    LINKERFLAGS += -Wl,--enable-auto-import,--nxcompat$(DYNAMICBASE)
     ifneq ($(findstring x86_64,$(COMPILERTARGET)),x86_64)
         LINKERFLAGS += -Wl,--large-address-aware
+    else
+        LINKERFLAGS += -Wl,--high-entropy-va
     endif
-    LINKERFLAGS += -Wl,--enable-auto-import
 
     LUAJIT_BCOPTS := -o windows
     ifeq (32,$(BITS))
@@ -552,6 +575,9 @@ else ifeq ($(PLATFORM),$(filter $(PLATFORM),DINGOO GCW))
     COMPILERFLAGS += -D__OPENDINGUX__
 else ifeq ($(PLATFORM),SKYOS)
     COMPILERFLAGS += -DUNDERSCORES
+else ifeq ($(SUBPLATFORM),LINUX)
+    # Locate .so files
+    LINKERFLAGS += -Wl,-rpath,'$$ORIGIN' -Wl,-z,origin
 endif
 ASFLAGS += -f $(ASFORMAT)
 
@@ -568,6 +594,8 @@ ifndef OPTOPT
         else
             ifeq ($(PLATFORM),DARWIN)
                 OPTOPT := -march=core2 -mmmx -msse -msse2 -msse3 -mssse3
+            else
+                OPTOPT := -march=nocona
             endif
         endif
     endif
@@ -575,13 +603,20 @@ ifndef OPTOPT
         ifeq ($(PLATFORM),DARWIN)
             OPTOPT := -march=nocona -mmmx -msse -msse2 -msse3
         else
-            OPTOPT := -march=pentium3
+            USE_SSE2 := 0
+            ifneq (0,$(USE_SSE2))
+                OPTOPT := -march=pentium-m
+            else
+                OPTOPT := -march=pentium3
+            endif
             ifneq (0,$(GCC_PREREQ_4))
                 OPTOPT += -mtune=generic
                 # -mstackrealign
             endif
-            OPTOPT += -mmmx
-            # -msse2 -mfpmath=sse,387 -malign-double
+            OPTOPT += -mmmx -msse -mfpmath=sse
+            ifneq (0,$(USE_SSE2))
+                OPTOPT += -msse2
+            endif
         endif
     endif
     ifeq ($(PLATFORM),WII)
@@ -603,7 +638,7 @@ endif
 
 ifneq ($(RELEASE)$(FORCEDEBUG),10)
     ifeq ($(PACKAGE_REPOSITORY),0)
-        COMMONFLAGS += -g
+        COMMONFLAGS += -g$(DBGLEVEL)
         ifeq (0,$(CLANG))
             ifneq ($(PLATFORM),WII)
                 COMMONFLAGS += -fno-omit-frame-pointer
@@ -709,12 +744,33 @@ W_GCC_4_1 := -Wno-attributes
 W_GCC_4_2 := $(W_STRICT_OVERFLOW)
 W_GCC_4_4 := -Wno-unused-result
 W_GCC_4_5 := -Wlogical-op -Wcast-qual
+W_GCC_6 := -Wduplicated-cond -Wnull-dereference
+W_GCC_7 := -Wduplicated-branches
+W_GCC_8 := -Warray-bounds=2
+W_GCC_9 := -Wmultistatement-macros
 W_CLANG := -Wno-unused-value -Wno-parentheses -Wno-unknown-warning-option
 
 ifeq (0,$(CLANG))
     W_CLANG :=
 
+    ifneq (,$(filter 4 5 6 7 8,$(GCC_MAJOR)))
+        W_GCC_9 :=
+        ifneq (,$(filter 4 5 6 7,$(GCC_MAJOR)))
+            W_GCC_8 :=
+            ifneq (,$(filter 4 5 6,$(GCC_MAJOR)))
+                W_GCC_7 :=
+                ifneq (,$(filter 4 5,$(GCC_MAJOR)))
+                    W_GCC_6 :=
+                endif
+            endif     
+        endif
+    endif
+
     ifeq (0,$(GCC_PREREQ_4))
+        W_GCC_9 :=
+        W_GCC_8 :=
+        W_GCC_7 :=
+        W_GCC_6 :=
         W_GCC_4_5 :=
         W_GCC_4_4 :=
         ifeq (0,$(OPTLEVEL))
@@ -756,6 +812,10 @@ CWARNS := -W -Wall \
     $(W_GCC_4_2) \
     $(W_GCC_4_4) \
     $(W_GCC_4_5) \
+    $(W_GCC_6) \
+    $(W_GCC_7) \
+    $(W_GCC_8) \
+    $(W_GCC_9) \
     $(W_CLANG) \
     #-Wstrict-prototypes \
     #-Waggregate-return \
@@ -766,10 +826,10 @@ CWARNS := -W -Wall \
 ##### Features
 
 ifneq (,$(APPNAME))
-    COMPILERFLAGS += -DAPPNAME=\"$(APPNAME)\"
+    COMPILERFLAGS += "-DAPPNAME=\"$(APPNAME)\""
 endif
 ifneq (,$(APPBASENAME))
-    COMPILERFLAGS += -DAPPBASENAME=\"$(APPBASENAME)\"
+    COMPILERFLAGS += "-DAPPBASENAME=\"$(APPBASENAME)\""
 endif
 
 ifneq (0,$(NOASM))
@@ -786,7 +846,7 @@ ifneq (0,$(MEMMAP))
     endif
 endif
 
-COMPILERFLAGS += -DRENDERTYPE$(RENDERTYPE)=1 -DMIXERTYPE$(MIXERTYPE)=1
+COMPILERFLAGS += -DRENDERTYPE$(RENDERTYPE)=1
 
 ifeq (0,$(NETCODE))
     COMPILERFLAGS += -DNETCODE_DISABLE
@@ -794,8 +854,8 @@ endif
 ifneq (0,$(STARTUP_WINDOW))
     COMPILERFLAGS += -DSTARTUP_WINDOW
 endif
-ifneq (0,$(SIMPLE_MENU))
-    COMPILERFLAGS += -DEDUKE32_SIMPLE_MENU
+ifneq (0,$(RETAIL_MENU))
+    COMPILERFLAGS += -DEDUKE32_RETAIL_MENU
 endif
 ifneq (0,$(STANDALONE))
     COMPILERFLAGS += -DEDUKE32_STANDALONE
@@ -875,6 +935,10 @@ ifeq ($(RENDERTYPE),SDL)
         endif
     endif
 
+    ifeq ($(PLATFORM), WINDOWS)
+        SDLCONFIG :=
+    endif
+
     ifeq ($(PLATFORM),WII)
         SDLCONFIG :=
     else ifeq ($(PLATFORM),SKYOS)
@@ -895,17 +959,10 @@ ifeq ($(RENDERTYPE),SDL)
         ifeq ($(PLATFORM),DARWIN)
             APPLE_FRAMEWORKS := /Library/Frameworks
             LIBDIRS += -F$(APPLE_FRAMEWORKS)
-            ifeq ($(MIXERTYPE),SDL)
-                COMPILERFLAGS += -I$(APPLE_FRAMEWORKS)/$(SDLNAME)_mixer.framework/Headers
-                LIBS += -Wl,-framework,$(SDLNAME)_mixer
-            endif
             COMPILERFLAGS += -I$(APPLE_FRAMEWORKS)/$(SDLNAME).framework/Headers
             LIBS += -Wl,-framework,$(SDLNAME) -Wl,-rpath -Wl,"@loader_path/../Frameworks"
         endif
     else
-        ifeq ($(MIXERTYPE),SDL)
-            LIBS += -l$(SDLNAME)_mixer
-        endif
         ifneq ($(SDLCONFIG),)
             SDLCONFIG_CFLAGS := $(strip $(subst -Dmain=SDL_main,,$(shell $(SDLCONFIG) --cflags)))
             SDLCONFIG_LIBS := $(strip $(subst -mwindows,,$(shell $(SDLCONFIG) --libs)))
@@ -940,10 +997,12 @@ ifeq ($(PLATFORM),WINDOWS)
     LIBS += -lmingwex -lgdi32 -lpthread
     ifeq ($(RENDERTYPE),WIN)
         LIBS += -ldxguid
+    else ifeq ($(SDL_TARGET),1)
+        LIBS += -ldxguid -lmingw32 -limm32 -lole32 -loleaut32 -lversion
     else
-        LIBS += -ldxguid_sdl -lmingw32 -limm32 -lole32 -loleaut32 -lversion
+        LIBS += -ldxguid_sdl -lmingw32 -limm32 -lole32 -loleaut32 -lversion -lsetupapi
     endif
-    LIBS += -lcomctl32 -lwinmm $(L_SSP) -lwsock32 -lws2_32 -lshlwapi
+    LIBS += -lcomctl32 -lwinmm $(L_SSP) -lwsock32 -lws2_32 -lshlwapi -luuid
     # -lshfolder
 else ifeq ($(PLATFORM),SKYOS)
     LIBS += -lnet
@@ -982,7 +1041,7 @@ ifeq (,$(VC_REV))
     VC_REV := $(word 2,$(subst @, ,$(filter git-svn-id:$(GIT_SVN_URL)@%,$(subst : ,:,$(shell git log -1 $(GIT_SVN_FETCH::%=%))))))
 endif
 ifneq (,$(VC_REV)$(VC_REV_CUSTOM))
-    REVFLAG := -DREV="\"r$(VC_REV)$(VC_REV_CUSTOM)\""
+    REVFLAG := -DREV="r$(VC_REV)$(VC_REV_CUSTOM)"
 endif
 
 

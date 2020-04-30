@@ -67,8 +67,6 @@ static void Gv_Clear(void)
 
     hash_init(&h_gamevars);
     hash_init(&h_arrays);
-
-    return;
 }
 
 #define ASSERT_IMPLIES(x, y) Bassert(!(x) || (y))
@@ -251,7 +249,7 @@ int32_t __fastcall Gv_GetVarN(int32_t id)  // 'N' for "no side-effects"... vars 
     }
 }
 
-int32_t __fastcall Gv_GetVarX(int32_t id)
+int32_t __fastcall Gv_GetVar(int32_t id)
 {
     int32_t negateResult = !!(id&M32_FLAG_NEGATE);
 
@@ -352,10 +350,12 @@ int32_t __fastcall Gv_GetVarX(int32_t id)
             return (aGameVars[id].val.plValues[vm.g_st] ^ -negateResult) + negateResult;
         case GAMEVAR_FLOATPTR:
         {
-            float fval = *(float *)aGameVars[id].val.lValue;
+            union { int32_t ival; float fval; };
+
+            fval = *(float *)aGameVars[id].val.plValues;
             if (negateResult)
                 fval *= -1;
-            return *(int32_t *)&fval;
+            return ival;
         }
         case GAMEVAR_INTPTR:
             return (*((int32_t *)aGameVars[id].val.lValue) ^ -negateResult) + negateResult;
@@ -380,7 +380,7 @@ int32_t __fastcall Gv_GetVarX(int32_t id)
 }
 
 
-void __fastcall Gv_SetVarX(int32_t id, int32_t lValue)
+void __fastcall Gv_SetVar(int32_t id, int32_t lValue)
 {
     switch (id&M32_VARTYPE_MASK)
     {
@@ -467,8 +467,9 @@ void __fastcall Gv_SetVarX(int32_t id, int32_t lValue)
             return;
         case GAMEVAR_FLOATPTR:
         {
-            int32_t ival = lValue;
-            float fval = *(float *)&ival;
+            union { int32_t ival; float fval; };
+            ival = lValue;
+
             if (fval!=fval || fval<-3.4e38 || fval > 3.4e38)
             {
                 M32_ERROR("Gv_SetVarX(): tried to set float var to NaN or infinity");
@@ -614,6 +615,7 @@ static void Gv_AddSystemVars(void)
 
     Gv_NewVar("mousxplc",(intptr_t)&mousxplc, GAMEVAR_READONLY | GAMEVAR_INTPTR | GAMEVAR_SYSTEM);
     Gv_NewVar("mousyplc",(intptr_t)&mousyplc, GAMEVAR_READONLY | GAMEVAR_INTPTR | GAMEVAR_SYSTEM);
+    Gv_NewVar("mousebits",(intptr_t)&g_mouseBits, GAMEVAR_INTPTR | GAMEVAR_SYSTEM);
 
     Gv_NewVar("zoom",(intptr_t)&zoom, GAMEVAR_READONLY | GAMEVAR_INTPTR | GAMEVAR_SYSTEM);
     Gv_NewVar("drawlinepat",(intptr_t)&m32_drawlinepat, GAMEVAR_INTPTR | GAMEVAR_SYSTEM);

@@ -28,7 +28,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "names2.h"
 #include "panel.h"
 #include "game.h"
-#include "net.h"
+#include "network.h"
 #include "tags.h"
 #include "sector.h"
 #include "text.h"
@@ -45,7 +45,6 @@ void DoRotatorStopInterp(short SpriteNum);
 void ReverseRotator(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = u->SpriteP;
     ROTATORp r;
 
     r = u->rotator;
@@ -96,7 +95,6 @@ void SetRotatorActive(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = u->SpriteP;
-    SECTORp sectp = &sector[sp->sectnum];
     ROTATORp r;
 
     r = u->rotator;
@@ -120,7 +118,6 @@ void SetRotatorInactive(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = u->SpriteP;
-    SECTORp sectp = &sector[sp->sectnum];
 
     DoRotatorStopInterp(SpriteNum);
 
@@ -133,10 +130,7 @@ void SetRotatorInactive(short SpriteNum)
 // called for operation from the space bar
 short DoRotatorOperate(PLAYERp pp, short sectnum)
 {
-    USERp fu;
-    SPRITEp fsp;
     short match;
-    short i,nexti;
 
     match = sector[sectnum].hitag;
 
@@ -238,7 +232,6 @@ TestRotatorMatchActive(short match)
 {
     USERp fu;
     SPRITEp fsp;
-    short sectnum;
 
     short i,nexti;
 
@@ -277,8 +270,12 @@ void DoRotatorSetInterp(short SpriteNum)
         setinterpolation(&wall[w].x);
         setinterpolation(&wall[w].y);
 
-        setinterpolation(&wall[DRAG_WALL(w)].x);
-        setinterpolation(&wall[DRAG_WALL(w)].y);
+        uint16_t const nextwall = wall[w].nextwall;
+        if (nextwall < MAXWALLS)
+        {
+            setinterpolation(&wall[wall[nextwall].point2].x);
+            setinterpolation(&wall[wall[nextwall].point2].y);
+        }
     }
 }
 
@@ -296,8 +293,12 @@ void DoRotatorStopInterp(short SpriteNum)
         stopinterpolation(&wall[w].x);
         stopinterpolation(&wall[w].y);
 
-        stopinterpolation(&wall[DRAG_WALL(w)].x);
-        stopinterpolation(&wall[DRAG_WALL(w)].y);
+        uint16_t const nextwall = wall[w].nextwall;
+        if (nextwall < MAXWALLS)
+        {
+            stopinterpolation(&wall[wall[nextwall].point2].x);
+            stopinterpolation(&wall[wall[nextwall].point2].y);
+        }
     }
 }
 
@@ -429,9 +430,6 @@ int DoRotator(short SpriteNum)
 {
     USERp u = User[SpriteNum];
     SPRITEp sp = u->SpriteP;
-    SECTORp sectp = &sector[sp->sectnum];
-    int *lptr;
-    int amt;
 
     // could move this inside sprite control
     DoRotatorMove(SpriteNum);

@@ -15,17 +15,15 @@
 #ifdef _MSC_VER
 # define NEED_CRTDBG_H
 #endif
-#include "windows_inc.h"
 
+#include "windows_inc.h"
+#include "build_cpuid.h"
 #include "winlayer.h"
 #include "rawinput.h"
 #include "mutex.h"
-
 #include "winbits.h"
 #include "engine_priv.h"
-
 #include "dxdidf.h"	// comment this out if c_dfDI* is being reported as multiply defined
-
 #include <signal.h>
 
 // undefine to restrict windowed resolutions to conventional sizes
@@ -96,6 +94,7 @@ int32_t yres=-1;
 int32_t fullscreen=0;
 int32_t bpp=0;
 int32_t bytesperline=0;
+double refreshfreq;
 int32_t lockcount=0;
 int32_t glcolourdepth=32;
 static int32_t vsync_renderlayer;
@@ -128,7 +127,7 @@ static GUID                  guidDevs;
 char di_disabled = 0;
 static char di_devacquired;
 static HANDLE di_inputevt = 0;
-static int32_t joyblast=0;
+//static int32_t joyblast=0;
 
 static struct
 {
@@ -157,7 +156,6 @@ HWND win_gethwnd(void)
 {
     return hWindow;
 }
-
 
 //
 // win_gethinstance() -- gets the application instance
@@ -228,7 +226,6 @@ static void SignalHandler(int32_t signum)
             setgammaramp(&sysgamma);
         gammabrightness = 0;
         app_crashhandler();
-        uninitsystem();
         if (stdout) fclose(stdout);
         break;
     default:
@@ -281,14 +278,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nC
     _CrtSetDbgFlag(_CRTDBG_CHECK_ALWAYS_DF);
 #endif
 
-    if (!CheckWinVersion() || hPrevInst)
-    {
-        MessageBox(0, "This application requires a newer Windows version to run.",
-                   apptitle, MB_OK|MB_ICONSTOP);
-        return -1;
-    }
+    mutex_init(&m_initprintf);
 
-    win_open();
+    if (windowsPreInit())
+        return -1;
 
     hdc = GetDC(NULL);
     r = GetDeviceCaps(hdc, BITSPIXEL);
@@ -301,7 +294,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nC
     }
 
     // carve up the command line into more recognizable pieces
-    argvbuf = Bstrdup(GetCommandLine());
+    argvbuf = Xstrdup(GetCommandLine());
     _buildargc = 0;
     if (argvbuf)
     {
@@ -363,7 +356,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nC
         }
         *wp = 0;
 
-        _buildargv = (const char **)Bmalloc(sizeof(char *)*(_buildargc+1));
+        _buildargv = (const char **)Xmalloc(sizeof(char *)*(_buildargc+1));
         wp = argvbuf;
         for (i=0; i<_buildargc; i++,wp++)
         {
@@ -376,9 +369,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nC
     maybe_redirect_outputs();
 
 #ifdef USE_OPENGL
-    if ((argp = Bgetenv("BUILD_NOFOG")) != NULL)
+    if ((argp = Bgetenv("EDUKE32_NO_OPENGL_FOG")) != NULL)
         nofog = Batol(argp);
-    if (Bgetenv("BUILD_FORCEGL") != NULL)
+    if (Bgetenv("EDUKE32_NO_OPENGL_BLACKLIST") != NULL)
         forcegl = 1;
 #endif
 
@@ -396,8 +389,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nC
                MB_OK|MB_ICONINFORMATION);
 #endif
 
-    //    atexit(uninitsystem);
-
     startwin_open();
 
     r = app_main(_buildargc, _buildargv);
@@ -408,15 +399,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR lpCmdLine, int nC
 
     startwin_close();
 
-    win_close();
-
-    Bfree(argvbuf);
+    Xfree(argvbuf);
 
     return r;
 }
 
 
-static int32_t set_maxrefreshfreq(osdfuncparm_t const * const parm)
+static int32_t set_maxrefreshfreq(osdcmdptr_t parm)
 {
     int32_t freq;
     if (parm->numparms == 0)
@@ -471,8 +460,6 @@ int32_t initsystem(void)
 
     //    initprintf("Initializing Windows DirectX/GDI system interface\n");
 
-    mutex_init(&m_initprintf);
-
     // get the desktop dimensions before anything changes them
     ZeroMemory(&desktopmode, sizeof(DEVMODE));
     desktopmode.dmSize = sizeof(DEVMODE);
@@ -486,10 +473,13 @@ int32_t initsystem(void)
 
     atexit(uninitsystem);
 
+    timerInit(CLOCKTICKSPERSECOND);
+
     frameplace=0;
     lockcount=0;
 
-    win_init();
+    windowsPlatformInit();
+    sysReadCPUID();
 
 #ifdef USE_OPENGL
     if (loadwgl(getenv("BUILD_GLDRV")))
@@ -535,12 +525,12 @@ void uninitsystem(void)
 {
     DestroyAppWindow();
 
+    windowsPlatformCleanup();
+
     startwin_close();
 
     uninitinput();
     timerUninit();
-
-    win_uninit();
 
 #ifdef USE_OPENGL
     //POGO: there is no equivalent to unloadgldriver() with GLAD's loader, but this shouldn't be a problem.
@@ -558,12 +548,13 @@ void uninitsystem(void)
 //
 void system_getcvars(void)
 {
+    windowsDwmSetupComposition(0);
     vsync = videoSetVsync(vsync);
 }
 
 
 //
-// initprintf() -- prints a formatted string to the intitialization window
+// initprintf() -- prints a formatted string to the initialization window
 //
 void initprintf(const char *f, ...)
 {
@@ -574,12 +565,13 @@ void initprintf(const char *f, ...)
     Bvsnprintf(buf, sizeof(buf), f, va);
     va_end(va);
 
+    osdstrings.append(Xstrdup(buf));
     initputs(buf);
 }
 
 
 //
-// initputs() -- prints a string to the intitialization window
+// initputs() -- prints a string to the initialization window
 //
 void initputs(const char *buf)
 {
@@ -674,7 +666,7 @@ int32_t handleevents(void)
 
     if (!appactive || quitevent) rv = -1;
 
-    timerUpdate();
+    timerUpdateClock();
 
     return rv;
 }
@@ -685,11 +677,6 @@ int32_t handleevents(void)
 //
 int32_t initinput(void)
 {
-    int32_t i;
-
-    Win_GetOriginalLayoutName();
-    Win_SetKeyboardLayoutUS(1);
-
     g_mouseEnabled=0;
     memset(keystatus, 0, sizeof(keystatus));
 
@@ -710,8 +697,6 @@ int32_t initinput(void)
 //
 void uninitinput(void)
 {
-    Win_SetKeyboardLayoutUS(0);
-
     mouseUninit();
     UninitDirectInput();
 }
@@ -860,7 +845,8 @@ void releaseallbuttons(void)
         for (i=0; i<32; i++)
             if (joystick.bits & (1<<i)) joystick.pCallback(i+1, 0);
     }
-    joystick.bits = joyblast = 0;
+    joystick.bits = 0;
+    //joyblast = 0;
 
     for (i=0; i<NUMKEYS; i++)
     {
@@ -889,7 +875,7 @@ static BOOL CALLBACK InitDirectInput_enum(LPCDIDEVICEINSTANCE lpddi, LPVOID pvRe
         return DIENUM_CONTINUE;
 
     inputdevices |= 4;
-    d = "CONTROLLER"
+    d = "CONTROLLER";
     Bmemcpy(&guidDevs, &lpddi->guidInstance, sizeof(GUID));
 
     initprintf("    * %s: %s\n", d, lpddi->tszProductName);
@@ -905,7 +891,7 @@ static BOOL CALLBACK InitDirectInput_enumobjects(LPCDIDEVICEOBJECTINSTANCE lpddo
     {
         //initprintf(" Axis: %s (dwOfs=%d)\n", lpddoi->tszName, lpddoi->dwOfs);
 
-        axisdefs[ typecounts[0] ].name = Bstrdup(lpddoi->tszName);
+        axisdefs[ typecounts[0] ].name = Xstrdup(lpddoi->tszName);
         axisdefs[ typecounts[0] ].ofs = lpddoi->dwOfs;
 
         typecounts[0]++;
@@ -914,7 +900,7 @@ static BOOL CALLBACK InitDirectInput_enumobjects(LPCDIDEVICEOBJECTINSTANCE lpddo
     {
         //initprintf(" Button: %s (dwOfs=%d)\n", lpddoi->tszName, lpddoi->dwOfs);
 
-        buttondefs[ typecounts[1] ].name = Bstrdup(lpddoi->tszName);
+        buttondefs[ typecounts[1] ].name = Xstrdup(lpddoi->tszName);
         buttondefs[ typecounts[1] ].ofs = lpddoi->dwOfs;
 
         typecounts[1]++;
@@ -923,7 +909,7 @@ static BOOL CALLBACK InitDirectInput_enumobjects(LPCDIDEVICEOBJECTINSTANCE lpddo
     {
         //initprintf(" POV: %s (dwOfs=%d)\n", lpddoi->tszName, lpddoi->dwOfs);
 
-        hatdefs[ typecounts[2] ].name = Bstrdup(lpddoi->tszName);
+        hatdefs[ typecounts[2] ].name = Xstrdup(lpddoi->tszName);
         hatdefs[ typecounts[2] ].ofs = lpddoi->dwOfs;
 
         typecounts[2]++;
@@ -956,13 +942,13 @@ static BOOL InitDirectInput(void)
         hDInputDLL = LoadLibrary("DINPUT.DLL");
         if (!hDInputDLL)
         {
-            ShowErrorBox("Error loading DINPUT.DLL");
+            windowsShowError("Error loading DINPUT.DLL");
             return TRUE;
         }
     }
 
     aDirectInputCreateA = (HRESULT(WINAPI *)(HINSTANCE, DWORD, LPDIRECTINPUT7A *, LPUNKNOWN))GetProcAddress(hDInputDLL, "DirectInputCreateA");
-    if (!aDirectInputCreateA) ShowErrorBox("Error fetching DirectInputCreateA()");
+    if (!aDirectInputCreateA) windowsShowError("Error fetching DirectInputCreateA()");
 
     result = aDirectInputCreateA(hInstance, DIRECTINPUT_VERSION, &lpDI, NULL);
     if (FAILED(result)) { HorribleDInputDeath("DirectInputCreateA() failed", result); }
@@ -1003,7 +989,7 @@ static BOOL InitDirectInput(void)
     if (di_inputevt == NULL)
     {
         IDirectInputDevice7_Release(dev2);
-        ShowErrorBox("Couldn't create event object");
+        windowsShowError("Couldn't create event object");
         UninitDirectInput();
         return TRUE;
     }
@@ -1036,18 +1022,18 @@ static BOOL InitDirectInput(void)
         else if (result != DI_OK) initprintf("    Fetched controller capabilities with warning: %s\n",GetDInputError(result));
 
         joystick.numAxes    = (uint8_t)didc.dwAxes;
-        joystick.numButtons = min(32,(uint8_t)didc.dwButtons);
+        joystick.numButtons = min<uint8_t>(32,didc.dwButtons);
         joystick.numHats    = (uint8_t)didc.dwPOVs;
         initprintf("Controller has %d axes, %d buttons, and %d hat(s).\n",joystick.numAxes,joystick.numButtons,joystick.numHats);
 
-        axisdefs = (struct _joydef *)Bcalloc(didc.dwAxes, sizeof(struct _joydef));
-        buttondefs = (struct _joydef *)Bcalloc(didc.dwButtons, sizeof(struct _joydef));
+        axisdefs = (struct _joydef *)Xcalloc(didc.dwAxes, sizeof(struct _joydef));
+        buttondefs = (struct _joydef *)Xcalloc(didc.dwButtons, sizeof(struct _joydef));
         if (didc.dwPOVs)
-            hatdefs = (struct _joydef *)Bcalloc(didc.dwPOVs, sizeof(struct _joydef));
+            hatdefs = (struct _joydef *)Xcalloc(didc.dwPOVs, sizeof(struct _joydef));
 
-        joystick.pAxis = (int32_t *)Bcalloc(didc.dwAxes, sizeof(int32_t));
+        joystick.pAxis = (int32_t *)Xcalloc(didc.dwAxes, sizeof(int32_t));
         if (didc.dwPOVs)
-            joystick.pHat = (int32_t *)Bcalloc(didc.dwPOVs, sizeof(int32_t));
+            joystick.pHat = (int32_t *)Xcalloc(didc.dwPOVs, sizeof(int32_t));
 
         result = IDirectInputDevice7_EnumObjects(dev2, InitDirectInput_enumobjects, (LPVOID)typecounts, DIDFT_ALL);
         if (FAILED(result)) { IDirectInputDevice7_Release(dev2); HorribleDInputDeath("Failed getting controller features", result); }
@@ -1075,17 +1061,17 @@ static void UninitDirectInput(void)
 
     if (axisdefs)
     {
-        for (i=joystick.numAxes-1; i>=0; i--) Bfree(axisdefs[i].name);
+        for (i=joystick.numAxes-1; i>=0; i--) Xfree(axisdefs[i].name);
         DO_FREE_AND_NULL(axisdefs);
     }
     if (buttondefs)
     {
-        for (i=joystick.numButtons-1; i>=0; i--) Bfree(buttondefs[i].name);
+        for (i=joystick.numButtons-1; i>=0; i--) Xfree(buttondefs[i].name);
         DO_FREE_AND_NULL(buttondefs);
     }
     if (hatdefs)
     {
-        for (i=joystick.numHats-1; i>=0; i--) Bfree(hatdefs[i].name);
+        for (i=joystick.numHats-1; i>=0; i--) Xfree(hatdefs[i].name);
         DO_FREE_AND_NULL(hatdefs);
     }
 
@@ -1149,6 +1135,10 @@ const char *joyGetName(int32_t what, int32_t num)
     default:
         return NULL;
     }
+}
+
+void joyScanDevices()
+{
 }
 
 //
@@ -1371,132 +1361,6 @@ static const char *GetDInputError(HRESULT code)
 
 
 //-------------------------------------------------------------------------------------------------
-//  TIMER
-//=================================================================================================
-
-static int32_t timerlastsample=0;
-int32_t timerticspersec=0;
-static double msperu64tick = 0;
-static void (*usertimercallback)(void) = NULL;
-
-//  This timer stuff is all Ken's idea.
-
-//
-// installusertimercallback() -- set up a callback function to be called when the timer is fired
-//
-void (*timerSetCallback(void (*callback)(void)))(void)
-{
-    void (*oldtimercallback)(void);
-
-    oldtimercallback = usertimercallback;
-    usertimercallback = callback;
-
-    return oldtimercallback;
-}
-
-
-//
-// inittimer() -- initialize timer
-//
-int32_t timerInit(int32_t tickspersecond)
-{
-    int64_t t;
-
-    if (win_timerfreq) return 0;	// already installed
-
-    //    initprintf("Initializing timer\n");
-
-    t = win_inittimer();
-    if (t < 0)
-        return t;
-
-    timerticspersec = tickspersecond;
-    QueryPerformanceCounter((LARGE_INTEGER *)&t);
-    timerlastsample = (int32_t)(t*timerticspersec / win_timerfreq);
-
-    usertimercallback = NULL;
-
-    msperu64tick = 1000.0 / (double)timerGetFreqU64();
-
-    return 0;
-}
-
-//
-// uninittimer() -- shut down timer
-//
-void timerUninit(void)
-{
-    if (!win_timerfreq) return;
-
-    win_timerfreq=0;
-    timerticspersec = 0;
-
-    msperu64tick = 0;
-}
-
-//
-// sampletimer() -- update totalclock
-//
-void timerUpdate(void)
-{
-    int64_t i;
-    int32_t n;
-
-    if (!win_timerfreq) return;
-
-    QueryPerformanceCounter((LARGE_INTEGER *)&i);
-    n = (int32_t)((i*timerticspersec / win_timerfreq) - timerlastsample);
-
-    if (n <= 0) return;
-
-    totalclock += n;
-    timerlastsample += n;
-
-    if (usertimercallback) for (; n>0; n--) usertimercallback();
-}
-
-
-//
-// getticks() -- returns the windows ticks count
-//
-uint32_t timerGetTicks(void)
-{
-    int64_t i;
-    if (win_timerfreq == 0) return 0;
-    QueryPerformanceCounter((LARGE_INTEGER *)&i);
-    return (uint32_t)(i*longlong(1000)/win_timerfreq);
-}
-
-// high-resolution timers for profiling
-uint64_t timerGetTicksU64(void)
-{
-    return win_getu64ticks();
-}
-
-uint64_t timerGetFreqU64(void)
-{
-    return win_timerfreq;
-}
-
-// Returns the time since an unspecified starting time in milliseconds.
-ATTRIBUTE((flatten))
-double timerGetHiTicks(void)
-{
-    return (double)timerGetTicksU64() * msperu64tick;
-}
-
-//
-// gettimerfreq() -- returns the number of ticks per second the timer is configured to generate
-//
-int32_t timerGetFreq(void)
-{
-    return timerticspersec;
-}
-
-
-
-
-//-------------------------------------------------------------------------------------------------
 //  VIDEO
 //=================================================================================================
 
@@ -1593,10 +1457,7 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
     int32_t modenum;
 
     if ((fs == fullscreen) && (x == xres) && (y == yres) && (c == bpp) && !videomodereset)
-    {
-        OSD_ResizeDisplay(xres,yres);
         return 0;
-    }
 
     modenum = videoCheckMode(&x,&y,c,fs,0);
     if (modenum < 0) return -1;
@@ -1617,9 +1478,7 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
         gammabrightness = 0;
     }
 
-    win_setvideomode(c);
-
-    if (!silentvideomodeswitch)
+    if (!win_silentvideomodeswitch)
         initprintf("Setting video mode %dx%d (%d-bit %s)\n",
                    x,y,c, ((fs&1) ? "fullscreen" : "windowed"));
 
@@ -1638,7 +1497,6 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
     if (inp) AcquireInputDevices(1);
     modechange=1;
     videomodereset = 0;
-    OSD_ResizeDisplay(xres,yres);
 
     return 0;
 }
@@ -1755,8 +1613,8 @@ static int sortmodes(const void *a_, const void *b_)
 {
     int32_t x;
 
-    const struct validmode_t *a = (const struct validmode_t *)a_;
-    const struct validmode_t *b = (const struct validmode_t *)b_;
+    const struct validmode_t *a = (const struct validmode_t *)b_;
+    const struct validmode_t *b = (const struct validmode_t *)a_;
 
     if ((x = a->fs   - b->fs)   != 0) return x;
     if ((x = a->bpp  - b->bpp)  != 0) return x;
@@ -1856,9 +1714,42 @@ void videoBeginDrawing(void)
     if (lockcount++ > 0)
         return;		// already locked
 
-    if (offscreenrendering) return;
+    static intptr_t backupFrameplace = 0;
 
-    frameplace = fullscreen ? (intptr_t)lpOffscreen : (intptr_t)lpPixels;
+    if (inpreparemirror)
+    {
+        //POGO: if we are offscreenrendering and we need to render a mirror
+        //      or we are rendering a mirror and we start offscreenrendering,
+        //      backup our offscreen target so we can restore it later
+        //      (but only allow one level deep,
+        //       i.e. no viewscreen showing a camera showing a mirror that reflects the same viewscreen and recursing)
+        if (offscreenrendering)
+        {
+            if (!backupFrameplace)
+                backupFrameplace = frameplace;
+            else if (frameplace != (intptr_t)mirrorBuffer &&
+                     frameplace != backupFrameplace)
+                return;
+        }
+
+        frameplace = (intptr_t)mirrorBuffer;
+
+        if (offscreenrendering)
+            return;
+    }
+    else if (offscreenrendering)
+    {
+        if (backupFrameplace)
+        {
+            frameplace = backupFrameplace;
+            backupFrameplace = 0;
+        }
+        return;
+    }
+    else
+    {
+        frameplace = fullscreen ? (intptr_t)lpOffscreen : (intptr_t)lpPixels;
+    }
 
     if (!modechange) return;
 
@@ -2034,7 +1925,7 @@ int32_t videoUpdatePalette(int32_t start, int32_t num)
 
     if (num > 0)
     {
-        rgb = (RGBQUAD *)Bmalloc(sizeof(RGBQUAD)*num);
+        rgb = (RGBQUAD *)Xmalloc(sizeof(RGBQUAD)*num);
         for (i=start, n=0; n<num; i++, n++)
         {
             rgb[n].rgbBlue = lpal.palPalEntry[i].peBlue;
@@ -2044,7 +1935,7 @@ int32_t videoUpdatePalette(int32_t start, int32_t num)
         }
 
         SetDIBColorTable(hDCSection, start, num, rgb);
-        Bfree(rgb);
+        Xfree(rgb);
     }
 
     return 0;
@@ -2139,7 +2030,7 @@ int32_t videoSetGamma(void)
         if (gamma != 1) val = pow(val, invgamma) / norm;
         val += bright * 128;
 
-        gammaTable.red[i] = gammaTable.green[i] = gammaTable.blue[i] = (WORD)max(0.f,(double)min(0xffff,val*256));
+        gammaTable.red[i] = gammaTable.green[i] = gammaTable.blue[i] = (uint16_t)max(0.f, min<float>(65535.f, val * 256.f));
     }
 
     return setgammaramp(&gammaTable);
@@ -2217,16 +2108,16 @@ static BOOL InitDirectDraw(void)
         hDDrawDLL = LoadLibrary("DDRAW.DLL");
         if (!hDDrawDLL)
         {
-            ShowErrorBox("Error loading DDRAW.DLL");
+            windowsShowError("Error loading DDRAW.DLL");
             return TRUE;
         }
     }
 
     // get the pointer to DirectDrawEnumerate
-    aDirectDrawEnumerate = (HRESULT(WINAPI *)(LPDDENUMCALLBACK, LPVOID))GetProcAddress(hDDrawDLL, "DirectDrawEnumerateA");
+    aDirectDrawEnumerate = (decltype(aDirectDrawEnumerate))GetProcAddress(hDDrawDLL, "DirectDrawEnumerateA");
     if (!aDirectDrawEnumerate)
     {
-        ShowErrorBox("Error fetching DirectDrawEnumerate()");
+        windowsShowError("Error fetching DirectDrawEnumerate()");
         UninitDirectDraw();
         return TRUE;
     }
@@ -2236,10 +2127,10 @@ static BOOL InitDirectDraw(void)
     aDirectDrawEnumerate(InitDirectDraw_enum, NULL);
 
     // get the pointer to DirectDrawCreate
-    aDirectDrawCreate = (HRESULT(WINAPI *)(GUID *, LPDIRECTDRAW *, IUnknown *))GetProcAddress(hDDrawDLL, "DirectDrawCreate");
+    aDirectDrawCreate = (decltype(aDirectDrawCreate))GetProcAddress(hDDrawDLL, "DirectDrawCreate");
     if (!aDirectDrawCreate)
     {
-        ShowErrorBox("Error fetching DirectDrawCreate()");
+        windowsShowError("Error fetching DirectDrawCreate()");
         UninitDirectDraw();
         return TRUE;
     }
@@ -2411,10 +2302,10 @@ static int32_t SetupDirectDraw(int32_t width, int32_t height)
     }
 
     //    initprintf("  - Allocating offscreen buffer\n");
-    lpOffscreen = (char *)Bmalloc((width|1)*height);
+    lpOffscreen = (char *)Xmalloc((width|1)*height);
     if (!lpOffscreen)
     {
-        ShowErrorBox("Failure allocating offscreen buffer");
+        windowsShowError("Failure allocating offscreen buffer");
         UninitDirectDraw();
         return TRUE;
     }
@@ -2493,7 +2384,7 @@ static int32_t SetupDIB(int32_t width, int32_t height)
         hDC = GetDC(hWindow);
         if (!hDC)
         {
-            ShowErrorBox("Error getting device context");
+            windowsShowError("Error getting device context");
             return TRUE;
         }
     }
@@ -2535,7 +2426,7 @@ static int32_t SetupDIB(int32_t width, int32_t height)
         ReleaseDC(hWindow, hDC);
         hDC = NULL;
 
-        ShowErrorBox("Error creating DIB section");
+        windowsShowError("Error creating DIB section");
         return TRUE;
     }
 
@@ -2548,7 +2439,7 @@ static int32_t SetupDIB(int32_t width, int32_t height)
         ReleaseDC(hWindow, hDC);
         hDC = NULL;
 
-        ShowErrorBox("Error creating compatible DC");
+        windowsShowError("Error creating compatible DC");
         return TRUE;
     }
 
@@ -2560,7 +2451,7 @@ static int32_t SetupDIB(int32_t width, int32_t height)
         DeleteDC(hDCSection);
         hDCSection = NULL;
 
-        ShowErrorBox("Error creating compatible DC");
+        windowsShowError("Error creating compatible DC");
         return TRUE;
     }
 
@@ -2621,8 +2512,8 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
         0,                             //Shift Bit Ignored
         0,                             //No Accumulation Buffer
         0,0,0,0,                       //Accumulation Bits Ignored
-        32,                            //16/24/32 Z-Buffer depth
-        1,                             //No Stencil Buffer
+        24,                            //16/24/32 Z-Buffer depth
+        8,                             //8-bit Stencil Buffer
         0,                             //No Auxiliary Buffer
         PFD_MAIN_PLANE,                //Main Drawing Layer
         0,                             //Reserved
@@ -2630,7 +2521,7 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
     };
     GLuint PixelFormat;
     int32_t minidriver;
-    int32_t err;
+    int32_t err = 0;
     pfd.cColorBits = bitspp;
 
     hGLWindow = CreateWindow(
@@ -2645,7 +2536,7 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
                     NULL);
     if (!hGLWindow)
     {
-        ShowErrorBox("Error creating OpenGL child window.");
+        windowsShowError("Error creating OpenGL child window.");
         return TRUE;
     }
 
@@ -2653,7 +2544,7 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
     if (!hDC)
     {
         ReleaseOpenGL();
-        ShowErrorBox("Error getting device context");
+        windowsShowError("Error getting device context");
         return TRUE;
     }
 
@@ -2664,7 +2555,7 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
     if (!PixelFormat)
     {
         ReleaseOpenGL();
-        ShowErrorBox("Can't choose pixel format");
+        windowsShowError("Can't choose pixel format");
         return TRUE;
     }
 
@@ -2673,7 +2564,7 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
     if (!err)
     {
         ReleaseOpenGL();
-        ShowErrorBox("Can't set pixel format");
+        windowsShowError("Can't set pixel format");
         return TRUE;
     }
 
@@ -2682,14 +2573,14 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
     if (!hGLRC)
     {
         ReleaseOpenGL();
-        ShowErrorBox("Can't create GL RC");
+        windowsShowError("Can't create GL RC");
         return TRUE;
     }
 
     if (!wglMakeCurrent(hDC, hGLRC))
     {
         ReleaseOpenGL();
-        ShowErrorBox("Can't activate GL RC");
+        windowsShowError("Can't activate GL RC");
         return TRUE;
     }
 
@@ -2703,14 +2594,23 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
             ReleaseOpenGL();
             return TRUE;
 #ifdef POLYMER
-        } else if (loadglulibrary(getenv("BUILD_GLULIB")))
+        }
+        else if (loadglulibrary(getenv("BUILD_GLULIB")))
         {
             initprintf("Failure loading GLU. GL modes are unavailable.\n");
                         nogl = 1;
                         ReleaseOpenGL();
                         return TRUE;
 #endif
-        } else
+        }
+        else if (GLVersion.major < 2)
+        {
+            initprintf("Your computer does not support OpenGL version 2 or greater. GL modes are unavailable.\n");
+            nogl = 1;
+            ReleaseOpenGL();
+            return TRUE;
+        }
+        else
         {
             glLoaded = 1;
         }
@@ -2741,7 +2641,6 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
 
     polymost_glreset();
 
-    glEnable(GL_TEXTURE_2D);
     glShadeModel(GL_SMOOTH); //GL_FLAT
     glClearColor(0,0,0,0.5); //Black Background
     glHint(GL_PERSPECTIVE_CORRECTION_HINT,GL_NICEST); //Use FASTEST for ortho!
@@ -2749,187 +2648,66 @@ static int32_t SetupOpenGL(int32_t width, int32_t height, int32_t bitspp)
     glHint(GL_TEXTURE_COMPRESSION_HINT, GL_NICEST);
     glDisable(GL_DITHER);
 
-    {
-        GLubyte *p,*p2,*p3;
-        int32_t err = 0;
+    fill_glinfo();
 
-        glinfo.vendor     = (char const *)glGetString(GL_VENDOR);
-        glinfo.renderer   = (char const *)glGetString(GL_RENDERER);
-        glinfo.version    = (char const *)glGetString(GL_VERSION);
-        glinfo.extensions = (char const *)glGetString(GL_EXTENSIONS);
+    err = 0;
 
-        // GL driver blacklist
-
-        if (!Bstrcmp(glinfo.vendor,"Microsoft Corporation")) err = 1;
-        else if (!Bstrcmp(glinfo.vendor,"SiS")) err = 1;
-        else if (!Bstrcmp(glinfo.vendor,"3Dfx Interactive Inc.")) err = 1;
+    // GL driver blacklist
+    if (!Bstrcmp(glinfo.vendor,"Microsoft Corporation")) err = 1;
+#if 0
+    else if (!Bstrcmp(glinfo.vendor,"SiS")) err = 1;
+    else if (!Bstrcmp(glinfo.vendor,"3Dfx Interactive Inc.")) err = 1;
+#endif
 #ifdef POLYMER
-        else if (!Bstrcmp(glinfo.vendor, "Intel"))
+    else if (!Bstrcmp(glinfo.vendor, "Intel"))
+        pr_ati_fboworkaround = 1;
+#endif
+    else
+    {
+        if (!Bstrcmp(glinfo.vendor,"ATI Technologies Inc."))
+        {
+            winlayer_have_ATI = 1;
+#ifdef POLYMER
             pr_ati_fboworkaround = 1;
 #endif
-        else
-        {
-            if (!Bstrcmp(glinfo.vendor,"ATI Technologies Inc."))
+            if (Bstrstr(glinfo.renderer,"Radeon X1"))
             {
-                winlayer_have_ATI = 1;
 #ifdef POLYMER
-                pr_ati_fboworkaround = 1;
-#endif
-                if (Bstrstr(glinfo.renderer,"Radeon X1"))
-                {
-#ifdef POLYMER
-                    pr_ati_nodepthoffset = 1;
-                    initprintf("Enabling ATI R520 polygon offset workaround.\n");
-#endif
-                }
-#ifdef POLYMER
-                else
-                    pr_ati_nodepthoffset = 0;
+                pr_ati_nodepthoffset = 1;
+                initprintf("Enabling ATI R520 polygon offset workaround.\n");
 #endif
             }
 #ifdef POLYMER
             else
-                pr_ati_fboworkaround = 0;
+                pr_ati_nodepthoffset = 0;
 #endif
         }
+#ifdef POLYMER
+        else
+            pr_ati_fboworkaround = 0;
+#endif
+    }
 
 #ifdef POLYMER
-        if (pr_ati_fboworkaround)
-            initprintf("Enabling Intel/ATI FBO color attachment workaround.\n");
+    if (pr_ati_fboworkaround)
+        initprintf("Enabling Intel/ATI FBO color attachment workaround.\n");
 #endif
 
-        if (!forcegl && err)
-        {
-            OSD_Printf("Unsupported OpenGL driver detected. GL modes will be unavailable. Use -forcegl to override.\n");
-            wm_msgbox("Unsupported OpenGL driver", "Unsupported OpenGL driver detected.  GL modes will be unavailable.");
-            ReleaseOpenGL();
-            //POGO: there is no equivalent to unloadgldriver() with GLAD's loader, but this shouldn't be a problem.
-            //unloadgldriver();
-            unloadwgl();
-            nogl = 1;
-            modeschecked = 0;
-            videoGetModes();
-            return TRUE;
-        }
-
-        glinfo.maxanisotropy = 1.0;
-        glinfo.bgra = 0;
-        glinfo.texcompr = 0;
-
-        // process the extensions string and flag stuff we recognize
-        p = (GLubyte *)Bstrdup(glinfo.extensions);
-        p3 = p;
-        while ((p2 = (GLubyte *)Bstrtoken(p3==p?(char *)p:NULL, " ", (char **)&p3, 1)) != NULL)
-        {
-            if (!Bstrcmp((char *)p2, "GL_EXT_texture_filter_anisotropic"))
-            {
-                // supports anisotropy. get the maximum anisotropy level
-                glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &glinfo.maxanisotropy);
-            }
-            else if (!Bstrcmp((char *)p2, "GL_EXT_texture_edge_clamp") ||
-                     !Bstrcmp((char *)p2, "GL_SGIS_texture_edge_clamp"))
-            {
-                // supports GL_CLAMP_TO_EDGE or GL_CLAMP_TO_EDGE_SGIS
-                glinfo.clamptoedge = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_EXT_bgra"))
-            {
-                // support bgra textures
-                glinfo.bgra = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_texture_compression") && Bstrcmp(glinfo.vendor,"ATI Technologies Inc."))
-            {
-                // support texture compression
-                glinfo.texcompr = 1;
-
-#ifdef DYNAMIC_GLEXT
-                if (!glCompressedTexImage2D || !glGetCompressedTexImage)
-                {
-                    // lacking the necessary extensions to do this
-                    initprintf("Warning: the GL driver lacks necessary functions to use caching\n");
-                    glinfo.texcompr = 0;
-                }
-#endif
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_texture_non_power_of_two"))
-            {
-                // support non-power-of-two texture sizes
-                glinfo.texnpot = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_fragment_program"))
-            {
-                glinfo.arbfp = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_depth_texture"))
-            {
-                glinfo.depthtex = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_shadow"))
-            {
-                glinfo.shadow = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_EXT_framebuffer_object"))
-            {
-                glinfo.fbos = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_NV_texture_rectangle") ||
-                     !Bstrcmp((char *)p2, "GL_EXT_texture_rectangle"))
-            {
-                glinfo.rect = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_multitexture"))
-            {
-                glinfo.multitex = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_texture_env_combine"))
-            {
-                glinfo.envcombine = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_vertex_buffer_object"))
-            {
-                glinfo.vbos = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "WGL_EXT_swap_control"))
-            {
-                glinfo.vsync = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_EXT_gpu_shader4"))
-            {
-                glinfo.sm4 = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_occlusion_query"))
-            {
-                glinfo.occlusionqueries = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_shader_objects"))
-            {
-                glinfo.glsl = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_debug_output"))
-            {
-                glinfo.debugoutput = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_buffer_storage"))
-            {
-                glinfo.bufferstorage = 1;
-            }
-            else if (!Bstrcmp((char *)p2, "GL_ARB_sync"))
-            {
-                glinfo.sync = 1;
-            }
-        }
-        Bfree(p);
-    }
-    numpages = 2;	// KJS 20031225: tell rotatesprite that it's double buffered!
-
-    if (!glinfo.dumped)
+    if (!forcegl && err)
     {
-        int32_t oldbpp = bpp;
-        bpp = 32;
-        osdcmd_glinfo(NULL);
-        glinfo.dumped = TRUE;
-        bpp = oldbpp;
+        OSD_Printf("Unsupported OpenGL driver detected. GL modes will be unavailable. Use -forcegl to override.\n");
+        wm_msgbox("Unsupported OpenGL driver", "Unsupported OpenGL driver detected.  GL modes will be unavailable.");
+        ReleaseOpenGL();
+        //POGO: there is no equivalent to unloadgldriver() with GLAD's loader, but this shouldn't be a problem.
+        //unloadgldriver();
+        unloadwgl();
+        nogl = 1;
+        modeschecked = 0;
+        videoGetModes();
+        return TRUE;
     }
+
+    numpages = 2;	// KJS 20031225: tell rotatesprite that it's double buffered!
 
     return FALSE;
 }
@@ -2942,7 +2720,7 @@ static BOOL CreateAppWindow(int32_t modenum)
 {
     RECT rect;
     int32_t w, h, x, y, stylebits = 0, stylebitsex = 0;
-    int32_t width, height, fs, bitspp;
+    int32_t width, height, fs, bitspp, rfreq = -1;
 
     HRESULT result;
 
@@ -2959,6 +2737,7 @@ static BOOL CreateAppWindow(int32_t modenum)
         height = validmode[modenum].ydim;
         fs = validmode[modenum].fs;
         bitspp = validmode[modenum].bpp;
+        rfreq = validmode[modenum].extra;
     }
 
     if (width == xres && height == yres && fs == fullscreen && bitspp == bpp && !videomodereset) return FALSE;
@@ -3021,7 +2800,7 @@ static BOOL CreateAppWindow(int32_t modenum)
                       0);
         if (!hWindow)
         {
-            ShowErrorBox("Unable to create window");
+            windowsShowError("Unable to create window");
             return TRUE;
         }
 
@@ -3116,7 +2895,7 @@ static BOOL CreateAppWindow(int32_t modenum)
 
             if (ChangeDisplaySettings(&dmScreenSettings, CDS_FULLSCREEN) != DISP_CHANGE_SUCCESSFUL)
             {
-                ShowErrorBox("Video mode not supported");
+                windowsShowError("Video mode not supported");
                 return TRUE;
             }
 
@@ -3172,6 +2951,7 @@ static BOOL CreateAppWindow(int32_t modenum)
     xres = width;
     yres = height;
     bpp = bitspp;
+    refreshfreq = rfreq;
     fullscreen = fs;
     curvidmode = modenum;
 
@@ -3182,7 +2962,6 @@ static BOOL CreateAppWindow(int32_t modenum)
     //bytesperline = width;
 
     modechange = 1;
-    OSD_ResizeDisplay(xres,yres);
 
     UpdateWindow(hWindow);
 
@@ -3513,8 +3292,8 @@ static LRESULT CALLBACK WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
                     regrabmouse = 1;
                 }
                 realfs = fullscreen;
-                silentvideomodeswitch = 1;
-                videoSetGameMode(!fullscreen,xdim,ydim,bpp);
+                win_silentvideomodeswitch = 1;
+                videoSetGameMode(!fullscreen,xres,yres,bpp,upscalefactor);
                 ShowWindow(hWindow, SW_MINIMIZE);
             }
             else if (appactive && realfs)
@@ -3527,19 +3306,15 @@ static LRESULT CALLBACK WndProcCallback(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
                 ShowWindow(hWindow, SW_RESTORE);
                 SetForegroundWindow(hWindow);
                 SetFocus(hWindow);
-                videoSetGameMode(realfs,xdim,ydim,bpp);
-                silentvideomodeswitch = 0;
+                videoSetGameMode(realfs,xres,yres,bpp,upscalefactor);
+                win_silentvideomodeswitch = 0;
                 realfs = 0;
             }
         }
 #endif
-
-        // Win_SetKeyboardLayoutUS(appactive);
-
-        if (backgroundidle)
-            SetPriorityClass(GetCurrentProcess(),
-                             appactive ? NORMAL_PRIORITY_CLASS : IDLE_PRIORITY_CLASS);
-
+#ifdef _WIN32
+        windowsHandleFocusChange(appactive);
+#endif
         if (appactive)
         {
             SetForegroundWindow(hWindow);
@@ -3660,7 +3435,7 @@ static BOOL RegisterWindowClass(void)
                             GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
     if (!RegisterClassEx(&wcx))
     {
-        ShowErrorBox("Failed to register window class");
+        windowsShowError("Failed to register window class");
         return TRUE;
     }
 

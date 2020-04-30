@@ -33,7 +33,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "ai.h"
 #include "pal.h"
 #include "player.h"
-#include "net.h"
+#include "network.h"
 #include "weapon.h"
 #include "track.h"
 #include "actor.h"
@@ -1949,7 +1949,6 @@ DoNinjaGrabThroat(short SpriteNum)
     USERp u = User[SpriteNum];
     SPRITEp sp = User[SpriteNum]->SpriteP;
     int SpawnBlood(short SpriteNum, short Weapon, short hit_ang, int hit_x, int hit_y, int hit_z);
-    short cnt,i;
 
     if ((u->WaitTics -= ACTORMOVETICS) <= 0)
     {
@@ -1989,7 +1988,6 @@ int
 DoNinjaMove(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (TEST(u->Flags2, SPR2_DYING))
     {
@@ -2066,7 +2064,6 @@ int
 NullNinja(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     if (u->WaitTics > 0) u->WaitTics -= ACTORMOVETICS;
 
@@ -2084,7 +2081,6 @@ NullNinja(short SpriteNum)
 
 int DoNinjaPain(short SpriteNum)
 {
-    SPRITEp sp = &sprite[SpriteNum];
     USERp u = User[SpriteNum];
 
     NullNinja(SpriteNum);
@@ -2143,8 +2139,7 @@ DoNinjaCeiling(short SpriteNum)
 void
 InitAllPlayerSprites(void)
 {
-    short i, sp_num;
-    USERp u;
+    short i;
 
     TRAVERSE_CONNECT(i)
     {
@@ -2332,10 +2327,10 @@ PlayerGameReset(PLAYERp pp)
 
     if (pp == Player+screenpeek)
     {
-        if (getrendermode() < 3)
+        if (videoGetRenderMode() < REND_POLYMOST)
             COVERsetbrightness(gs.Brightness,&palette_data[0][0]);
         else
-            setpalettefade(0,0,0,0);
+            videoFadePalette(0,0,0,0);
         memcpy(pp->temp_pal, palette_data, sizeof(palette_data));
     }
     pp->NightVision = FALSE;
@@ -2360,7 +2355,6 @@ void
 PlayerSpriteLoadLevel(short SpriteNum)
 {
     USERp u = User[SpriteNum];
-    SPRITEp sp = User[SpriteNum]->SpriteP;
 
     ChangeState(SpriteNum, s_NinjaRun[0]);
     u->Rot = sg_NinjaRun;
@@ -2370,7 +2364,7 @@ PlayerSpriteLoadLevel(short SpriteNum)
 void
 InitPlayerSprite(PLAYERp pp)
 {
-    short i, sp_num;
+    short sp_num;
     SPRITE *sp;
     USERp u;
     int pnum = pp - Player;
@@ -2436,10 +2430,10 @@ InitPlayerSprite(PLAYERp pp)
 
     if (pp == Player+screenpeek)
     {
-        if (getrendermode() < 3)
+        if (videoGetRenderMode() < REND_POLYMOST)
             COVERsetbrightness(gs.Brightness,&palette_data[0][0]);
         else
-            setpalettefade(0,0,0,0);
+            videoFadePalette(0,0,0,0);
         memcpy(pp->temp_pal, palette_data, sizeof(palette_data));
     }
 

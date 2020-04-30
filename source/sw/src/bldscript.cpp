@@ -48,7 +48,7 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 =============================================================================
 */
-void Error(char *error, ...)
+void Error(const char *error, ...)
 {
     va_list argptr;
 
@@ -84,7 +84,7 @@ SWBOOL    tokenready;                     // only TRUE if UnGetToken was just ca
 ==============
 */
 
-SWBOOL LoadScriptFile(char *filename)
+SWBOOL LoadScriptFile(const char *filename)
 {
     int size, readsize;
     int fp;
@@ -98,7 +98,7 @@ SWBOOL LoadScriptFile(char *filename)
 
     size = kfilelength(fp);
 
-    scriptbuffer = (char *)malloc(size);
+    scriptbuffer = (char *)Xmalloc(size);
 
     ASSERT(scriptbuffer != NULL);
 
@@ -110,7 +110,7 @@ SWBOOL LoadScriptFile(char *filename)
 
 
     // Convert filebuffer to all upper case
-    //strupr(scriptbuffer);
+    //Bstrupr(scriptbuffer);
 
     script_p = scriptbuffer;
     scriptend_p = script_p + size;
@@ -385,8 +385,6 @@ int ParseNum(char *str)
 //      spritenumber, voxelnumber
 int aVoxelArray[MAXTILES];
 
-extern int nextvoxid;
-
 // Load all the voxel files using swvoxfil.txt script file
 // Script file format:
 
@@ -396,7 +394,7 @@ extern int nextvoxid;
 //			    1804 1 shotgun.kvx
 //				etc....
 
-void LoadKVXFromScript(char *filename)
+void LoadKVXFromScript(const char *filename)
 {
     int lNumber=0,lTile=0;  // lNumber is the voxel no. and lTile is the editart tile being
     // replaced.
@@ -404,7 +402,7 @@ void LoadKVXFromScript(char *filename)
 
     int grabbed=0;          // Number of lines parsed
 
-    sName = (char *)malloc(256);    // Up to 256 bytes for path
+    sName = (char *)Xmalloc(256);    // Up to 256 bytes for path
     ASSERT(sName != NULL);
 
     // zero out the array memory with -1's for pics not being voxelized
@@ -444,7 +442,7 @@ void LoadKVXFromScript(char *filename)
     }
     while (script_p < scriptend_p);
 
-    free(scriptbuffer);
+    Xfree(scriptbuffer);
     script_p = NULL;
 }
 
@@ -494,7 +492,7 @@ void LogUserTime( SWBOOL bIsLoggingIn )
     strcpy(serialid,token);
 
     // Free the script memory when done
-    free(scriptbuffer);
+    Xfree(scriptbuffer);
     script_p = NULL;
 
     // Build a file name using serial id.
@@ -595,7 +593,7 @@ void LogUserTime( SWBOOL bIsLoggingIn )
         } while (script_p < scriptend_p);
 
         // Free the script memory when done
-        free(scriptbuffer);
+        Xfree(scriptbuffer);
         script_p = NULL;
 
         // Open the file

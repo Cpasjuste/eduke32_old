@@ -1,5 +1,5 @@
 /* Extended Module Player
- * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2018 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -158,7 +158,7 @@ static mixer_set a500led_mixers = {
 
 
 /* Downmix 32bit samples to 8bit, signed or unsigned, mono or stereo output */
-static void downmix_int_8bit(char *dest, int32 *src, int num, int amp, int offs)
+static void downmix_int_8bit(int8 *dest, int32 *src, int num, int amp, int offs)
 {
 	int smp;
 	int shift = DOWNMIX_SHIFT + 8 - amp;
@@ -580,7 +580,7 @@ void libxmp_mixer_softmixer(struct context_data *ctx)
 	}
 
 	if (s->format & XMP_FORMAT_8BIT) {
-		downmix_int_8bit(s->buffer, s->buf32, size, s->amplify,
+		downmix_int_8bit((int8 *)s->buffer, s->buf32, size, s->amplify,
 				s->format & XMP_FORMAT_UNSIGNED ? 0x80 : 0);
 	} else {
 		downmix_int_16bit((int16 *)s->buffer, s->buf32, size,s->amplify,

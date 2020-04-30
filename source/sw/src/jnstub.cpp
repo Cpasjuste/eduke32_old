@@ -39,6 +39,34 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 #include "common.h"
 #include "common_game.h"
 
+#include "colormap.h"
+
+
+const char* AppProperName = "Wangulator";
+const char* AppTechnicalName = "wangulator";
+
+#if defined(_WIN32)
+#define DEFAULT_GAME_EXEC "voidsw.exe"
+#define DEFAULT_GAME_LOCAL_EXEC "voidsw.exe"
+#else
+#define DEFAULT_GAME_EXEC "voidsw"
+#define DEFAULT_GAME_LOCAL_EXEC "./voidsw"
+#endif
+
+const char *DefaultGameExec = DEFAULT_GAME_EXEC;
+const char *DefaultGameLocalExec = DEFAULT_GAME_LOCAL_EXEC;
+
+#define SETUPFILENAME "wangulator.cfg"
+const char *defaultsetupfilename = SETUPFILENAME;
+char setupfilename[BMAX_PATH] = SETUPFILENAME;
+
+#define eitherALT   (keystatus[KEYSC_LALT] || keystatus[KEYSC_RALT])
+#define eitherCTRL  (keystatus[KEYSC_LCTRL] || keystatus[KEYSC_RCTRL])
+#define eitherSHIFT (keystatus[KEYSC_LSHIFT] || keystatus[KEYSC_RSHIFT])
+
+#define PRESSED_KEYSC(Key) (keystatus[KEYSC_##Key] && !(keystatus[KEYSC_##Key]=0))
+
+
 #define M_RED 102
 #define M_BLUE 198
 
@@ -76,15 +104,13 @@ SWBOOL bVoxelsOn = TRUE;                  // Turn voxels on by default
 SWBOOL bSpinBobVoxels = TRUE;             // Do twizzly stuff to voxels
 SWBOOL bAutoSize = TRUE;                  // Autosizing on/off
 
-int nextvoxid = 0;
-
 // Globals used to hold current sprite type being searched for.
 short FindPicNum = 0;
 short FindSpriteNum = 0;
 
 // My Function Prototypes
 void ContextHelp(short spritenum);
-void LoadKVXFromScript(char *filename);
+void LoadKVXFromScript(const char *filename);
 
 //void LogUserTime( SWBOOL bIsLoggingIn );
 
@@ -112,7 +138,7 @@ typedef struct
 
 STAG_INFO StagInfo[MAX_STAG_INFO];
 
-void PrintStatus(char *string, int num, char x, char y, char color);
+void PrintStatus(const char *string, int num, char x, char y, char color);
 
 #define NUMOPTIONS 8
 char option[NUMOPTIONS] = {0, 0, 0, 0, 0, 0, 1, 0};
@@ -120,10 +146,8 @@ char default_buildkeys[NUMBUILDKEYS] =
 {
     0xc8, 0xd0, 0xcb, 0xcd, 0x2a, 0x9d, 0x1d, 0x39,
     0x1e, 0x2c, 0xd1, 0xc9, 0x33, 0x34,
-    0x9c, 0x1c, 0xd, 0xc, 0xf, 0x45
+    0x9c, 0x1c, 0xd, 0xc, 0xf, 0x29
 };
-
-#define MODE_3D 200
 
 extern short pointhighlight, linehighlight;
 extern short asksave;
@@ -159,7 +183,7 @@ void SectorMoveFloorZ(int);
 void SectorMoveCeilingZ(int);
 
 void BuildStagTable(void);
-void Message(char *string, char color);
+void Message(const char *string, char color);
 void ShowMessage(void);
 void ShadeMenu(void);
 void FindNextTag(void);
@@ -305,10 +329,8 @@ ToggleSprites()
 
 
 void
-DoAutoSize(uspritetype *tspr)
+DoAutoSize(tspriteptr_t tspr)
 {
-    short i;
-
     if (!bAutoSize)
         return;
 
@@ -457,13 +479,14 @@ DoAutoSize(uspritetype *tspr)
 short rotang = 0;
 
 void
-ExtAnalyzeSprites(int32_t ourx, int32_t oury, int32_t oura, int32_t smoothr)
+ExtAnalyzeSprites(int32_t ourx, int32_t oury, int32_t ourz, int32_t oura, int32_t smoothr)
 {
-    int i, currsprite;
-    uspritetype *tspr;
+    int i;
+    tspriteptr_t tspr;
 
     UNREFERENCED_PARAMETER(ourx);
     UNREFERENCED_PARAMETER(oury);
+    UNREFERENCED_PARAMETER(ourz);
     UNREFERENCED_PARAMETER(oura);
     UNREFERENCED_PARAMETER(smoothr);
 
@@ -490,7 +513,7 @@ ExtAnalyzeSprites(int32_t ourx, int32_t oury, int32_t oura, int32_t smoothr)
         }
 
         // Check for voxels
-        if (bVoxelsOn)
+        if (bVoxelsOn && usevoxels && videoGetRenderMode() != REND_POLYMER)
         {
             if (bSpinBobVoxels)
             {
@@ -603,7 +626,6 @@ ResetKeyRange(uint8_t* kb, uint8_t* ke)
 void
 ExtInit(void)
 {
-    void InitPalette(void);
     int i, fil;
 
     initgroupfile(G_GrpFile());
@@ -647,7 +669,31 @@ ExtInit(void)
 
 #endif
 
-char *startwin_labeltext = "Starting Build Editor for Shadow Warrior...";
+const char *startwin_labeltext = "Starting Build Editor for Shadow Warrior...";
+
+const char *ExtGetVer(void)
+{
+    return s_buildRev;
+}
+
+void ExtSetupMapFilename(const char *mapname)
+{
+    UNREFERENCED_PARAMETER(mapname);
+}
+
+int32_t ExtPreInit(int32_t argc,char const * const * argv)
+{
+    SW_ExtPreInit(argc, argv);
+
+    OSD_SetLogFile("wangulator.log");
+    char tempbuf[256];
+    snprintf(tempbuf, ARRAY_SIZE(tempbuf), "%s %s", AppProperName, s_buildRev);
+    OSD_SetVersion(tempbuf, 10,0);
+    buildprintf("%s\n", tempbuf);
+    PrintBuildInfo();
+
+    return 0;
+}
 
 int
 ExtInit(void)
@@ -681,63 +727,17 @@ ExtInit(void)
 #endif
 
 
-    void InitPalette(void);
-    int i, fil;
-
     // Store user log in time
     //LogUserTime(TRUE);              // Send true because user is logging
     // in.
 
-#ifdef _WIN32
-    if (!access("user_profiles_enabled", F_OK))
-#endif
-    {
-        char cwd[BMAX_PATH];
-        char *homedir;
-        int asperr;
+    OSD_SetParameters(0, 0, 0, 4, 2, 4, "^14", "^14", 0);
 
-#if defined(__linux) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-        addsearchpath("/usr/share/games/jfsw");
-        addsearchpath("/usr/local/share/games/jfsw");
-#elif defined(__APPLE__)
-        addsearchpath("/Library/Application Support/JFShadowWarrior");
-#endif
-        if (getcwd(cwd,BMAX_PATH)) addsearchpath(cwd);
-        if ((homedir = Bgethomedir()))
-        {
-            Bsnprintf(cwd,sizeof(cwd),"%s/"
-#if defined(_WIN32)
-                      "JFShadowWarrior"
-#elif defined(__APPLE__)
-                      "Library/Application Support/JFShadowWarrior"
-#else
-                      ".jfsw"
-#endif
-                      ,homedir);
-            asperr = addsearchpath(cwd);
-            if (asperr == -2)
-            {
-                if (Bmkdir(cwd,S_IRWXU) == 0) asperr = addsearchpath(cwd);
-                else asperr = -1;
-            }
-            if (asperr == 0)
-                chdir(cwd);
-            free(homedir);
-        }
-    }
+    SW_ExtInit();
 
-    if (g_grpNamePtr == NULL)
-    {
-        const char *cp = getenv("SWGRP");
-        if (cp)
-        {
-            clearGrpNamePtr();
-            g_grpNamePtr = dup_filename(cp);
-            initprintf("Using \"%s\" as main GRP file\n", g_grpNamePtr);
-        }
-    }
-    initgroupfile(G_GrpFile());
     /*
+        int fil;
+
         if ((fil = open("setup.dat", O_BINARY | O_RDWR, S_IREAD)) != -1)
             {
             read(fil, &option[0], NUMOPTIONS);
@@ -747,25 +747,19 @@ ExtInit(void)
             close(fil);
             }
         */
-    bpp = 8;
-    if (loadsetup("build.cfg") < 0) buildputs("Configuration file not found, using defaults.\n"), rv = 1;
+    bpp = 32;
+    if (loadsetup(SETUPFILENAME) < 0)
+        buildputs("Configuration file not found, using defaults.\n"), rv = 1;
     Bmemcpy((void *)buildkeys,(void *)default_buildkeys,NUMBUILDKEYS);       //Trick to make build use setup.dat keys
     if (option[4] > 0)
         option[4] = 0;
-    if (initengine())
-    {
-        wm_msgbox("Build Engine Initialisation Error",
-                  "There was a problem initialising the Build engine: %s", engineerrstr);
-        return -1;
-    }
-    initinput();
-    initmouse();
-
-    InitPalette();
-    SW_InitMultiPsky();
 
     kensplayerheight = 58;
     zmode = 0;
+
+    SW_ScanGroups();
+
+    wm_msgbox("Pre-Release Software Warning", "%s is not ready for public use. Proceed with caution!", AppProperName);
 
 #ifndef BUILD_DEV_VER
 }                                   // end user press Y
@@ -778,15 +772,36 @@ else
     return rv;
 }
 
+int32_t ExtPostStartupWindow(void)
+{
+    SW_LoadGroups();
+
+    if (!g_useCwd)
+        SW_CleanupSearchPaths();
+
+    if (engineInit())
+    {
+        wm_msgbox("Build Engine Initialisation Error",
+                  "There was a problem initialising the Build engine: %s", engineerrstr);
+        return -1;
+    }
+
+    InitPalette();
+    SW_InitMultiPsky();
+
+    return 0;
+}
+
 void ExtPostInit(void)
 {
+    palettePostLoadLookups();
 }
 
 void
 ExtUnInit(void)
 {
     uninitgroupfile();
-    writesetup("build.cfg");
+    writesetup(SETUPFILENAME);
     // Store user log in time
     //LogUserTime(FALSE);                 // FALSE means user is logging out
     // now.
@@ -844,6 +859,45 @@ ResetSpriteFound(void)
     }
 }
 
+static void Keys2D()
+{
+    if (PRESSED_KEYSC(G))  // G (grid on/off)
+    {
+        if (autogrid)
+        {
+            grid = 8*eitherSHIFT;
+
+            autogrid = 0;
+        }
+        else
+        {
+            grid += (1-2*eitherSHIFT);
+            if (grid == -1 || grid == 9)
+            {
+                autogrid = 1;
+                grid = 0;
+            }
+        }
+
+        if (autogrid)
+            printmessage16("Grid size: 9 (autosize)");
+        else if (!grid)
+            printmessage16("Grid off");
+        else
+            printmessage16("Grid size: %d (%d units)", grid, 2048>>grid);
+    }
+
+    if (autogrid)
+    {
+        grid = -1;
+
+        while (grid++ < 7)
+        {
+            if (mulscale14((2048>>grid), zoom) <= 16)
+                break;
+        }
+    }
+}
 
 // imported from allen code
 void
@@ -1125,6 +1179,7 @@ Keys3D(void)
                         sector[currsector].ceilingpicnum = temppicnum;
                 }
             }
+            break;
         case 2:
             searchpicnum = sector[searchsector].floorpicnum;
             if (highlightsectorcnt <= 0)
@@ -1360,7 +1415,7 @@ Keys3D(void)
 
 // Used to help print out the item status list
 void
-PrintStatus(char *string, int num, char x, char y, char color)
+PrintStatus(const char *string, int num, char x, char y, char color)
 {
     sprintf(tempbuf, "%s %d", string, num);
     printext16(x * 8, ydim16+y * 8, color, -1, tempbuf, 0);
@@ -1381,8 +1436,8 @@ static void sw_printmessage256(const char *text)
 }
 static void sw_printmessage16(const char *text)
 {
-    lastpm16time = totalclock;
-    _printmessage16(text);
+    lastpm16time = (int32_t) totalclock;
+    _printmessage16("%s", text);
 }
 
 void
@@ -1401,7 +1456,7 @@ MoreKeys(short searchstat, short searchwall, short searchsector, short pointhigh
     GET_NUM_FUNCp getnumber;
     PRINT_MSG_FUNCp printmessage;
 
-    if (qsetmode == MODE_3D)
+    if (in3dmode())
     {
         getnumber = sw_getnumber256;
         printmessage = sw_printmessage256;
@@ -2072,7 +2127,7 @@ void
 ExtCheckKeysNotice(void)
 {
 #if 0
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
     {
         if (intro < 600)
         {
@@ -2111,13 +2166,13 @@ ExtCheckKeys(void)
 //  ticdiff = 0;            // Set it back to 0!
 
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
     {
 #define AVERAGEFRAMES 16
         static int frameval[AVERAGEFRAMES], framecnt = 0;
         int i;
 
-        i = totalclock;
+        i = (int32_t) totalclock;
         if (i != frameval[framecnt])
         {
             sprintf(tempbuf, "%d", ((120 * AVERAGEFRAMES) / (i - frameval[framecnt])) + f_c);
@@ -2130,7 +2185,7 @@ ExtCheckKeys(void)
 
     MoreKeys(searchstat, searchwall, searchsector, pointhighlight);
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
     {
         Keys3D();
 
@@ -2162,6 +2217,7 @@ ExtCheckKeys(void)
     }
     else
     {
+        Keys2D();
 
         if (KEY_PRESSED(KEYSC_QUOTE) && KEY_PRESSED(KEYSC_M))
         {
@@ -2192,14 +2248,27 @@ ExtCheckKeys(void)
         }
 
     }
+
+    if ((in3dmode() && !m32_is2d3dmode()) || m32_is2d3dmode())
+    {
+#ifdef USE_OPENGL
+        int bakrendmode = rendmode;
+
+        if (m32_is2d3dmode())
+            rendmode = REND_CLASSIC;
+#endif
+
+        m32_showmouse();
+
+#ifdef USE_OPENGL
+        rendmode = bakrendmode;
+#endif
+    }
 }
 
 void
-ExtLoadMap(const char *mapname)
+ExtLoadMap(const char *UNUSED(mapname))
 {
-    SPRITEp sp;
-    int i;
-
     BuildStagTable();
 
     SetSpriteExtra();
@@ -2231,9 +2300,8 @@ ExtLoadMap(const char *mapname)
 }
 
 void
-ExtSaveMap(const char *mapname)
+ExtSaveMap(const char *UNUSED(mapname))
 {
-    SPRITEp sp;
     int i;
 
     SetSpriteExtra();
@@ -2255,8 +2323,8 @@ ExtGetSectorCaption(short sectnum)
     }
     else
     {
-        sprintf(tempbuf, "%d,%d", sector[sectnum].hitag,
-                sector[sectnum].lotag);
+        sprintf(tempbuf, "%d,%d", TrackerCast(sector[sectnum].hitag),
+                TrackerCast(sector[sectnum].lotag));
     }
     return tempbuf;
 }
@@ -2270,8 +2338,8 @@ ExtGetWallCaption(short wallnum)
     }
     else
     {
-        sprintf(tempbuf, "%d,%d", wall[wallnum].hitag,
-                wall[wallnum].lotag);
+        sprintf(tempbuf, "%d,%d", TrackerCast(wall[wallnum].hitag),
+                TrackerCast(wall[wallnum].lotag));
     }
     return tempbuf;
 }
@@ -2280,8 +2348,8 @@ const char *
 ExtGetSpriteCaption(short spritenum)
 {
     SPRITEp sp = &sprite[spritenum];
-    char *p = "";
-    char name[64];
+    const char *p = "";
+    char name[66];
     char tp[30];
     char multi_str[30] = "";
     int16_t data;
@@ -2664,7 +2732,7 @@ ExtGetSpriteCaption(short spritenum)
             //tempbuf[0] = NULL;
             sprintf(tempbuf, "S:%d", data);
         else
-            sprintf(tempbuf, "S:%d,%d,%d", data, sprite[spritenum].hitag, sprite[spritenum].lotag);
+            sprintf(tempbuf, "S:%d,%d,%d", data, TrackerCast(sprite[spritenum].hitag), TrackerCast(sprite[spritenum].lotag));
         break;
 
 
@@ -2679,7 +2747,7 @@ ExtGetSpriteCaption(short spritenum)
             sprintf(tempbuf, "S:%d,%s%s", data, p, multi_str);
         else
             // name and numbers - name only prints if not null string
-            sprintf(tempbuf, "%s%s%d,%d", p, multi_str, sprite[spritenum].hitag, sprite[spritenum].lotag);
+            sprintf(tempbuf, "%s%s%d,%d", p, multi_str, TrackerCast(sprite[spritenum].hitag), TrackerCast(sprite[spritenum].lotag));
 
         break;
 
@@ -2688,12 +2756,12 @@ ExtGetSpriteCaption(short spritenum)
             sprintf(tempbuf, "%s%s", p, multi_str);
         else
             sprintf(tempbuf, "%s%s%d,%d,%d,%d,%d,%d", p, multi_str,
-                    SPRITE_TAG1(spritenum),
-                    SPRITE_TAG2(spritenum),
-                    SPRITE_TAG3(spritenum),
-                    SPRITE_TAG4(spritenum),
-                    SPRITE_TAG5(spritenum),
-                    SPRITE_TAG6(spritenum));
+                    TrackerCast(SPRITE_TAG1(spritenum)),
+                    TrackerCast(SPRITE_TAG2(spritenum)),
+                    TrackerCast(SPRITE_TAG3(spritenum)),
+                    TrackerCast(SPRITE_TAG4(spritenum)),
+                    TrackerCast(SPRITE_TAG5(spritenum)),
+                    TrackerCast(SPRITE_TAG6(spritenum)));
         break;
 
     case CAPTION_ALL:
@@ -2704,12 +2772,12 @@ ExtGetSpriteCaption(short spritenum)
             sprintf(tempbuf, "%s%s", p, multi_str);
         else
             sprintf(tempbuf, "%s%s%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", p, multi_str,
-                    SPRITE_TAG1(spritenum),
-                    SPRITE_TAG2(spritenum),
-                    SPRITE_TAG3(spritenum),
-                    SPRITE_TAG4(spritenum),
-                    SPRITE_TAG5(spritenum),
-                    SPRITE_TAG6(spritenum),
+                    TrackerCast(SPRITE_TAG1(spritenum)),
+                    TrackerCast(SPRITE_TAG2(spritenum)),
+                    TrackerCast(SPRITE_TAG3(spritenum)),
+                    TrackerCast(SPRITE_TAG4(spritenum)),
+                    TrackerCast(SPRITE_TAG5(spritenum)),
+                    TrackerCast(SPRITE_TAG6(spritenum)),
                     SPRITE_TAG7(spritenum),
                     SPRITE_TAG8(spritenum),
                     SPRITE_TAG9(spritenum),
@@ -2769,21 +2837,21 @@ DrawClipBox(short spritenum)
 
 #define BOX_COLOR 3
     // upper
-    drawline16(x - radius, y - radius, x + radius, y - radius, BOX_COLOR);
+    editorDraw2dLine(x - radius, y - radius, x + radius, y - radius, BOX_COLOR);
     // lower
-    drawline16(x - radius, y + radius, x + radius, y + radius, BOX_COLOR);
+    editorDraw2dLine(x - radius, y + radius, x + radius, y + radius, BOX_COLOR);
     // left
-    drawline16(x - radius, y - radius, x - radius, y + radius, BOX_COLOR);
+    editorDraw2dLine(x - radius, y - radius, x - radius, y + radius, BOX_COLOR);
     // right
-    drawline16(x + radius, y - radius, x + radius, y + radius, BOX_COLOR);
+    editorDraw2dLine(x + radius, y - radius, x + radius, y + radius, BOX_COLOR);
 }
 
 void
-ExtShowSectorData(short sectnum)        // F5
+ExtShowSectorData(int16_t UNUSED(sectnum))        // F5
 {
     int i, x, y, x2;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     clearmidstatbar16();                // Clear middle of status bar
@@ -2925,7 +2993,7 @@ ExtShowSectorData(short sectnum)        // F5
 void
 ExtShowWallData(short wallnum)          // F6
 {
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
 
@@ -2937,7 +3005,7 @@ ExtShowWallData(short wallnum)          // F6
 void
 ExtShowSpriteData(short spritenum)      // F6
 {
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     while (KEY_PRESSED(KEYSC_F6)) ;
@@ -2952,12 +3020,11 @@ ExtShowSpriteData(short spritenum)      // F6
 }
 
 void
-ExtEditSectorData(short sectnum)        // F7
+ExtEditSectorData(int16_t UNUSED(sectnum))        // F7
 {
-    short key_num;
     SPRITEp sp;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
 
@@ -2971,21 +3038,21 @@ ExtEditSectorData(short sectnum)        // F7
     sprintf(tempbuf, "PicNum = %d", FindPicNum);
     printext16(8, ydim16+32 + 16, 11, -1, tempbuf, 0);
 
-    sprintf(tempbuf, "HiTag = %d", sp->hitag);
+    sprintf(tempbuf, "HiTag = %d", TrackerCast(sp->hitag));
     printext16(8, ydim16+32 + 24, 11, -1, tempbuf, 0);
 
-    sprintf(tempbuf, "LowTag = %d", sp->lotag);
+    sprintf(tempbuf, "LowTag = %d", TrackerCast(sp->lotag));
     printext16(8, ydim16+32 + 32, 11, -1, tempbuf, 0);
 
     FindNextSprite(FindPicNum);
 }
 
 void
-ExtEditWallData(short wallnum)          // F8
+ExtEditWallData(int16_t UNUSED(wallnum))          // F8
 {
 //    short nickdata;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
 //    sprintf(tempbuf, "Wall (%ld): ", wallnum);
@@ -3009,7 +3076,7 @@ ExtEditSpriteData(short spritenum)      // F8
     sp = &sprite[spritenum];
 
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     clearmidstatbar16();                // Clear middle of status bar
@@ -3017,7 +3084,7 @@ ExtEditSpriteData(short spritenum)      // F8
     printext16(8, ydim16+32 + 8, 11, -1, "(2)  Multi-Player Item Toggle", 0);
     printext16(8, ydim16+32 + 16, 11, -1, "(3)  Find Sprite", 0);
     printext16(8, ydim16+32 + 24, 11, -1, "(4)  Dbug Toggle (* Programming use only *) ", 0);
-    showframe(1);
+    videoShowFrame(1);
 
     while (KEY_PRESSED(KEYSC_F8)) handleevents();
 
@@ -3074,7 +3141,7 @@ DISPLAY:
                 printext16(8 + 240, ydim16+32 + 32, 11, -1, "TRUE", 0);
             else
                 printext16(8 + 240, ydim16+32 + 32, 11, -1, "FALSE", 0);
-            showframe(1);
+            videoShowFrame(1);
 
             // Disallow invalid settings
             if (!bFindPicNum && !bFindHiTag && !bFindLowTag)
@@ -3140,11 +3207,10 @@ DISPLAY:
 void
 PlaxSetShade(void)
 {
-    short data;
     short shade;
     int i, count = 0;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     sprintf(tempbuf, "Plax Sky set shade to #: ");
@@ -3173,11 +3239,10 @@ PlaxSetShade(void)
 void
 PlaxAdjustShade(void)
 {
-    short data;
     short shade;
     int i, count = 0;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     sprintf(tempbuf, "Plax Sky adjust shade by (+10000 for negative): ");
@@ -3211,12 +3276,11 @@ PlaxAdjustShade(void)
 void
 AdjustShade(void)
 {
-    short data;
     short shade;
     int i, count;
     short SpriteNum, NextSprite;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     sprintf(tempbuf, "Adjust amount (+10000 for negative): ");
@@ -3256,10 +3320,11 @@ AdjustShade(void)
                     wall[j].shade += shade;
                 }
 
-                if (!TEST(wall[wall[j].nextwall].extra, 0x1))
+                uint16_t const nextwall = wall[j].nextwall;
+                if (nextwall < MAXWALLS && !TEST(wall[nextwall].extra, 0x1))
                 {
-                    SET(wall[wall[j].nextwall].extra, 0x1);
-                    wall[wall[j].nextwall].shade += shade;
+                    SET(wall[nextwall].extra, 0x1);
+                    wall[nextwall].shade += shade;
                 }
 
             }
@@ -3301,9 +3366,8 @@ SetClipdist2D(void)
 {
     short dist;
     int i;
-    short num;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     if (highlightcnt <= -1)
@@ -3316,7 +3380,7 @@ SetClipdist2D(void)
     {
         if (TEST(highlight[i], SPRITE_FLAG))
         {
-            num = RESET(highlight[i], SPRITE_FLAG);
+            RESET(highlight[i], SPRITE_FLAG);
             sprite[highlight[i]].clipdist = dist;
         }
     }
@@ -3329,11 +3393,10 @@ SetClipdist2D(void)
 void
 AdjustVisibility(void)
 {
-    short data;
     short vis;
     int i, count = 0;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     sprintf(tempbuf, "Adjust non-zero vis sectors by (+10000 for neg): ");
@@ -3349,7 +3412,7 @@ AdjustVisibility(void)
 
     if (highlightsectorcnt > -1)
     {
-        short i, j;
+        short i;
 
         for (i = 0; i < highlightsectorcnt; i++)
         {
@@ -3381,14 +3444,14 @@ AdjustVisibility(void)
 void
 FindSprite(short picnum, short findspritenum)
 {
-    int i, count;
+    int i;
     short SpriteNum, NextSprite;
     SPRITEp sp;
 
     SWBOOL bFoundPicNum, bFoundHiTag, bFoundLowTag, bFoundIt;
 
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     if (picnum == 0)
@@ -3453,14 +3516,13 @@ FindSprite(short picnum, short findspritenum)
 void
 FindNextSprite(short picnum)
 {
-    int i, count;
+    int i;
     short SpriteNum, NextSprite;
     SPRITEp sp;
-    short animlen;
 
     SWBOOL bFoundPicNum, bFoundHiTag, bFoundLowTag, bFoundIt;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     for (i = 0; i < numsectors; i++)
@@ -3529,29 +3591,24 @@ DoMatchCheck(SPRITEp sp)
 void
 ShowNextTag(void)
 {
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     printmessage16(" ");
-
-    sprintf(tempbuf, "Next tag = %d", siNextEndTag);
-    printmessage16(tempbuf);
-
+    printmessage16("Next tag = %d", siNextEndTag);
 }
 
 void
 FindNextTag(void)
 {
-    int i, count, j;
+    int i;
     short SpriteNum, NextSprite;
-    short siNextFind;                   // Next tag that SHOULD be found
     SPRITEp sp;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     siNextTag = siNextEndTag = 0;       // Reset tags for new search
-    siNextFind = 0;
 
     // go to the first one
     for (i = 0; i < numsectors; i++)
@@ -3582,7 +3639,7 @@ ShadeMenu(void)                         // F8
 {
     uint8_t* key;
 
-    if (qsetmode == 200)                // In 3D mode
+    if (in3dmode())
         return;
 
     clearmidstatbar16();                // Clear middle of status bar
@@ -3593,7 +3650,7 @@ ShadeMenu(void)                         // F8
 
     ResetKeys();
 
-    while ((key = BKeyPressed()) == NULL) ;
+    while ((key = BKeyPressed()) == NULL) handleevents();
 
     if (key == (uint8_t*)&KEY_PRESSED(KEYSC_1))
     {
@@ -3619,7 +3676,7 @@ ShadeMenu(void)                         // F8
 
 void faketimerhandler(void)
 {
-    sampletimer();
+    timerUpdateClock();
 }
 
 //Just thought you might want my getnumber16 code
@@ -3668,7 +3725,7 @@ static unsigned short messagedelay = 0;
 static char messagebuf[1024];
 
 void
-Message(char *string, char color)
+Message(const char *string, char color)
 {
     sprintf(messagebuf, string, 0);
     messagedelay = 512;
@@ -3728,7 +3785,7 @@ dsprintf(char *str, char *format, ...)
 }
 
 void
-dsprintf_null(char *str, char *format, ...)
+dsprintf_null(char *str, const char *format, ...)
 {
     va_list arglist;
 }
@@ -3741,3 +3798,82 @@ BuildStagTable(void)
 #include "stag.h"
 #undef  MAKE_STAG_TABLE
 }
+
+#include "m32script.h"
+
+void M32RunScript(const char *s) { UNREFERENCED_PARAMETER(s); }
+void G_Polymer_UnInit(void) { }
+void SetGamePalette(int32_t j) { UNREFERENCED_PARAMETER(j); }
+
+int32_t AmbienceToggle, MixRate, ParentalLock;
+
+int32_t taglab_linktags(int32_t spritep, int32_t num)
+{
+    int32_t link = 0;
+
+    g_iReturnVar = link;
+    VM_OnEvent(EVENT_LINKTAGS, spritep ? num : -1);
+    link = g_iReturnVar;
+
+    return link;
+}
+
+int32_t taglab_getnextfreetag(int32_t *duetoptr)
+{
+    int32_t i, nextfreetag=1;
+    int32_t obj = -1;
+
+    for (i=0; i<MAXSPRITES; i++)
+    {
+        int32_t tag;
+
+        if (sprite[i].statnum == MAXSTATUS)
+            continue;
+
+        tag = select_sprite_tag(i);
+
+        if (tag != INT32_MIN && nextfreetag <= tag)
+        {
+            nextfreetag = tag+1;
+            obj = 32768 + i;
+        }
+    }
+
+    for (i=0; i<numwalls; i++)
+    {
+        int32_t lt = taglab_linktags(0, i);
+
+        if ((lt&1) && nextfreetag <= wall[i].lotag)
+            nextfreetag = wall[i].lotag+1, obj = i;
+        if ((lt&2) && nextfreetag <= wall[i].hitag)
+            nextfreetag = wall[i].hitag+1, obj = i;
+    }
+
+    if (duetoptr != NULL)
+        *duetoptr = obj;
+
+    if (nextfreetag < 32768)
+        return nextfreetag;
+
+    return 0;
+}
+
+int32_t S_InvalidSound(int32_t num) {
+    UNREFERENCED_PARAMETER(num); return 1;
+};
+int32_t S_CheckSoundPlaying(int32_t i, int32_t num) {
+    UNREFERENCED_PARAMETER(i); UNREFERENCED_PARAMETER(num); return 0;
+};
+int32_t S_SoundsPlaying(int32_t i) {
+    UNREFERENCED_PARAMETER(i); return -1;
+}
+int32_t S_SoundFlags(int32_t num) {
+    UNREFERENCED_PARAMETER(num); return 0;
+};
+int32_t A_PlaySound(uint32_t num, int32_t i) {
+    UNREFERENCED_PARAMETER(num); UNREFERENCED_PARAMETER(i); return 0;
+};
+void S_StopSound(int32_t num) {
+    UNREFERENCED_PARAMETER(num);
+};
+void S_StopAllSounds(void) { }

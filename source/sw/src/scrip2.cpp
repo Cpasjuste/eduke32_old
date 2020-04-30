@@ -42,8 +42,6 @@ Prepared for public release: 03/28/2005 - Charlie Wiederhold, 3D Realms
 
 //#define COMPUTE_TOTALS    1
 
-extern int nextvoxid;   // JBF: in game.c
-
 ParentalStruct aVoxelArray[MAXTILES];
 
 
@@ -70,7 +68,7 @@ SWBOOL    tokenready;                     // only TRUE if UnGetToken was just ca
 ==============
 */
 
-SWBOOL LoadScriptFile(char *filename)
+SWBOOL LoadScriptFile(const char *filename)
 {
     int size, readsize;
     int fp;
@@ -84,7 +82,7 @@ SWBOOL LoadScriptFile(char *filename)
 
     size = kfilelength(fp);
 
-    scriptbuffer = (char *)AllocMem(size);
+    scriptbuffer = (char *)AllocMem(size+1);
 
     ASSERT(scriptbuffer != NULL);
 
@@ -94,9 +92,10 @@ SWBOOL LoadScriptFile(char *filename)
 
     ASSERT(readsize == size);
 
+    scriptbuffer[readsize] = '\0';
 
     // Convert filebuffer to all upper case
-    //strupr(scriptbuffer);
+    //Bstrupr(scriptbuffer);
 
     script_p = scriptbuffer;
     scriptend_p = script_p + size;
@@ -261,7 +260,7 @@ SWBOOL TokenAvailable(void)
 //              1804 1 shotgun.kvx
 //              etc....
 
-void LoadKVXFromScript(char *filename)
+void LoadKVXFromScript(const char *filename)
 {
     int lNumber=0,lTile=0; // lNumber is the voxel no. and lTile is the editart tile being
     // replaced.
@@ -328,7 +327,7 @@ void LoadKVXFromScript(char *filename)
 //          Ex. 1803 -1       -1 = No tile replacement
 //              1804 2000
 //              etc....
-void LoadPLockFromScript(char *filename)
+void LoadPLockFromScript(const char *filename)
 {
     int lNumber=0,lTile=0; // lNumber is the voxel no. and lTile is the editart tile being
     // replaced.
@@ -405,7 +404,7 @@ enum
 
 static const struct _tokset
 {
-    char *str;
+    const char *str;
     int tokn;
 } cm_tokens[] =
 {
@@ -546,7 +545,7 @@ static char *customweaponname[2][MAX_WEAPONS];  // weapon, ammo
 #define WM_AMMO   4
 static struct
 {
-    char *sym;
+    const char *sym;
     int dmgid;
     int editable;
 } weaponmap[] =
@@ -568,7 +567,7 @@ static struct
 };
 
 // FIXME: yes, we are leaking memory here at the end of the program by not freeing anything
-void LoadCustomInfoFromScript(char *filename)
+void LoadCustomInfoFromScript(const char *filename)
 {
     scriptfile *script;
     char *token;
@@ -604,7 +603,8 @@ void LoadCustomInfoFromScript(char *filename)
         case CM_MAP:
         {
             char *mapnumptr;
-            if (scriptfile_getnumber(script, &curmap)) break; mapnumptr = script->ltextptr;
+            if (scriptfile_getnumber(script, &curmap)) break;
+            mapnumptr = script->ltextptr;
             if (scriptfile_getbraces(script, &braceend)) break;
 
             // first map file in LevelInfo[] is bogus, last map file is NULL
@@ -628,8 +628,8 @@ void LoadCustomInfoFromScript(char *filename)
                     char *t;
                     if (scriptfile_getstring(script, &t)) break;
 
-                    Bfree(custommaps[curmap].LevelName);
-                    custommaps[curmap].LevelName = strdup(t);
+                    //Bfree(custommaps[curmap].LevelName);
+                    custommaps[curmap].LevelName = Xstrdup(t);
                     LevelInfo[curmap].LevelName = custommaps[curmap].LevelName;
                     break;
                 }
@@ -638,8 +638,8 @@ void LoadCustomInfoFromScript(char *filename)
                     char *t;
                     if (scriptfile_getstring(script, &t)) break;
 
-                    Bfree(custommaps[curmap].SongName);
-                    custommaps[curmap].SongName = strdup(t);
+                    //Bfree(custommaps[curmap].SongName);
+                    custommaps[curmap].SongName = Xstrdup(t);
                     LevelInfo[curmap].SongName = custommaps[curmap].SongName;
                     break;
                 }
@@ -648,8 +648,8 @@ void LoadCustomInfoFromScript(char *filename)
                     char *t;
                     if (scriptfile_getstring(script, &t)) break;
 
-                    Bfree(custommaps[curmap].Description);
-                    custommaps[curmap].Description = strdup(t);
+                    //Bfree(custommaps[curmap].Description);
+                    custommaps[curmap].Description = Xstrdup(t);
                     LevelInfo[curmap].Description = custommaps[curmap].Description;
                     break;
                 }
@@ -660,8 +660,8 @@ void LoadCustomInfoFromScript(char *filename)
                     if (scriptfile_getnumber(script, &n)) break;
 
                     Bsnprintf(s, 10, "%d : %02d", n/60, n%60);
-                    Bfree(custommaps[curmap].BestTime);
-                    custommaps[curmap].BestTime = strdup(s);
+                    //Bfree(custommaps[curmap].BestTime);
+                    custommaps[curmap].BestTime = Xstrdup(s);
                     LevelInfo[curmap].BestTime = custommaps[curmap].BestTime;
                     break;
                 }
@@ -672,8 +672,8 @@ void LoadCustomInfoFromScript(char *filename)
                     if (scriptfile_getnumber(script, &n)) break;
 
                     Bsnprintf(s, 10, "%d : %02d", n/60, n%60);
-                    Bfree(custommaps[curmap].ParTime);
-                    custommaps[curmap].ParTime = strdup(s);
+                    //Bfree(custommaps[curmap].ParTime);
+                    custommaps[curmap].ParTime = Xstrdup(s);
                     LevelInfo[curmap].ParTime = custommaps[curmap].ParTime;
                     break;
                 }
@@ -696,7 +696,8 @@ void LoadCustomInfoFromScript(char *filename)
         case CM_EPISODE:
         {
             char *epnumptr;
-            if (scriptfile_getnumber(script, &curmap)) break; epnumptr = script->ltextptr;
+            if (scriptfile_getnumber(script, &curmap)) break;
+            epnumptr = script->ltextptr;
             if (scriptfile_getbraces(script, &braceend)) break;
 
             // first map file in LevelInfo[] is bogus, last map file is NULL
@@ -746,7 +747,8 @@ void LoadCustomInfoFromScript(char *filename)
         case CM_SKILL:
         {
             char *epnumptr;
-            if (scriptfile_getnumber(script, &curmap)) break; epnumptr = script->ltextptr;
+            if (scriptfile_getnumber(script, &curmap)) break;
+            epnumptr = script->ltextptr;
             if (scriptfile_getbraces(script, &braceend)) break;
 
             // first map file in LevelInfo[] is bogus, last map file is NULL
@@ -797,7 +799,7 @@ void LoadCustomInfoFromScript(char *filename)
 
                 if (fc == MAX_FORTUNES) continue;
 
-                customfortune[fc] = strdup(t);
+                customfortune[fc] = Xstrdup(t);
                 if (customfortune[fc]) ReadFortune[fc] = customfortune[fc];
                 fc++;
             }
@@ -816,7 +818,7 @@ void LoadCustomInfoFromScript(char *filename)
 
                 if (fc == MAX_KEYS) continue;
 
-                customkeymsg[fc] = strdup(t);
+                customkeymsg[fc] = Xstrdup(t);
                 if (customkeymsg[fc]) KeyMsg[fc] = customkeymsg[fc];
                 fc++;
             }
@@ -835,7 +837,7 @@ void LoadCustomInfoFromScript(char *filename)
 
                 if (fc == MAX_KEYS) continue;
 
-                customkeydoormsg[fc] = strdup(t);
+                customkeydoormsg[fc] = Xstrdup(t);
                 if (customkeydoormsg[fc]) KeyDoorMessage[fc] = customkeydoormsg[fc];
                 fc++;
             }
@@ -843,12 +845,13 @@ void LoadCustomInfoFromScript(char *filename)
         }
         case CM_INVENTORY:
         {
-            char *invtokptr = script->ltextptr, *invnumptr;
+            char *invnumptr;
             int in;
             char *name = NULL;
             int amt = -1;
 
-            if (scriptfile_getsymbol(script, &in)) break; invnumptr = script->ltextptr;
+            if (scriptfile_getsymbol(script, &in)) break;
+            invnumptr = script->ltextptr;
             if (scriptfile_getbraces(script, &braceend)) break;
 
             if ((unsigned)--in >= (unsigned)InvDecl_TOTAL)
@@ -883,7 +886,7 @@ void LoadCustomInfoFromScript(char *filename)
             if (name)
             {
                 Bfree(custominventoryname[in]);
-                custominventoryname[in] = strdup(name);
+                custominventoryname[in] = Xstrdup(name);
                 InventoryDecls[in].name = custominventoryname[in];
             }
             if (amt >= 0)
@@ -894,12 +897,13 @@ void LoadCustomInfoFromScript(char *filename)
         }
         case CM_WEAPON:
         {
-            char *wpntokptr = script->ltextptr, *wpnnumptr;
+            char *wpnnumptr;
             char *name = NULL, *ammo = NULL;
             int maxammo = -1, damagemin = -1, damagemax = -1, pickup = -1, wpickup = -1;
             int in,id;
 
-            if (scriptfile_getsymbol(script, &in)) break; wpnnumptr = script->ltextptr;
+            if (scriptfile_getsymbol(script, &in)) break;
+            wpnnumptr = script->ltextptr;
             if (scriptfile_getbraces(script, &braceend)) break;
 
             if ((unsigned)--in >= (unsigned)SIZ(weaponmap))
@@ -957,7 +961,7 @@ void LoadCustomInfoFromScript(char *filename)
                 if (name)
                 {
                     Bfree(customweaponname[0][id]);
-                    customweaponname[0][id] = strdup(name);
+                    customweaponname[0][id] = Xstrdup(name);
                     DamageData[id].weapon_name = customweaponname[0][id];
                 }
                 if (wpickup >= 0) DamageData[id].weapon_pickup = wpickup;
@@ -967,7 +971,7 @@ void LoadCustomInfoFromScript(char *filename)
                 if (ammo)
                 {
                     Bfree(customweaponname[1][id]);
-                    customweaponname[1][id] = strdup(ammo);
+                    customweaponname[1][id] = Xstrdup(ammo);
                     DamageData[id].ammo_name = customweaponname[1][id];
                 }
                 if (pickup >= 0) DamageData[id].ammo_pickup = pickup;
