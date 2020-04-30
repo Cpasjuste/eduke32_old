@@ -1617,8 +1617,6 @@ int32_t videoSetMode(int32_t x, int32_t y, int32_t c, int32_t fs)
 #endif
 #ifdef __SWITCH__
               { SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE },
-              { SDL_GL_CONTEXT_MAJOR_VERSION, 2 },
-              { SDL_GL_CONTEXT_MINOR_VERSION, 0 },
 #endif
               { SDL_GL_DOUBLEBUFFER, 1 },
 
